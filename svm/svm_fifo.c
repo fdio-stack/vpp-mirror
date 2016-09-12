@@ -13,7 +13,7 @@
  * limitations under the License.
  */
 
-#include "ssvm_fifo.h"
+#include "svm_fifo.h"
 
 /** create an svm fifo, in the current heap. Fails vs blow up the process */
 svm_fifo_t * 

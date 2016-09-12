@@ -13,7 +13,7 @@
  * limitations under the License.
  */
 
-#include "ssvm_fifo_segment.h"
+#include "svm_fifo_segment.h"
 
 svm_fifo_segment_main_t svm_fifo_segment_main;
 

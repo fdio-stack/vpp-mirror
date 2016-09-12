@@ -17,11 +17,11 @@ bin_PROGRAMS = svmtool svmdbtool
 
 AM_CFLAGS = -Wall
 
-nobase_include_HEADERS = svm.h ssvm.h svmdb.h ssvm_fifo.h ssvm_fifo_segment.h
+nobase_include_HEADERS = svm.h ssvm.h svmdb.h svm_fifo.h svm_fifo_segment.h
 
 lib_LTLIBRARIES = libsvm.la libsvmdb.la 
 
-libsvm_la_SOURCES = svm.c ssvm.c ssvm_fifo.c ssvm_fifo_segment.c
+libsvm_la_SOURCES = svm.c ssvm.c svm_fifo.c svm_fifo_segment.c
 
 svmtool_LDADD = libsvm.la -lvppinfra -lpthread -lrt
 
@@ -29,8 +29,8 @@ libsvmdb_la_SOURCES = svmdb.c
 
 svmdbtool_LDADD = libsvmdb.la libsvm.la -lvppinfra -lpthread -lrt	
 
-noinst_PROGRAMS = test_ssvm_fifo1
+noinst_PROGRAMS = test_svm_fifo1
 
-test_ssvm_fifo1_SOURCES = test_ssvm_fifo1.c
-test_ssvm_fifo1_LDADD = libsvm.la -lvppinfra -lpthread -lrt
-test_ssvm_fifo1_LDFLAGS = -static
+test_svm_fifo1_SOURCES = test_svm_fifo1.c
+test_svm_fifo1_LDADD = libsvm.la -lvppinfra -lpthread -lrt
+test_svm_fifo1_LDFLAGS = -static
