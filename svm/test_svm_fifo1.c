@@ -108,6 +108,63 @@ master (int verbose)
 }
 
 clib_error_t * 
+mempig (int verbose)
+{
+  svm_fifo_segment_create_args_t _a, *a = &_a;
+  svm_fifo_segment_private_t * sp;
+  svm_fifo_t * f;
+  svm_fifo_t ** flist = 0;
+  int rv;
+  int i;
+
+  memset (a, 0, sizeof (*a));
+
+  a->segment_name = "fifo-test1";
+  a->segment_size = 256<<10;
+
+  rv = svm_fifo_segment_create (a);
+
+  if (rv)
+    return clib_error_return (0, "svm_fifo_segment_create returned %d", rv);
+
+  sp = a->rv;
+
+  for (i = 0; i < 1000; i++)
+    {
+      f = svm_fifo_segment_alloc_fifo (sp, 4096);
+      if (f == 0)
+        break;
+      vec_add1 (flist, f);
+    }
+
+  fformat (stdout, "Try #1: created %d fifos...\n", vec_len (flist));
+  for (i = 0; i < vec_len (flist); i++)
+    {
+      f = flist[i];
+      svm_fifo_segment_free_fifo (sp, f);
+    }
+
+  _vec_len (flist) = 0;
+
+  for (i = 0; i < 1000; i++)
+    {
+      f = svm_fifo_segment_alloc_fifo (sp, 4096);
+      if (f == 0)
+        break;
+      vec_add1 (flist, f);
+    }
+
+  fformat (stdout, "Try #2: created %d fifos...\n", vec_len (flist));
+  for (i = 0; i < vec_len (flist); i++)
+    {
+      f = flist[i];
+      svm_fifo_segment_free_fifo (sp, f);
+    }
+
+  return 0;
+}
+
+clib_error_t * 
 slave (int verbose)
 {
   svm_fifo_segment_create_args_t _a, *a = &_a;
@@ -171,6 +228,8 @@ int test_ssvm_fifo1 (unformat_input_t * input)
         test_id = 1;
       else if (unformat (input, "slave"))
         test_id = 2;
+      else if (unformat (input, "mempig"))
+        test_id = 3;
       else
 	{
 	  error = clib_error_create ("unknown input `%U'\n",
@@ -191,6 +250,10 @@ int test_ssvm_fifo1 (unformat_input_t * input)
 
     case 2:
       error = slave (verbose);
+      break;
+
+    case 3:
+      error = mempig (verbose);
       break;
 
     default:
