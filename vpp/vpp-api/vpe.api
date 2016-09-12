@@ -1,4 +1,3 @@
-/* Hey Emacs use -*- mode: C -*- */
 /*
  * Copyright (c) 2015 Cisco and/or its affiliates.
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -4969,3 +4968,150 @@ define delete_subif_reply {
   u32 context;
   i32 retval;
 };
+
+/** \brief Bind to a given URI
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param accept_cookie - sender accept cookie, to identify this bind flavor
+    @param uri - a URI, e.g. "tcp://0.0.0.0/0/80" [ipv4]
+    "tcp://::/0/80" [ipv6], "fifo:/myfifo", etc.
+    @param options - socket options, fifo sizes, etc.
+*/
+define bind_uri {
+  u32 client_index;
+  u32 context;
+  u32 accept_cookie;
+  u8 uri[128];
+  /* or some such */
+  u64 options[16];
+};
+
+/** \brief Bind reply
+    @param context - sender context, to match reply w/ request
+    @param retval - return code for the request
+    @param event_queue_address - vpp event queue address or 0
+    @param need_map - 1 if the client needs to attach to the fifo segment
+    @param segment_name - set if the client needs to attach to the segment
+*/
+define bind_uri_reply {
+    u32 context;
+    i32 retval;
+    /** 0 if this connection shouldn't send events to vpp */
+    u64 event_queue_address;
+    /** 1 if fifo segment attach required */ 
+    u8 need_map;
+    u8 segment_name[128];
+};
+
+/** \brief Unind a given URI
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param uri - a URI, e.g. "tcp://0.0.0.0/0/80" [ipv4]
+    "tcp://::/0/80" [ipv6], "fifo:/myfifo", etc.
+    @param options - socket options, fifo sizes, etc.
+*/
+define unbind_uri {
+  u32 client_index;
+  u32 context;
+  u8 uri[128];
+  /* or some such */
+  u64 options[16];
+};
+
+/** \brief unbind reply
+    @param context - sender context, to match reply w/ request
+    @param retval - return code for the request
+*/
+define unbind_uri_reply {
+    u32 context;
+    i32 retval;
+};
+
+/** \brief vpp->client, please map an additional shared memory segment
+    @param context - sender context, to match reply w/ request
+    @param segment_name - 
+*/
+define map_another_segment {
+    u32 context;
+    u8 segment_name[128];
+};
+
+/** \brief client->vpp
+    @param context - sender context, to match reply w/ request
+    @param retval - return code for the request
+*/
+define map_another_segment_reply {
+    u32 context;
+    i32 retval;
+};
+
+/** \brief vpp->client, accept this connection
+    @param context - sender context, to match reply w/ request
+    @param accept_cookie - tells client which bind flavor just occurred
+    @param rx_fifo_address - rx (vpp -> vpp-client) fifo address 
+    @param rx_fifo_size - size of the rx fifo in bytes
+    @param tx_fifo_address - tx (vpp-client -> vpp) fifo address 
+    @param tx_fifo_size - size of the tx fifo in bytes
+*/
+define accept {
+  /** VPP context */
+  u32 context;
+  /** Tells the client which bind flavor just occurred */
+  u32 accept_cookie;
+  /** rx (vpp -> vpp-client) fifo address */
+  u64 rx_fifo_address;
+  /** size of the rx fifo in bytes */
+  u32 rx_fifo_size;
+  /* Transmit (vpp-client -> vpp) fifo */
+  u64 tx_fifo_address;
+  /** size of the tx fifo in bytes */
+  u32 tx_fifo_size;
+};
+
+/** \brief client->vpp, reply to an accept message
+    @param context - sender context, to match reply w/ request
+    @param accept_cookie - tells client which bind flavor just occurred
+    @param rx_fifo_address - rx (vpp -> vpp-client) fifo address 
+    @param rx_fifo_size - size of the rx fifo in bytes
+    @param tx_fifo_address - tx (vpp-client -> vpp) fifo address 
+    @param tx_fifo_size - size of the tx fifo in bytes
+*/
+define accept_reply {
+  /** VPP context */
+  u32 context;
+  /** For client's use w/ unbind + disconnect */
+  u32 client_context;
+  i32 retval;
+};
+
+/** \brief bidirectional disconnect API
+    @param client_index - opaque cookie to identify the sender
+    client to vpp direction only
+    @param client_context - sender context, to match reply w/ request
+    @param vpp_context - vpp context, to match reply w/ request
+*/
+define disconnect {
+  u32 client_index;
+  u32 client_context;
+  u32 vpp_context;
+};
+
+/** \brief bidirectional disconnect reply API
+    @param client_index - opaque cookie to identify the sender
+    client to vpp direction only
+    @param client_context - sender context, to match reply w/ request
+    @param vpp_context - vpp context, to match reply w/ request
+*/
+define disconnect_reply {
+  u32 client_index;
+  u32 client_context;
+  u32 vpp_context;
+  i32 retval;
+};
+
+
+/*
+ * Local Variables:
+ * eval: (c-set-style "gnu")
+ * End:
+ */
