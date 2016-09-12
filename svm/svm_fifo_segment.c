@@ -113,10 +113,12 @@ svm_fifo_segment_alloc_fifo (svm_fifo_segment_private_t * s,
                              u32 data_size_in_bytes)
 {
   ssvm_shared_header_t *sh;
+  svm_fifo_segment_header_t *fsh;
   svm_fifo_t * f;
   void * oldheap;
   
   sh = s->ssvm.sh;
+  fsh = (svm_fifo_segment_header_t *) sh->opaque[0];
   oldheap = ssvm_push_heap (sh);
 
   /* Note: this can fail, in which case: create another segment */
@@ -126,6 +128,8 @@ svm_fifo_segment_alloc_fifo (svm_fifo_segment_private_t * s,
       ssvm_pop_heap (oldheap);
       return (0);
     }
+
+  vec_add1 (fsh->fifos, f);
   
   ssvm_pop_heap (oldheap);
   return (f);
@@ -136,11 +140,25 @@ svm_fifo_segment_free_fifo (svm_fifo_segment_private_t * s,
                             svm_fifo_t * f)
 {
   ssvm_shared_header_t *sh;
+  svm_fifo_segment_header_t *fsh;
   void * oldheap;
+  int i;
   
   sh = s->ssvm.sh;
+  fsh = (svm_fifo_segment_header_t *) sh->opaque[0];
   oldheap = ssvm_push_heap (sh);
-  
+
+  for (i = 0; i < vec_len (fsh->fifos); i++)
+    {
+      if (fsh->fifos[i] == f)
+        {
+          vec_delete (fsh->fifos, 1, i);
+          goto found;
+        }
+    }
+  clib_warning ("fifo 0x%llx not found in fifo table...", f);
+
+ found:
   clib_mem_free (f);
   ssvm_pop_heap (oldheap);
 }
