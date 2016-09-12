@@ -13,7 +13,7 @@
  * limitations under the License.
  */
 
-#include <svm/svm.h>
+#include "ssvm_fifo.h"
 
 /** create an svm fifo, in the current heap. Fails vs blow up the process */
 svm_fifo_t * 
@@ -55,13 +55,14 @@ svm_fifo_create (u32 data_size_in_bytes)
 }
 
 static int svm_fifo_dequeue_internal (svm_fifo_t * f, 
+                                      int pid,
                                       u32 max_bytes, 
                                       u8 * copy_here, 
                                       int nowait)
 {
   u32 actual_bytes, nbytes;
   
-  if (svm_fifo_lock (f, SVM_FIFO_TAG_DEQUEUE, nowait))
+  if (svm_fifo_lock (f, pid, SVM_FIFO_TAG_DEQUEUE, nowait))
     return -1;                  /* lock held elsewhere */
 
   if (PREDICT_FALSE (f->cursize == 0))
@@ -78,7 +79,7 @@ static int svm_fifo_dequeue_internal (svm_fifo_t * f,
   /* Number of bytes we're going to copy */
   actual_bytes = f->cursize < max_bytes ? f->cursize : max_bytes;
   
-  if (PREDICT_TRUE(copy_here))
+  if (PREDICT_TRUE(copy_here != 0))
     {
       /* Number of bytes in first copy segment */
       nbytes = ((f->nitems - f->head) < max_bytes) ? f->nitems - f->head :
@@ -116,28 +117,33 @@ static int svm_fifo_dequeue_internal (svm_fifo_t * f,
 }
 
 int svm_fifo_dequeue (svm_fifo_t * f, 
+                      int pid,
                       u32 max_bytes, 
                       u8 * copy_here)
 {
-  return svm_fifo_dequeue_internal (f, max_bytes, copy_here, 0 /* nowait */);
+  return svm_fifo_dequeue_internal (f, pid, max_bytes, 
+                                    copy_here, 0 /* nowait */);
 }
 
 int svm_fifo_dequeue_nowait (svm_fifo_t * f, 
+                             int pid, 
                              u32 max_bytes, 
                              u8 * copy_here)
 {
-  return svm_fifo_dequeue_internal (f, max_bytes, copy_here, 1 /* nowait */);
+  return svm_fifo_dequeue_internal (f, pid, max_bytes, 
+                                    copy_here, 1 /* nowait */);
 }
 
 
 static int svm_fifo_enqueue_internal (svm_fifo_t * f, 
+                                      int pid,
                                       u32 max_bytes, 
                                       u8 * copy_from_here, 
                                       int nowait)
 {
   u32 actual_bytes, nbytes;
   
-  if (svm_fifo_lock (f, SVM_FIFO_TAG_ENQUEUE, nowait))
+  if (svm_fifo_lock (f, pid, SVM_FIFO_TAG_ENQUEUE, nowait))
     return -1;
 
   if (PREDICT_FALSE (f->cursize == f->nitems))
@@ -155,7 +161,7 @@ static int svm_fifo_enqueue_internal (svm_fifo_t * f,
   actual_bytes = (f->nitems - f->cursize) < max_bytes ? 
     (f->nitems - f->cursize) : max_bytes;
   
-  if (PREDICT_TRUE(copy_from_here))
+  if (PREDICT_TRUE(copy_from_here != 0))
     {
       /* Number of bytes in first copy segment */
       nbytes = ((f->nitems - f->tail) < max_bytes) ? f->nitems - f->tail :
@@ -193,18 +199,20 @@ static int svm_fifo_enqueue_internal (svm_fifo_t * f,
 }
 
 int svm_fifo_enqueue (svm_fifo_t * f, 
+                      int pid, 
                       u32 max_bytes, 
                       u8 * copy_from_here)
 {
-  return svm_fifo_enqueue_internal (f, max_bytes, copy_from_here, 
+  return svm_fifo_enqueue_internal (f, pid, max_bytes, copy_from_here, 
                                     0 /* nowait */);
 }
 
 int svm_fifo_enqueue_nowait (svm_fifo_t * f, 
+                             int pid, 
                              u32 max_bytes, 
                              u8 * copy_from_here)
 {
-  return svm_fifo_enqueue_internal (f, max_bytes, copy_from_here, 
+  return svm_fifo_enqueue_internal (f, pid, max_bytes, copy_from_here, 
                                     1 /* nowait */);
 }
 

@@ -125,12 +125,12 @@ ssvm_pop_heap (void *oldheap)
 }
 
 #define foreach_ssvm_api_error                  \
-_(NO_NAME, "No shared segment name", -10)       \
-_(NO_SIZE, "Size not set (master)", -11)        \
-_(CREATE_FAILURE, "Create failed", -12)		\
-_(SET_SIZE, "Set size failed", -13)		\
-_(MMAP, "mmap failed", -14)			\
-_(SLAVE_TIMEOUT, "Slave map timeout", -15)
+_(NO_NAME, "No shared segment name", -100)      \
+_(NO_SIZE, "Size not set (master)", -101)       \
+_(CREATE_FAILURE, "Create failed", -102)        \
+_(SET_SIZE, "Set size failed", -103)		\
+_(MMAP, "mmap failed", -104)			\
+_(SLAVE_TIMEOUT, "Slave map timeout", -105)
 
 typedef enum
 {

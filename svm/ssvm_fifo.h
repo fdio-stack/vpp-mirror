@@ -15,6 +15,14 @@
 #ifndef __included_ssvm_fifo_h__
 #define __included_ssvm_fifo_h__
 
+#include <vppinfra/clib.h>
+#include <vppinfra/vec.h>
+#include <vppinfra/mheap.h>
+#include <vppinfra/heap.h>
+#include <vppinfra/pool.h>
+#include <vppinfra/format.h>
+#include <pthread.h>
+
 typedef enum 
 {
   SVM_FIFO_TAG_NOT_HELD = 0,
@@ -56,21 +64,33 @@ static inline void svm_fifo_unlock (svm_fifo_t * f)
   f->owner_pid = 0;
   f->tag = 0;
   CLIB_MEMORY_BARRIER();
-  pthread_mutex_unlock (&f->mutext);
+  pthread_mutex_unlock (&f->mutex);
 }
 
 static inline u32 svm_fifo_max_dequeue (svm_fifo_t * f)
 {
-  return f->nitems;
+  return f->cursize;
 }
 
 static inline u32 svm_fifo_max_enqueue (svm_fifo_t * f)
 {
-  return f->nitems - f->nitems;
+  return f->nitems - f->cursize;
 }
 
 svm_fifo_t * 
 svm_fifo_create (u32 data_size_in_bytes);
+
+int svm_fifo_enqueue (svm_fifo_t * f, int pid, u32 max_bytes, 
+                      u8 * copy_from_here);
+
+int svm_fifo_enqueue_nowait (svm_fifo_t * f, int pid, u32 max_bytes, 
+                             u8 * copy_from_here);
+
+int svm_fifo_dequeue (svm_fifo_t * f, int pid, u32 max_bytes, 
+                      u8 * copy_here);
+
+int svm_fifo_dequeue_nowait (svm_fifo_t * f, int pid, u32 max_bytes, 
+                             u8 * copy_here);
 
 #endif /* __included_ssvm_fifo_h__ */
 
