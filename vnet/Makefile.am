@@ -316,7 +316,6 @@ nobase_include_HEADERS +=			\
  vnet/ip/ip_packet.h				\
  vnet/ip/ports.def				\
  vnet/ip/protocols.def				\
- vnet/ip/tcp_packet.h				\
  vnet/ip/udp.h					\
  vnet/ip/udp_error.def				\
  vnet/ip/udp_packet.h
@@ -390,6 +389,17 @@ test_map_LDADD = libvnet.la -lvppinfra -lvlib	\
 test_map_LDFLAGS = -static
 endif
 
+########################################
+# Layer 4 protocol: tcp
+########################################
+libvnet_la_SOURCES +=							\
+ vnet/tcp/tcp_format.c							\
+ vnet/tcp/tcp_init.c							\
+ vnet/tcp/tcp.c
+
+nobase_include_HEADERS +=						\
+ vnet/tcp/tcp_packet.h							\
+ vnet/tcp/tcp.h
 
 ########################################
 # Tunnel protocol: gre
