@@ -230,6 +230,18 @@ nobase_include_HEADERS +=			\
   vnet/cdp/cdp_protocol.h
 
 ########################################
+# Layer 2 / LLDP
+########################################
+libvnet_la_SOURCES +=				\
+  vnet/lldp/lldp_input.c				\
+  vnet/lldp/lldp_node.c				\
+  vnet/lldp/lldp_output.c	\
+  vnet/lldp/lldp_cli.c
+
+nobase_include_HEADERS +=			\
+  vnet/lldp/lldp_protocol.h
+
+########################################
 # Layer 2/3 "classify"
 ########################################
 libvnet_la_SOURCES +=				\
@@ -258,6 +270,7 @@ libvnet_la_SOURCES +=				\
  vnet/ip/icmp6.c				\
  vnet/ip/ip_feature_registration.c		\
  vnet/ip/ip46_cli.c				\
+ vnet/ip/ping.c					\
  vnet/ip/ip4_format.c				\
  vnet/ip/ip4_forward.c				\
  vnet/ip/ip4_input.c				\
