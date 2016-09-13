@@ -113,6 +113,10 @@ ifeq ($(OS_ID),ubuntu)
 			dpkg-query --show $$i >/dev/null 2>&1 || inst="$$inst $$i"; \
 		done; \
 		if [ "$$inst" ]; then sudo apt-get $(CONFIRM) $(FORCE) install $$inst; fi
+	@if [ ! -s /usr/lib/graphviz/config6a ]; then \
+		echo "Rebuidlding system Graphviz configuration."; \
+		sudo dot -c; \
+	fi
 else ifneq ("$(wildcard /etc/redhat-release)","")
 	@sudo yum install $(CONFIRM) $(DOC_RPM_DEPENDS)
 else
