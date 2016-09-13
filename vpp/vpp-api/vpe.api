@@ -4992,8 +4992,6 @@ define unbind_uri {
   u32 client_index;
   u32 context;
   u8 uri[128];
-  /* or some such */
-  u64 options[16];
 };
 
 /** \brief unbind reply
@@ -5034,6 +5032,7 @@ define map_another_segment_reply {
 define accept {
   /** VPP context */
   u32 context;
+  /* $$$$ include remote info to allow client to say "no" */
   /** Tells the client which bind flavor just occurred */
   u32 accept_cookie;
   /** rx (vpp -> vpp-client) fifo address */
@@ -5059,6 +5058,7 @@ define accept_reply {
   u32 context;
   /** For client's use w/ unbind + disconnect */
   u32 client_context;
+  /* $$$ may mean "I don't want this connection, flush it" */
   i32 retval;
 };
 

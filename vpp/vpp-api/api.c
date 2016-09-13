@@ -85,6 +85,7 @@
 #include <vnet/flow/flow_report.h>
 #include <vnet/ipsec-gre/ipsec_gre.h>
 #include <vnet/flow/flow_report_classify.h>
+#include <vnet/uri/uri.h>
 
 #undef BIHASH_TYPE
 #undef __included_bihash_template_h__
@@ -343,8 +344,8 @@ _(COP_INTERFACE_ENABLE_DISABLE, cop_interface_enable_disable)		\
 _(COP_WHITELIST_ENABLE_DISABLE, cop_whitelist_enable_disable)		\
 _(GET_NODE_GRAPH, get_node_graph)                                       \
 _(SW_INTERFACE_CLEAR_STATS, sw_interface_clear_stats)                   \
-_(IOAM_ENABLE, ioam_enable)                                 \
-_(IOAM_DISABLE, ioam_disable)                                 \
+_(IOAM_ENABLE, ioam_enable)                                             \
+_(IOAM_DISABLE, ioam_disable)                                           \
 _(LISP_ADD_DEL_LOCATOR_SET, lisp_add_del_locator_set)                   \
 _(LISP_ADD_DEL_LOCATOR, lisp_add_del_locator)                           \
 _(LISP_ADD_DEL_LOCAL_EID, lisp_add_del_local_eid)                       \
@@ -407,8 +408,14 @@ _(IP_SOURCE_AND_PORT_RANGE_CHECK_INTERFACE_ADD_DEL,                     \
   ip_source_and_port_range_check_interface_add_del)                     \
 _(IPSEC_GRE_ADD_DEL_TUNNEL, ipsec_gre_add_del_tunnel)                   \
 _(IPSEC_GRE_TUNNEL_DUMP, ipsec_gre_tunnel_dump)                         \
-_(DELETE_SUBIF, delete_subif)
-
+_(DELETE_SUBIF, delete_subif)                                           \
+_(BIND_URI, bind_uri)                                                   \
+_(UNBIND_URI, unbind_uri)                                               \
+_(MAP_ANOTHER_SEGMENT_REPLY, map_another_segment_reply)                 \
+_(ACCEPT_REPLY, accept_reply)                                           \
+_(DISCONNECT, disconnect)                                               \
+_(DISCONNECT_REPLY, disconnect_reply)
+  
 #define QUOTE_(x) #x
 #define QUOTE(x) QUOTE_(x)
 
@@ -439,14 +446,14 @@ typedef struct
 
 typedef struct
 {
-
+  
 #define _(a) uword *a##_registration_hash;              \
-    vpe_client_registration_t * a##_registrations;
+  vpe_client_registration_t * a##_registrations;
   foreach_registration_hash
 #undef _
-    /* notifications happen really early in the game */
+  /* notifications happen really early in the game */
   u8 link_state_process_up;
-
+  
   /* ip4 and ip6 pending route adds */
   pending_route_t *pending_routes;
 
@@ -4156,15 +4163,15 @@ vl_api_create_vhost_user_if_t_handler (vl_api_create_vhost_user_if_t * mp)
   vlib_main_t *vm = vlib_get_main ();
 
 #if DPDK > 0 && DPDK_VHOST_USER
-  rv = dpdk_vhost_user_create_if (
+  rv = dpdk_vhost_user_create_if 
 #else
-  rv = vhost_user_create_if (
+  rv = vhost_user_create_if 
 #endif
-			      vnm, vm, (char *) mp->sock_filename,
-			      mp->is_server, &sw_if_index, (u64) ~ 0,
-			      mp->renumber, ntohl (mp->custom_dev_instance),
-			      (mp->use_custom_mac) ? mp->mac_address : NULL);
-
+    (vnm, vm, (char *) mp->sock_filename,
+     mp->is_server, &sw_if_index, (u64) ~ 0,
+     mp->renumber, ntohl (mp->custom_dev_instance),
+     (mp->use_custom_mac) ? mp->mac_address : NULL);
+  
   /* *INDENT-OFF* */
   REPLY_MACRO2(VL_API_CREATE_VHOST_USER_IF_REPLY,
   ({
@@ -4184,13 +4191,13 @@ vl_api_modify_vhost_user_if_t_handler (vl_api_modify_vhost_user_if_t * mp)
   vlib_main_t *vm = vlib_get_main ();
 
 #if DPDK > 0 && DPDK_VHOST_USER
-  rv = dpdk_vhost_user_modify_if (
+  rv = dpdk_vhost_user_modify_if 
 #else
-  rv = vhost_user_modify_if (
+  rv = vhost_user_modify_if 
 #endif
-			      vnm, vm, (char *) mp->sock_filename,
-			      mp->is_server, sw_if_index, (u64) ~ 0,
-			      mp->renumber, ntohl (mp->custom_dev_instance));
+    (vnm, vm, (char *) mp->sock_filename,
+     mp->is_server, sw_if_index, (u64) ~ 0,
+     mp->renumber, ntohl (mp->custom_dev_instance));
   REPLY_MACRO (VL_API_MODIFY_VHOST_USER_IF_REPLY);
 }
 
@@ -8565,15 +8572,15 @@ static void vl_api_ipsec_gre_tunnel_dump_t_handler
   ipsec_gre_main_t *igm = &ipsec_gre_main;
   ipsec_gre_tunnel_t *t;
   u32 sw_if_index;
-
+  
   q = vl_api_client_index_to_input_queue (mp->client_index);
   if (q == 0)
     {
       return;
     }
-
+  
   sw_if_index = ntohl (mp->sw_if_index);
-
+  
   if (~0 == sw_if_index)
     {
         /* *INDENT-OFF* */
@@ -8594,7 +8601,7 @@ static void vl_api_ipsec_gre_tunnel_dump_t_handler
       send_ipsec_gre_tunnel_details (t, q, mp->context);
     }
 }
-
+  
 static void
 vl_api_delete_subif_t_handler (vl_api_delete_subif_t * mp)
 {
@@ -8605,6 +8612,54 @@ vl_api_delete_subif_t_handler (vl_api_delete_subif_t * mp)
 
   REPLY_MACRO (VL_API_DELETE_SUBIF_REPLY);
 }
+
+static void
+vl_api_bind_uri_t_handler (vl_api_bind_uri_t * mp)
+{
+  vl_api_bind_uri_reply_t * rmp;
+  int rv;
+
+  rv = vnet_bind_uri (mp->uri, mp->api_client_index, mp->accept_cookie,
+                      mp->options);
+
+  REPLY_MACRO (VL_API_BIND_URL_REPLY);
+}
+
+static void
+vl_api_unbind_uri_t_handler (vl_api_unbind_uri_t * mp)
+{
+  vl_api_unbind_uri_reply_t * rmp;
+  int rv;
+
+  rv = vnet_unbind_uri (mp->uri, mp->api_client_index, mp->accept_cookie,
+                        mp->options);
+
+  REPLY_MACRO (VL_API_UNBIND_URL_REPLY);
+}
+
+static void
+vl_api_map_another_segment_reply_t_handler 
+(vl_api_map_another_segment_reply_t_handler * mp)
+{
+
+}
+static void
+vl_api_accept_reply_t_handler (vl_api_accept_reply_t * mp)
+{
+  
+}
+static void
+vl_api_disconnect_t_handler (vl_api_disconnect_t * mp)
+{
+  vl_api_disconnect_reply_t * rmp;
+  int rv;
+}
+static void
+vl_api_disconnect_reply_t_handler (vl_api_disconnect_reply_t *mp)
+{
+  
+}
+
 
 #define BOUNCE_HANDLER(nn)                                              \
 static void vl_api_##nn##_t_handler (                                   \
