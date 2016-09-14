@@ -23,13 +23,19 @@ uri_main_t uri_main;
 
 /* types: fifo, tcp4, udp4, tcp6, udp6 */
 
-int vnet_bind_fifo_uri (char *uri, u32 api_client_index, u32 accept_cookie)
+/**** fifo uri */
+
+int vnet_bind_fifo_uri (char *uri, u32 api_client_index, u32 accept_cookie,
+                        u32 segment_size, char *segment_name_arg, 
+                        u32 * segment_name_length)
 {
   uri_main_t * um = &uri_main;
   fifo_bind_table_entry_t * e;
   vl_api_registration_t *regp;
   uword * p;
-  u8 * server_name;
+  u8 * server_name, * segment_name;
+
+  ASSERT(segment_name_length);
 
   p = hash_get_mem (um->fifo_bind_table_entry_by_name, uri);
 
@@ -46,12 +52,19 @@ int vnet_bind_fifo_uri (char *uri, u32 api_client_index, u32 accept_cookie)
   else
     server_name = format (0, "<internal>%c", 0);
 
+  /* Unique segment name, per vpp instance */
+  segment_name = format (0, "%d-%s%c", getpid(), uri, 0);
+  ASSERT (vec_len(segment_name) <= 128);
+  *segment_name_length = vec_len(segment_name);
+  memcpy (segment_name_arg, segment_name, *segment_name_length);
+
   pool_get (um->fifo_bind_table, e);
   memset (e, 0, sizeof (*e));
 
   e->fifo_name = format (0, "%s%c", uri, 0);
   e->server_name = servier_name;
-  e->client_index = api_client_index;
+  e->segment_name = segment_name;
+  e->bind_client_index = api_client_index;
   e->accept_cookie = accept_cookie;
 
   hash_set_mem (um->fifo_bind_table_entry_by_name, e->fifo_name, 
@@ -75,7 +88,7 @@ int vnet_unbind_fifo_uri (char *uri, u32 api_client_index)
   e = pool_elt_at_index (um->fifo_bind_table, p[0]);
 
   /* Just in case */
-  if (e->client_index != api_client_index)
+  if (e->bind_client_index != api_client_index)
     return VNET_API_ERROR_INVALID_VALUE;
 
   /* $$$ should we tear down connections? */
@@ -84,29 +97,110 @@ int vnet_unbind_fifo_uri (char *uri, u32 api_client_index)
   
   vec_free (e->fifo_name);
   vec_free (e->server_name);
+  vec_free (e->segment_name);
   pool_put (um->fifo_bind_table, e);
   return 0;
 }
 
+int vnet_connect_fifo_uri (char *uri, u32 api_client_index, u32 accept_cookie,
+                           u32 segment_size, char *segment_name_arg, 
+                           u32 * segment_name_length)
+{
+  uri_main_t * um = &uri_main;
+  fifo_bind_table_entry_t * e;
+  vl_api_registration_t *regp;
+  uword * p;
+  u8 * server_name, * segment_name;
+
+  ASSERT(segment_name_length);
+
+  p = hash_get_mem (um->fifo_bind_table_entry_by_name, uri);
+
+  if (!p)
+    return VNET_API_ERROR_ADDRESS_NOT_IN_USE;
+
+  e = pool_elt_at_index (um->fifo_bind_table, p[0]);
+
+  *segment_name_length = vec_len(e->segment_name);
+  memcpy (segment_name_arg, e->segment_name, *segment_name_length);
+  e->connect_client_index = api_client_index;
+
+  return 0;
+}
+
+int vnet_disconnect_fifo_uri (char *uri, u32 api_client_index)
+{
+  uri_main_t * um = &uri_main;
+  fifo_bind_table_entry_t * e;
+  vl_api_registration_t *regp;
+  uword * p;
+  u8 * server_name;
+
+  p = hash_get_mem (um->fifo_bind_table_entry_by_name, uri);
+
+  if (!p)
+    return VNET_API_ERROR_ADDRESS_NOT_IN_USE;
+
+  e = pool_elt_at_index (um->fifo_bind_table, p[0]);
+
+  /* Just in case */
+  if (e->connect_client_index != api_client_index)
+    return VNET_API_ERROR_INVALID_VALUE;
+  e->connect_client_index = ~0;
+
+  return 0;
+}
+
+/**** end fifo URI */
+
 int vnet_bind_uri (char * uri, u32 api_client_index, u32 accept_cookie
-                   u64 *options)
+                   u32 segment_size, u64 *options, char *segment_name,
+                   u32 *name_length)
 {
   ASSERT(uri);
 
   /* Mumble top-level decode mumble */
   if (uri[0] == 'f')
-    return vnet_bind_fifo_uri (uri, api_client_index, accept_cookie);
+    return vnet_bind_fifo_uri (uri, api_client_index, accept_cookie
+                               segment_size, options, egment_name,
+                               name_length);
   else
     return VNET_API_ERROR_UNKNOWN_URI_TYPE;
 }
 
-int vnet_ubind_uri (char * uri, u32 api_client_index)
+int vnet_unbind_uri (char * uri, u32 api_client_index)
 {
   ASSERT(uri);
 
   /* Mumble top-level decode mumble */
   if (uri[0] == 'f')
-    return vnet_ubind_fifo_uri (uri, api_client_index);
+    return vnet_unbind_fifo_uri (uri, api_client_index);
+  else
+    return VNET_API_ERROR_UNKNOWN_URI_TYPE;
+}
+
+int vnet_connect_uri (char * uri, u32 api_client_index, u32 accept_cookie
+                   u32 segment_size, u64 *options, char *segment_name,
+                   u32 *name_length)
+{
+  ASSERT(uri);
+
+  /* Mumble top-level decode mumble */
+  if (uri[0] == 'f')
+    return vnet_connect_fifo_uri (uri, api_client_index, accept_cookie
+                                  segment_size, options, egment_name,
+                                  name_length);
+  else
+    return VNET_API_ERROR_UNKNOWN_URI_TYPE;
+}
+
+int vnet_disconnect_uri (char * uri, u32 api_client_index)
+{
+  ASSERT(uri);
+
+  /* Mumble top-level decode mumble */
+  if (uri[0] == 'f')
+    return vnet_disconnect_fifo_uri (uri, api_client_index);
   else
     return VNET_API_ERROR_UNKNOWN_URI_TYPE;
 }

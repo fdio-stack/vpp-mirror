@@ -4959,6 +4959,7 @@ define bind_uri {
   u32 client_index;
   u32 context;
   u32 accept_cookie;
+  u32 segment_size;
   u8 uri[128];
   /* or some such */
   u64 options[16];
@@ -4976,8 +4977,42 @@ define bind_uri_reply {
     i32 retval;
     /** 0 if this connection shouldn't send events to vpp */
     u64 event_queue_address;
-    /** 1 if fifo segment attach required */ 
-    u8 need_map;
+    /** length non-zero if binder should map segment */
+    u8 segment_name_length;
+    u32 segment_size;
+    u8 segment_name[128];
+};
+
+/** \brief Connect to a given URI
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param accept_cookie - sender accept cookie, to identify this bind flavor
+    @param uri - a URI, e.g. "tcp://0.0.0.0/0/80" [ipv4]
+    "tcp://::/0/80" [ipv6], "fifo:/myfifo", etc.
+    @param options - socket options, fifo sizes, etc.
+*/
+define connect_uri {
+  u32 client_index;
+  u32 context;
+  u8 uri[128];
+  /* or some such */
+  u64 options[16];
+};
+
+/** \brief Connect reply
+    @param context - sender context, to match reply w/ request
+    @param retval - return code for the request
+    @param event_queue_address - vpp event queue address or 0
+    @param need_map - 1 if the client needs to attach to the fifo segment
+    @param segment_name - set if the client needs to attach to the segment
+*/
+define connect_uri_reply {
+    u32 context;
+    i32 retval;
+    /** 0 if this connection shouldn't send events to vpp */
+    u64 event_queue_address;
+    /** length non-zero if connecter should map segment */
+    u8 segment_name_length;
     u8 segment_name[128];
 };
 

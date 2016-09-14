@@ -411,6 +411,7 @@ _(IPSEC_GRE_TUNNEL_DUMP, ipsec_gre_tunnel_dump)                         \
 _(DELETE_SUBIF, delete_subif)                                           \
 _(BIND_URI, bind_uri)                                                   \
 _(UNBIND_URI, unbind_uri)                                               \
+_(CONNECT_URI, connect_uri)						\
 _(MAP_ANOTHER_SEGMENT_REPLY, map_another_segment_reply)                 \
 _(ACCEPT_REPLY, accept_reply)                                           \
 _(DISCONNECT, disconnect)                                               \
@@ -8617,12 +8618,28 @@ static void
 vl_api_bind_uri_t_handler (vl_api_bind_uri_t * mp)
 {
   vl_api_bind_uri_reply_t * rmp;
+  char segment_name[128];
+  u32 segment_name_length;
   int rv;
 
-  rv = vnet_bind_uri (mp->uri, mp->api_client_index, mp->accept_cookie,
-                      mp->options);
+  segment_name_length = ARRAY_LEN(segment_name);
 
-  REPLY_MACRO (VL_API_BIND_URL_REPLY);
+  rv = vnet_bind_uri (mp->uri, mp->api_client_index, mp->accept_cookie,
+                      mp->segment_size, mp->options, segment_name, 
+                      &segment_name_length);
+
+  REPLY_MACRO2 (VL_API_BIND_URL_REPLY,
+  ({
+    rmp->need_map = segment_name_length != 0;
+    rmp->segment_name_length = 0;
+    /* $$$$ policy? */
+    rmp->segment_size = mp->segment_size;
+    if (segment_name_length)
+      {
+        memcpy (rmp->segment_name, segment_name, segment_name_length);
+        mp->segment_name_length = segment_name_length;
+      }
+  }));
 }
 
 static void
@@ -8635,6 +8652,44 @@ vl_api_unbind_uri_t_handler (vl_api_unbind_uri_t * mp)
                         mp->options);
 
   REPLY_MACRO (VL_API_UNBIND_URL_REPLY);
+}
+
+static void
+vl_api_connect_uri_t_handler (vl_api_connect_uri_t * mp)
+{
+  vl_api_connect_uri_reply_t * rmp;
+  char segment_name[128];
+  u32 segment_name_length;
+  int rv;
+
+  segment_name_length = ARRAY_LEN(segment_name);
+
+  rv = vnet_connect_uri (mp->uri, mp->api_client_index, mp->accept_cookie,
+                      mp->segment_size, mp->options, segment_name, 
+                      &segment_name_length);
+
+  REPLY_MACRO2 (VL_API_CONNECT_URL_REPLY,
+  ({
+    rmp->need_map = segment_name_length != 0;
+    rmp->segment_name_length = 0;
+    if (segment_name_length)
+      {
+        memcpy (rmp->segment_name, segment_name, segment_name_length);
+        mp->segment_name_length = segment_name_length;
+      }
+  }));
+}
+
+static void
+vl_api_disconnect_uri_t_handler (vl_api_disconnect_uri_t * mp)
+{
+  vl_api_disconnect_uri_reply_t * rmp;
+  int rv;
+
+  rv = vnet_disconnect_uri (mp->uri, mp->api_client_index, mp->accept_cookie,
+                        mp->options);
+
+  REPLY_MACRO (VL_API_DISCONNECT_URL_REPLY);
 }
 
 static void

@@ -23,8 +23,11 @@ typedef struct
 {
   u8 * fifo_name;
   u8 * server_name;
-  u32 client_index;
+  u8 * segment_name;
+  u32 segment_size;
+  u32 bind_client_index;
   u32 accept_cookie;
+  u32 connect_client_index;
 } fifo_bind_table_entry_t;
 
 typedef struct
@@ -42,7 +45,8 @@ typedef struct
 extern uri_main_t uri_main;
 
 int vnet_bind_uri (char * uri, u32 api_client_index, u32 accept_cookie
-                   u64 *options);
+                   u32 segment_size, u64 *options, char *segment_name,
+                   u32 *name_length);
 
 int vnet_unbind_uri (char * uri, u32 api_client_index);
 
