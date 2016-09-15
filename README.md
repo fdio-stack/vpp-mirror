@@ -1,6 +1,33 @@
 Vector Packet Processing
 ========================
 
+## TCP BRANCH INFORMATION
+
+- Building
+
+  cd build-root
+  ./bootstrap.sh
+  make PLATFORM=vpp TAG=vpp_debug uri-install
+
+- Testing
+
+Can test using
+shell1:
+  sudo ./build-root/install-vpp_debug-native/uri/bin/uritest master
+
+shell2:
+  sudo ./build-root/install-vpp_debug-native/uri/bin/uritest slave
+
+Should see:
+shell1:
+  Test OK...Master done...
+
+shell2:
+  Slave done
+
+
+
+
 ## Introduction.
 
 The VPP platform is an extensible framework that provides out-of-the-box
