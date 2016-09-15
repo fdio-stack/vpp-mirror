@@ -81,6 +81,12 @@ typedef struct
   uword * error_string_by_error_number;
 } uritest_main_t;
 
+#if CLIB_DEBUG > 0
+#define NITER 1000
+#else
+#define NITER 1000000
+#endif
+
 uritest_main_t uritest_main;
 
 u8 *
@@ -298,7 +304,7 @@ void uritest_master (uritest_main_t * utm)
       return;
     }
   
-  for (i = 0; i < 1000; i++)
+  for (i = 0; i < NITER; i++)
     svm_fifo_enqueue (utm->tx_fifo, mypid, vec_len (test_data), test_data);
 
   vec_validate(reply, 0);
@@ -339,6 +345,7 @@ void uritest_slave (uritest_main_t * utm)
   u32 actual_bytes;
   int mypid = getpid();
   u8 ok;
+  f64 before, after, delta, bytes_per_second;
   
   vec_validate (test_data, 4095);
 
@@ -358,7 +365,8 @@ void uritest_slave (uritest_main_t * utm)
     }
   
   ok = 1;
-  for (i = 0; i < 1000; i++)
+  before = clib_time_now (&utm->clib_time);
+  for (i = 0; i < NITER; i++)
     {
       actual_bytes = svm_fifo_dequeue (utm->rx_fifo, mypid, 
                                        vec_len (test_data), test_data);
@@ -370,15 +378,22 @@ void uritest_slave (uritest_main_t * utm)
           bytes_received++;
           j++;
         }
-      if (bytes_received == 1000 * 2048)
+      if (bytes_received == NITER * 2048)
         break;
     }
       
   vec_add1(reply, ok);
 
   svm_fifo_enqueue (utm->tx_fifo, mypid, vec_len (reply), reply);
+  after = clib_time_now (&utm->clib_time);
+  delta = after - before;
+  bytes_per_second = 0.0;
 
-  fformat (stdout, "Slave done...\n");
+  if (delta > 0.0)
+    bytes_per_second = (f64) bytes_received / delta;
+
+  fformat (stdout, "Slave done, %d bytes in %.2f seconds, %.2f bytes/sec...\n",
+           bytes_received, delta, bytes_per_second);
 }
 
 int
@@ -405,7 +420,7 @@ main (int argc, char **argv)
   svm_fifo_segment_init();
   unformat_init_command_line (a, argv);
 
-  utm->uri = format (0, "%s%c", fifo_name);
+  utm->uri = format (0, "%s%c", fifo_name, 0);
 
   while (unformat_check_input (a) != UNFORMAT_END_OF_INPUT)
     {
