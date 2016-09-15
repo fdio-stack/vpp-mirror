@@ -142,6 +142,7 @@ static int svm_fifo_enqueue_internal (svm_fifo_t * f,
                                       int nowait)
 {
   u32 actual_bytes, nbytes;
+  int need_broadcast = 0;
   
   if (svm_fifo_lock (f, pid, SVM_FIFO_TAG_ENQUEUE, nowait))
     return -1;
@@ -156,6 +157,9 @@ static int svm_fifo_enqueue_internal (svm_fifo_t * f,
       while (f->cursize == f->nitems)
         pthread_cond_wait (&f->condvar, &f->mutex);
     }
+
+  if (f->cursize == 0)
+    need_broadcast = 1;
 
   /* Number of bytes we're going to copy */
   actual_bytes = (f->nitems - f->cursize) < max_bytes ? 
@@ -191,8 +195,8 @@ static int svm_fifo_enqueue_internal (svm_fifo_t * f,
       f->cursize += max_bytes;
       actual_bytes = max_bytes;
     }
-  /* Wake up receiver when fifo at or above 3/4 full */
-  if (f->cursize >= (3*f->nitems)/4)
+  /* Wake up receiver when fifo non-empty */
+  if (need_broadcast)
     pthread_cond_broadcast (&f->condvar);
   svm_fifo_unlock (f);
   return (actual_bytes);

@@ -38,7 +38,10 @@
 #include <vppinfra/pool.h>
 #include <vppinfra/format.h>
 
-#define MMAP_PAGESIZE (4<<10)
+#ifndef MMAP_PAGESIZE
+#define MMAP_PAGESIZE (clib_mem_get_page_size())
+#endif
+
 #define SSVM_N_OPAQUE 7
 
 typedef struct

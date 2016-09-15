@@ -204,9 +204,21 @@ vl_api_connect_uri_reply_t_handler (vl_api_connect_uri_reply_t * mp)
   utm->state = STATE_READY;
 }
 
+static void
+vl_api_unbind_uri_reply_t_handler (vl_api_unbind_uri_reply_t *mp)
+{
+  uritest_main_t *utm = &uritest_main;
+
+  if (mp->retval != 0)
+    clib_warning ("returned %d", ntohl(mp->retval));
+
+  utm->state = STATE_START;
+}
+
 #define foreach_uri_msg                         \
 _(BIND_URI_REPLY, bind_uri_reply)               \
-_(CONNECT_URI_REPLY, connect_uri_reply)        
+_(CONNECT_URI_REPLY, connect_uri_reply)         \
+_(UNBIND_URI_REPLY, unbind_uri_reply)
 
 void
 uri_api_hookup (uritest_main_t * utm)
@@ -261,15 +273,14 @@ void uritest_master (uritest_main_t * utm)
 {
   vl_api_bind_uri_t * bmp;
   vl_api_unbind_uri_t * ump;
-  int i, j;
+  int i;
   u8 * test_data = 0;
-  u8 * replies = 0;
+  u8 * reply = 0;
   u32 reply_len;
-  u32 reply_counter = 0;
   int mypid = getpid();
   
   for (i = 0; i < 2048; i++)
-    vec_add1 (test_data, 'a' + (i % 26));
+    vec_add1 (test_data, 'a' + (i % 32));
 
   bmp = vl_msg_api_alloc (sizeof (*bmp));
   memset (bmp, 0, sizeof (*bmp));
@@ -288,45 +299,24 @@ void uritest_master (uritest_main_t * utm)
     }
   
   for (i = 0; i < 1000; i++)
-    {
-      svm_fifo_enqueue (utm->tx_fifo, mypid, vec_len (test_data), test_data);
-      reply_len = svm_fifo_max_dequeue (utm->rx_fifo);
-      if (reply_len)
-        {
-          vec_validate (replies, reply_len - 1);
-          svm_fifo_dequeue(utm->rx_fifo, mypid, vec_len (replies), replies);
-          for (j = 0; j < vec_len (replies); j++)
-            {
-              if (replies[j] != 1)
-                clib_warning ("reply %d not OK", reply_counter);
-              reply_counter++;
-            }
-          _vec_len (replies) = 0;
-        }
-    }
+    svm_fifo_enqueue (utm->tx_fifo, mypid, vec_len (test_data), test_data);
 
-  while (reply_counter < i)
-    {
-      reply_len = svm_fifo_max_dequeue (utm->rx_fifo);
-      if (reply_len)
-        {
-          vec_validate (replies, reply_len - 1);
-          svm_fifo_dequeue(utm->rx_fifo, mypid, vec_len (replies), replies);
-          for (j = 0; j < vec_len (replies); j++)
-            {
-              if (replies[j] != 1)
-                clib_warning ("reply %d not OK", reply_counter);
-              reply_counter++;
-            }
-          _vec_len (replies) = 0;
-        }
-    }
+  vec_validate(reply, 0);
+
+  reply_len = svm_fifo_dequeue(utm->rx_fifo, mypid, 
+                               vec_len (reply), reply);
+
+  if (reply_len != 1)
+    clib_warning ("reply length %d", reply_len);
+
+  if (reply[0] == 1)
+    fformat(stdout, "Test OK...");
 
   ump = vl_msg_api_alloc (sizeof (*ump));
   memset (ump, 0, sizeof (*ump));
   
-  bmp->_vl_msg_id = ntohs (VL_API_UNBIND_URI);
-  bmp->client_index = utm->my_client_index;
+  ump->_vl_msg_id = ntohs (VL_API_UNBIND_URI);
+  ump->client_index = utm->my_client_index;
   memcpy (ump->uri, utm->uri, vec_len (utm->uri));
   vl_msg_api_send_shmem (utm->vl_input_queue, (u8 *)&ump);
   
@@ -344,15 +334,13 @@ void uritest_slave (uritest_main_t * utm)
   vl_api_connect_uri_t * cmp;
   int i, j;
   u8 * test_data = 0;
-  u8 * replies = 0;
+  u8 * reply = 0;
   u32 bytes_received = 0;
+  u32 actual_bytes;
   int mypid = getpid();
-  int ok;
+  u8 ok;
   
   vec_validate (test_data, 4095);
-
-  vec_validate (replies, 4095);
-  _vec_len(replies) = 0;
 
   cmp = vl_msg_api_alloc (sizeof (*cmp));
   memset (cmp, 0, sizeof (*cmp));
@@ -369,28 +357,26 @@ void uritest_slave (uritest_main_t * utm)
       return;
     }
   
+  ok = 1;
   for (i = 0; i < 1000; i++)
     {
-      svm_fifo_dequeue (utm->tx_fifo, mypid, vec_len (test_data), test_data);
+      actual_bytes = svm_fifo_dequeue (utm->rx_fifo, mypid, 
+                                       vec_len (test_data), test_data);
       j = 0;
-      ok = 1;
-      while (j < vec_len (test_data))
+      while (j < actual_bytes)
         {
-          if (test_data[j] != ('a' + (bytes_received % 26)))
+          if (test_data[j] != ('a' + (bytes_received % 32)))
             ok = 0;
-          if (bytes_received > 0 && (bytes_received % 26) == 0)
-            vec_add1 (replies, ok);
           bytes_received++;
+          j++;
         }
-      
-      if (vec_len (replies))
-        svm_fifo_enqueue (utm->rx_fifo, mypid, vec_len (replies), replies);
-
-      _vec_len (replies) = 0;
-
-      if (bytes_received == 1000 * 26)
+      if (bytes_received == 1000 * 2048)
         break;
     }
+      
+  vec_add1(reply, ok);
+
+  svm_fifo_enqueue (utm->tx_fifo, mypid, vec_len (reply), reply);
 
   fformat (stdout, "Slave done...\n");
 }
@@ -416,6 +402,8 @@ main (int argc, char **argv)
 
   clib_time_init (&utm->clib_time);
   init_error_string_table (utm);
+  svm_fifo_segment_init();
+  unformat_init_command_line (a, argv);
 
   utm->uri = format (0, "%s%c", fifo_name);
 
@@ -454,6 +442,21 @@ main (int argc, char **argv)
 
   vl_client_disconnect_from_vlib ();
   exit (0);
+}
+
+#undef vl_api_version
+#define vl_api_version(n,v) static u32 vpe_api_version = v;
+#include <vpp-api/vpe.api.h>
+#undef vl_api_version
+
+void
+vl_client_add_api_signatures (vl_api_memclnt_create_t * mp)
+{
+  /*
+   * Send the main API signature in slot 0. This bit of code must
+   * match the checks in ../vpe/api/api.c: vl_msg_api_version_check().
+   */
+  mp->api_versions[0] = clib_host_to_net_u32 (vpe_api_version);
 }
 
 /*
