@@ -44,11 +44,17 @@ typedef struct
 
 extern uri_main_t uri_main;
 
-int vnet_bind_uri (char * uri, u32 api_client_index, u32 accept_cookie
+int vnet_bind_uri (char * uri, u32 api_client_index, u32 accept_cookie,
                    u32 segment_size, u64 *options, char *segment_name,
                    u32 *name_length);
 
 int vnet_unbind_uri (char * uri, u32 api_client_index);
+
+int vnet_connect_uri (char * uri, u32 api_client_index,
+                      u64 *options, char *segment_name, u32 *name_length);
+
+int vnet_disconnect_uri (char * uri, u32 api_client_index);
+
 
 #endif /* __included_uri_h__ */
 

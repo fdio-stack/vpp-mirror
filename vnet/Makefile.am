@@ -676,6 +676,15 @@ nobase_include_HEADERS +=			\
   vnet/devices/ssvm/ssvm_eth.h
 
 ########################################
+# URI connection managmeent
+########################################
+libvnet_la_SOURCES +=				\
+  vnet/uri/uri.c
+
+nobase_include_HEADERS +=			\
+  vnet/uri/uri.h
+
+########################################
 # Linux packet interface
 ########################################
 

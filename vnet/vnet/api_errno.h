@@ -90,7 +90,7 @@ _(EXCEEDED_NUMBER_OF_PORTS_CAPACITY, -96, "Operation would exceed capacity of nu
 _(INVALID_ADDRESS_FAMILY, -97, "Invalid address family")                \
 _(INVALID_SUB_SW_IF_INDEX, -98, "Invalid sub-interface sw_if_index")	\
 _(UNKNOWN_URI_TYPE, -99, "Unknown URI type")				\
-_(ADDRESS_IN_USE, -100, "Address in use")
+_(ADDRESS_IN_USE, -100, "Address in use")				\
 _(ADDRESS_NOT_IN_USE, -101, "Address not in use")
 
 typedef enum

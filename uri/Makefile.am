@@ -26,3 +26,5 @@ AM_CFLAGS = -Wall
 bin_PROGRAMS = uritest
 
 uritest_SOURCES = uritest.c
+uritest_LDADD = -lvlibmemoryclient -lvlibapi -lsvm \
+	-lvppinfra -lpthread -lm -lrt 

@@ -4987,8 +4987,8 @@ define bind_uri_reply {
     @param client_index - opaque cookie to identify the sender
     @param context - sender context, to match reply w/ request
     @param accept_cookie - sender accept cookie, to identify this bind flavor
-    @param uri - a URI, e.g. "tcp://0.0.0.0/0/80" [ipv4]
-    "tcp://::/0/80" [ipv6], "fifo:/myfifo", etc.
+    @param uri - a URI, e.g. "tcp4://0.0.0.0/0/80"
+    "tcp6://::/0/80" [ipv6], "fifo:/myfifo", etc.
     @param options - socket options, fifo sizes, etc.
 */
 define connect_uri {
@@ -5103,10 +5103,10 @@ define accept_reply {
     @param client_context - sender context, to match reply w/ request
     @param vpp_context - vpp context, to match reply w/ request
 */
-define disconnect {
+define disconnect_uri {
   u32 client_index;
-  u32 client_context;
-  u32 vpp_context;
+  u32 context;
+  u8 uri [128];
 };
 
 /** \brief bidirectional disconnect reply API
@@ -5115,13 +5115,11 @@ define disconnect {
     @param client_context - sender context, to match reply w/ request
     @param vpp_context - vpp context, to match reply w/ request
 */
-define disconnect_reply {
+define disconnect_uri_reply {
   u32 client_index;
-  u32 client_context;
-  u32 vpp_context;
+  u32 context;
   i32 retval;
 };
-
 
 /*
  * Local Variables:

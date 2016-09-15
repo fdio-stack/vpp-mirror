@@ -414,8 +414,8 @@ _(UNBIND_URI, unbind_uri)                                               \
 _(CONNECT_URI, connect_uri)						\
 _(MAP_ANOTHER_SEGMENT_REPLY, map_another_segment_reply)                 \
 _(ACCEPT_REPLY, accept_reply)                                           \
-_(DISCONNECT, disconnect)                                               \
-_(DISCONNECT_REPLY, disconnect_reply)
+_(DISCONNECT_URI, disconnect_uri)                                       \
+_(DISCONNECT_URI_REPLY, disconnect_uri_reply)
   
 #define QUOTE_(x) #x
 #define QUOTE(x) QUOTE_(x)
@@ -8624,20 +8624,19 @@ vl_api_bind_uri_t_handler (vl_api_bind_uri_t * mp)
 
   segment_name_length = ARRAY_LEN(segment_name);
 
-  rv = vnet_bind_uri (mp->uri, mp->api_client_index, mp->accept_cookie,
+  rv = vnet_bind_uri ((char *) mp->uri, mp->client_index, mp->accept_cookie,
                       mp->segment_size, mp->options, segment_name, 
                       &segment_name_length);
 
-  REPLY_MACRO2 (VL_API_BIND_URL_REPLY,
+  REPLY_MACRO2 (VL_API_BIND_URI_REPLY,
   ({
-    rmp->need_map = segment_name_length != 0;
     rmp->segment_name_length = 0;
     /* $$$$ policy? */
     rmp->segment_size = mp->segment_size;
     if (segment_name_length)
       {
         memcpy (rmp->segment_name, segment_name, segment_name_length);
-        mp->segment_name_length = segment_name_length;
+        rmp->segment_name_length = segment_name_length;
       }
   }));
 }
@@ -8648,10 +8647,9 @@ vl_api_unbind_uri_t_handler (vl_api_unbind_uri_t * mp)
   vl_api_unbind_uri_reply_t * rmp;
   int rv;
 
-  rv = vnet_unbind_uri (mp->uri, mp->api_client_index, mp->accept_cookie,
-                        mp->options);
+  rv = vnet_unbind_uri ((char *) mp->uri, mp->client_index);
 
-  REPLY_MACRO (VL_API_UNBIND_URL_REPLY);
+  REPLY_MACRO (VL_API_UNBIND_URI_REPLY);
 }
 
 static void
@@ -8664,18 +8662,17 @@ vl_api_connect_uri_t_handler (vl_api_connect_uri_t * mp)
 
   segment_name_length = ARRAY_LEN(segment_name);
 
-  rv = vnet_connect_uri (mp->uri, mp->api_client_index, mp->accept_cookie,
-                      mp->segment_size, mp->options, segment_name, 
-                      &segment_name_length);
+  rv = vnet_connect_uri ((char *) mp->uri, mp->client_index, 
+                         mp->options, segment_name, 
+                         &segment_name_length);
 
-  REPLY_MACRO2 (VL_API_CONNECT_URL_REPLY,
+  REPLY_MACRO2 (VL_API_CONNECT_URI_REPLY,
   ({
-    rmp->need_map = segment_name_length != 0;
     rmp->segment_name_length = 0;
     if (segment_name_length)
       {
         memcpy (rmp->segment_name, segment_name, segment_name_length);
-        mp->segment_name_length = segment_name_length;
+        rmp->segment_name_length = segment_name_length;
       }
   }));
 }
@@ -8686,15 +8683,14 @@ vl_api_disconnect_uri_t_handler (vl_api_disconnect_uri_t * mp)
   vl_api_disconnect_uri_reply_t * rmp;
   int rv;
 
-  rv = vnet_disconnect_uri (mp->uri, mp->api_client_index, mp->accept_cookie,
-                        mp->options);
+  rv = vnet_disconnect_uri ((char *)mp->uri, mp->client_index);
 
-  REPLY_MACRO (VL_API_DISCONNECT_URL_REPLY);
+  REPLY_MACRO (VL_API_DISCONNECT_URI_REPLY);
 }
 
 static void
 vl_api_map_another_segment_reply_t_handler 
-(vl_api_map_another_segment_reply_t_handler * mp)
+(vl_api_map_another_segment_reply_t * mp)
 {
 
 }
@@ -8704,13 +8700,7 @@ vl_api_accept_reply_t_handler (vl_api_accept_reply_t * mp)
   
 }
 static void
-vl_api_disconnect_t_handler (vl_api_disconnect_t * mp)
-{
-  vl_api_disconnect_reply_t * rmp;
-  int rv;
-}
-static void
-vl_api_disconnect_reply_t_handler (vl_api_disconnect_reply_t *mp)
+vl_api_disconnect_uri_reply_t_handler (vl_api_disconnect_uri_reply_t *mp)
 {
   
 }

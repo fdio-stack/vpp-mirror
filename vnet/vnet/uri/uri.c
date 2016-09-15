@@ -12,8 +12,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef __included_uri_h__
-#define __included_uri_h__
+#include "uri.h"
+#include <vlibmemory/api.h>
 
 /** @file
     URI handling, bind tables
@@ -26,8 +26,8 @@ uri_main_t uri_main;
 /**** fifo uri */
 
 int vnet_bind_fifo_uri (char *uri, u32 api_client_index, u32 accept_cookie,
-                        u32 segment_size, char *segment_name_arg, 
-                        u32 * segment_name_length)
+                        u32 segment_size, u64 * options, 
+                        char *segment_name_arg, u32 * segment_name_length)
 {
   uri_main_t * um = &uri_main;
   fifo_bind_table_entry_t * e;
@@ -43,7 +43,7 @@ int vnet_bind_fifo_uri (char *uri, u32 api_client_index, u32 accept_cookie,
     return VNET_API_ERROR_ADDRESS_IN_USE;
 
   /* External client? */
-  if (api_cient_index != ~0)
+  if (api_client_index != ~0)
     {
       regp = vl_api_client_index_to_registration (api_client_index);
       ASSERT(regp);
@@ -62,7 +62,7 @@ int vnet_bind_fifo_uri (char *uri, u32 api_client_index, u32 accept_cookie,
   memset (e, 0, sizeof (*e));
 
   e->fifo_name = format (0, "%s%c", uri, 0);
-  e->server_name = servier_name;
+  e->server_name = server_name;
   e->segment_name = segment_name;
   e->bind_client_index = api_client_index;
   e->accept_cookie = accept_cookie;
@@ -76,9 +76,7 @@ int vnet_unbind_fifo_uri (char *uri, u32 api_client_index)
 {
   uri_main_t * um = &uri_main;
   fifo_bind_table_entry_t * e;
-  vl_api_registration_t *regp;
   uword * p;
-  u8 * server_name;
 
   p = hash_get_mem (um->fifo_bind_table_entry_by_name, uri);
 
@@ -102,15 +100,13 @@ int vnet_unbind_fifo_uri (char *uri, u32 api_client_index)
   return 0;
 }
 
-int vnet_connect_fifo_uri (char *uri, u32 api_client_index, u32 accept_cookie,
-                           u32 segment_size, char *segment_name_arg, 
+int vnet_connect_fifo_uri (char *uri, u32 api_client_index,
+                           u64 * options, char *segment_name_arg, 
                            u32 * segment_name_length)
 {
   uri_main_t * um = &uri_main;
   fifo_bind_table_entry_t * e;
-  vl_api_registration_t *regp;
   uword * p;
-  u8 * server_name, * segment_name;
 
   ASSERT(segment_name_length);
 
@@ -132,9 +128,7 @@ int vnet_disconnect_fifo_uri (char *uri, u32 api_client_index)
 {
   uri_main_t * um = &uri_main;
   fifo_bind_table_entry_t * e;
-  vl_api_registration_t *regp;
   uword * p;
-  u8 * server_name;
 
   p = hash_get_mem (um->fifo_bind_table_entry_by_name, uri);
 
@@ -153,7 +147,7 @@ int vnet_disconnect_fifo_uri (char *uri, u32 api_client_index)
 
 /**** end fifo URI */
 
-int vnet_bind_uri (char * uri, u32 api_client_index, u32 accept_cookie
+int vnet_bind_uri (char * uri, u32 api_client_index, u32 accept_cookie,
                    u32 segment_size, u64 *options, char *segment_name,
                    u32 *name_length)
 {
@@ -161,8 +155,8 @@ int vnet_bind_uri (char * uri, u32 api_client_index, u32 accept_cookie
 
   /* Mumble top-level decode mumble */
   if (uri[0] == 'f')
-    return vnet_bind_fifo_uri (uri, api_client_index, accept_cookie
-                               segment_size, options, egment_name,
+    return vnet_bind_fifo_uri (uri, api_client_index, accept_cookie,
+                               segment_size, options, segment_name,
                                name_length);
   else
     return VNET_API_ERROR_UNKNOWN_URI_TYPE;
@@ -179,17 +173,15 @@ int vnet_unbind_uri (char * uri, u32 api_client_index)
     return VNET_API_ERROR_UNKNOWN_URI_TYPE;
 }
 
-int vnet_connect_uri (char * uri, u32 api_client_index, u32 accept_cookie
-                   u32 segment_size, u64 *options, char *segment_name,
-                   u32 *name_length)
+int vnet_connect_uri (char * uri, u32 api_client_index,
+                      u64 *options, char *segment_name, u32 *name_length)
 {
   ASSERT(uri);
 
   /* Mumble top-level decode mumble */
   if (uri[0] == 'f')
-    return vnet_connect_fifo_uri (uri, api_client_index, accept_cookie
-                                  segment_size, options, egment_name,
-                                  name_length);
+    return vnet_connect_fifo_uri (uri, api_client_index, options, 
+                                  segment_name, name_length);
   else
     return VNET_API_ERROR_UNKNOWN_URI_TYPE;
 }
