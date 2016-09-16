@@ -40,7 +40,11 @@ typedef struct
   u32 tail;
   u32 cursize;
   u32 nitems;
-  
+  /* Backpointers */
+  u32 server_session_index;
+  u32 client_session_index;
+  u8 server_thread_index;
+  u8 client_thread_index;
   CLIB_CACHE_LINE_ALIGN_MARK (data);
 } svm_fifo_t;
 

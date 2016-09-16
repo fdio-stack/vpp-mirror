@@ -1,3 +1,17 @@
+/*
+ * Copyright (c) 2016 Cisco and/or its affiliates.
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at:
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 #include <vlib/vlib.h>
 #include <vnet/vnet.h>
@@ -211,6 +225,8 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
             {
               s0 = pool_elt_at_index (ssm->sessions_by_thread[my_thread_index],
                                       kv0.value & 0xFFFFFFFFULL);
+
+              ASSERT(s0->
  
               f0 = s0->server_rx_fifo;
               
@@ -257,7 +273,8 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
               ss0 = pool_elt_at_index (ssm->servers, i0);
 
               /* Create a session */
-              s0 = v4_stream_session_create (ssm, ss0, kv0, 0 /* is_tcp */);
+              s0 = v4_stream_session_create (ssm, ss0, &key0, my_thread_index, 
+                                             0 /* is_tcp */);
             }
 
         trace0:

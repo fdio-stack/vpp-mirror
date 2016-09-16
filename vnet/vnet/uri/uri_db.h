@@ -51,12 +51,16 @@ typedef struct
 
   /** tcp | udp */
   u8 is_tcp;
+  u8 session_thread_index;
   /** To avoid n**2 "one event per frame" check */
   u8 enqueue_epoch;
-  u8 pad[2];
+  u8 pad[1];
 
   /** stream server pool index */
   u32 server_index;
+
+  /** svm segment index */
+  u32 server_segment_index;
 
   /*
    * Nobody in their right mind uses a stream abstraction for udp.
@@ -71,7 +75,7 @@ typedef struct
   };
 } stream_session_t;
 
-typedef struct
+typedef struct _stream_server
 {
   /** Vector of svm segments mapped by this server */
   svm_fifo_segment_private_t *segments;
@@ -82,6 +86,9 @@ typedef struct
   /** Binary API connection index, ~0 if internal */
   u32 api_client_index;
   
+  /** Shoulder-tap the server */
+  void (*session_create_callback) (struct _stream_server *server, 
+                                   stream_session_t *new_session);
 } stream_server_t;
 
 typedef struct
