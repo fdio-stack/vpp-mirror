@@ -158,6 +158,10 @@ int vnet_bind_uri (char * uri, u32 api_client_index, u32 accept_cookie,
     return vnet_bind_fifo_uri (uri, api_client_index, accept_cookie,
                                segment_size, options, segment_name,
                                name_length);
+  else if (uri[0] == 'u' && uri[3] == '4')
+    return vnet_bind_udp4_uri (uri, api_client_index, accept_cookie,
+                               segment_size, options, segment_name,
+                               name_length);
   else
     return VNET_API_ERROR_UNKNOWN_URI_TYPE;
 }
@@ -169,6 +173,8 @@ int vnet_unbind_uri (char * uri, u32 api_client_index)
   /* Mumble top-level decode mumble */
   if (uri[0] == 'f')
     return vnet_unbind_fifo_uri (uri, api_client_index);
+  else if (uri[0] == 'u' && uri[3] == '4')
+    return vnet_unbind_udp4_uri (uri, api_client_index);
   else
     return VNET_API_ERROR_UNKNOWN_URI_TYPE;
 }
@@ -193,6 +199,8 @@ int vnet_disconnect_uri (char * uri, u32 api_client_index)
   /* Mumble top-level decode mumble */
   if (uri[0] == 'f')
     return vnet_disconnect_fifo_uri (uri, api_client_index);
+  else if (uri[0] == 'u' && uri[3] == '4')
+    return vnet_disconnect_udp4_uri (uri, api_client_index);
   else
     return VNET_API_ERROR_UNKNOWN_URI_TYPE;
 }

@@ -5070,14 +5070,8 @@ define accept {
   /* $$$$ include remote info to allow client to say "no" */
   /** Tells the client which bind flavor just occurred */
   u32 accept_cookie;
-  /** rx (vpp -> vpp-client) fifo address */
-  u64 rx_fifo_address;
-  /** size of the rx fifo in bytes */
-  u32 rx_fifo_size;
-  /* Transmit (vpp-client -> vpp) fifo */
-  u64 tx_fifo_address;
-  /** size of the tx fifo in bytes */
-  u32 tx_fifo_size;
+  /** Session structure */
+  u64 session_handle;
 };
 
 /** \brief client->vpp, reply to an accept message

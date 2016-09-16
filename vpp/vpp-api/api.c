@@ -8698,6 +8698,7 @@ static void
 vl_api_accept_reply_t_handler (vl_api_accept_reply_t * mp)
 {
   
+  
 }
 static void
 vl_api_disconnect_uri_reply_t_handler (vl_api_disconnect_uri_reply_t *mp)
