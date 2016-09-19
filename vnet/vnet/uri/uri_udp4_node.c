@@ -28,7 +28,8 @@
 
 vlib_node_registration_t udp4_uri_input_node;
 
-typedef struct {
+typedef struct 
+{
   u32 session;
   u32 disposition
   u32 thread_index;

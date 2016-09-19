@@ -207,6 +207,61 @@ int vnet_bind_udp4_uri (vnet_bind_uri_args_t * a)
   return 0;
 }
 
+u32 uri_tx_ip4_udp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b)
+{
+  svm_fifo_t * f;
+  ip4_header_t * ip;
+  udp_header_t * udp;
+  u8 * data;
+  u32 max_dequeue, len_to_dequeue, actual_length;
+  udp4_session_t *us;
+
+  us = &s->u4;
+  f = s->server_tx_fifo;
+  ip = vlib_buffer_get_current (b);
+  udp = (udp_header_t)(ip+1);
+  data = (u8 *)(udp+1);
+
+  /* Dequeue a bunch of data into the packet buffer */
+  max_dequeue = svm_fifo_max_dequeue (f);
+  /*$$$$$ limits, and so on and so forth */
+  len_to_dequeue = max_dequeue < 512 ? max_dequeue : 512;
+  
+  actual_length = svm_fifo_dequeue (f, 0, len_to_dequeue, data);
+
+  b0->current_length = sizeof (*ip) + sizeof (*udp) + actual_length;
+
+  /* Build packet header, swap rx key src + dst fields */
+  ip->src_address.as_u32 = u4->key.as_key.dst;
+  ip->dst_address.as_u32 = u4->key.as_key.src;
+  ip->ip_version_and_header_length = 0x45;
+  ip->ttl = 254;
+  ip->protocol = IP_PROTOCOL_UDP;
+  ip->length = clib_host_to_net_u16 (b0->current_length);
+  ip->checksum = ip4_header_checksum(ip);
+
+  udp->src_port = u4->key.src_port;
+  udp->dst_port = u4->key.dst_port;
+  udp->length = clib_host_to_net_u16 (actual_length + sizeof (*udp));
+  udp->checksum = 0;
+  
+  return URI_QUEUE_NEXT_IP4_LOOKUP;
+}
+
+
+u32 uri_tx_ip4_tcp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b)
+{
+  clib_warning ("unimplmented");
+}
+u32 uri_tx_ip6_tcp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b)
+{
+  clib_warning ("unimplmented");
+}
+u32 uri_tx_ip6_udp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b)
+{
+  clib_warning ("unimplmented");
+}
+
 /*
  * fd.io coding-style-patch-verification: ON
  *

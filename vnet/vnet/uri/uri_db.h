@@ -38,21 +38,35 @@ typedef enum
   FIFO_EVENT_SERVER_EXIT,
 } fifo_event_type_t;
 
+/* Event queue input node static next indices */
+typedef enum {
+  URI_QUEUE_NEXT_DROP,
+  URI_QUEUE_NEXT_IP4_LOOKUP,
+  URI_QUEUE_NEXT_IP6_LOOKUP,
+  URI_QUEUE_N_NEXT,
+} uri_queue_next_t;
+
+#define foreach_uri_session_type                \
+  _(IP4_TCP, ip4_tcp)                           \
+  _(IP4_UDP, ip4_udp)                           \
+  _(IP6_TCP, ip6_tcp)                           \
+  _(IP6_UDP, ip6_udp)                           \
+  _(FIFO, fifo)
+
 typdef enum
 {
-  SESSION_TYPE_IP4_TCP,
-  SESSION_TYPE_IP4_UDP,
-  SESSION_TYPE_IP6_TCP,
-  SESSION_TYPE_IP6_UDP,
-  SESSION_TYPE_FIFO,
-}
+#define _(a) SESSION_TYPE_##a,
+  foreach_uri_session_type
+#undef _
+  SESSION_TYPE_N_TYPES,
+} stream_session_type_t;
 
 typedef enum
 {
   SESSION_STATE_CONNECTING,
   SESSION_STATE_READY,
   SESSION_STATE_DISCONNECTING,
-}
+} stream_session_state_t;
 
 typedef CLIB_PACKED(struct
 {
@@ -138,6 +152,15 @@ typedef struct
 
   /** Per-worker thread vector of sessions to enqueue */
   u32 **sessions_indices_to_enqueue_by_thread;
+
+  /** per-worker tx buffer free lists */
+  u32 ** tx_buffer;
+
+  /** per-worker active event vectors */
+  fifo_event_t ** fifo_events;
+
+  /** vpp fifo event queue */
+  unix_shared_memory_queue_t *vpp_event_queue;
 
   /* Convenience */
   vlib_main_t *vlib_main;
