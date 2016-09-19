@@ -62,7 +62,8 @@ v4_stream_session_create (stream_server_main_t *ssm,
 
   
   /* Initialize state machine, such as it is... */
-  s->u4.state = UDP_SESSION_STATE_CONNECTING;
+  s->session_type = is_tcp ? SESSION_TYPE_IP4_TCP : SESSION_TYPE_IP4_UDP;
+  s->state = SESSION_STATE_CONNECTING;
   s->u4.mtu = 1024;             /* $$$$ policy */
   s->key.as_u64[0] = key0->as_u64[0];
   s->key.as_u64[1] = key0->as_u64[1];
@@ -113,6 +114,97 @@ int v4_stream_session_delete (stream_server_main_t *ssm,
   pool_put (ssm->sessions[s->my_thread_index], s);
   
   return rv;
+}
+
+int vnet_bind_udp4_uri (vnet_bind_uri_args_t * a)
+{
+  uri_main_t * um = &uri_main;
+  api_main_t *am = &api_main;
+  svm_fifo_segment_create_args_t _ca, *ca = &_ca;
+  stream_server_main_t * ssm = &stream_server_main;
+  stream_server_t * ss;
+  fifo_bind_table_entry_t * e;
+  vl_api_registration_t *regp;
+  uword * p;
+  u8 * server_name, * segment_name;
+  void * oldheap;
+
+  ASSERT(segment_name_length);
+
+  p = hash_get_mem (um->fifo_bind_table_entry_by_name, uri);
+
+  if (p)
+    return VNET_API_ERROR_ADDRESS_IN_USE;
+
+  /* External client? */
+  if (a->api_client_index != ~0)
+    {
+      regp = vl_api_client_index_to_registration (a->api_client_index);
+      ASSERT(regp);
+      server_name = format (0, "%s%c", regp->name, 0);
+    }
+  else
+    server_name = format (0, "<internal>%c", 0);
+
+  /* 
+   * $$$$ lookup client by api client index, to see if we're already
+   * talking to this client about some other port
+   */
+
+  /* Unique segment name, per vpp instance */
+  segment_name = format (0, "%d-%s%c", getpid(), uri, 0);
+  ASSERT (vec_len(segment_name) <= 128);
+  *a->segment_name_length = vec_len(segment_name);
+  memcpy (a->segment_name, segment_name, *a->segment_name_length);
+
+  ca->segment_name = segment_name;
+  ca->segment_size = segment_size;
+
+  rv = svm_fifo_segment_create (ca);
+  if (rv)
+    {
+      clib_warning ("sm_fifo_segment_create ('%s', %d) failed",
+                    segment_name, segment_size);
+      return VNET_API_ERROR_URI_FIFO_CREATE_FAILED;
+    }
+
+  pool_get (ssm->servers, ss);
+  memset (ss, 0, sizeof (*ss));
+
+  /* Allocate event fifo in the /vpe-api shared-memory segment */
+  oldheap = svm_push_data_heap (am->vlib_rp);
+
+  /* Allocate vpp event queue (once) */
+  if (ssm->vpp_event_queue == 0)
+    {
+      ssm->vpp_event_queue = unix_shared_memory_queue_init 
+        (2048 /* nels $$$$ config */, 
+         sizeof (fifo_event_t),
+         0 /* consumer pid */,
+         0 /* (do not) send signal when queue non-empty */);
+    }
+
+  /* Allocate server event queue */
+  if (ss->event_queue == 0)
+    {
+      ss->event_queue = unix_shared_memory_queue_init 
+        (128 /* nels $$$$ config */, 
+         sizeof (fifo_event_t),
+         0 /* consumer pid */,
+         0 /* (do not) send signal when queue non-empty */);
+    }
+  svm_pop_heap (oldheap);
+
+  a->vpp_event_queue_address = ssm->vpp_event_queue;
+  a->server_event_queue_address = (u64) ss->event_queue;
+
+  ss->session_create_callback = session_create_callback_arg;
+  ss->session_delete_callback = v4_stream_session_delete;
+  ss->api_client_index = api_client_index;
+
+  hash_set_mem (um->fifo_bind_table_entry_by_name, e->fifo_name, 
+                e - um->fifo_bind_table);
+  return 0;
 }
 
 /*

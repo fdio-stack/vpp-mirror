@@ -46,9 +46,28 @@ typedef struct
 
 extern uri_main_t uri_main;
 
-int vnet_bind_uri (char * uri, u32 api_client_index, u32 accept_cookie,
-                   u32 segment_size, u64 *options, char *segment_name,
-                   u32 *name_length);
+typedef struct
+{
+  char *uri;
+  u32 api_client_index;
+  u32 accept_cookie;
+  u32 segment_size;
+  u64 * options;
+  void * send_session_create_callback;
+
+  /** segment name (result) */
+  char *segment_name;
+
+  /** segment name length (result) */
+  u32 *name_length;
+
+  /** Event queue addresses (result)*/
+  u64 server_event_queue_address;
+  u64 vpp_event_queue_address;
+
+} vnet_bind_uri_args_t;
+
+int vnet_bind_uri (vnet_bind_uri_args_t *);
 
 int vnet_unbind_uri (char * uri, u32 api_client_index);
 

@@ -4975,8 +4975,9 @@ define bind_uri {
 define bind_uri_reply {
     u32 context;
     i32 retval;
-    /** 0 if this connection shouldn't send events to vpp */
-    u64 event_queue_address;
+    /** 0 if this connection shouldn't send events */
+    u64 server_event_queue_address;
+    u64 vpp_event_queue_address;
     /** length non-zero if binder should map segment */
     u8 segment_name_length;
     u32 segment_size;
@@ -5064,14 +5065,15 @@ define map_another_segment_reply {
     @param tx_fifo_address - tx (vpp-client -> vpp) fifo address 
     @param tx_fifo_size - size of the tx fifo in bytes
 */
-define accept {
+define accept_session {
   /** VPP context */
   u32 context;
-  /* $$$$ include remote info to allow client to say "no" */
-  /** Tells the client which bind flavor just occurred */
   u32 accept_cookie;
-  /** Session structure */
-  u64 session_handle;
+  u64 server_rx_fifo;
+  u64 server_tx_fifo;
+  u8 session_type;
+  /* v6 size */
+  u8 key [48];
 };
 
 /** \brief client->vpp, reply to an accept message
@@ -5082,13 +5084,14 @@ define accept {
     @param tx_fifo_address - tx (vpp-client -> vpp) fifo address 
     @param tx_fifo_size - size of the tx fifo in bytes
 */
-define accept_reply {
+define accept_session_reply {
   /** VPP context */
   u32 context;
-  /** For client's use w/ unbind + disconnect */
-  u32 client_context;
   /* $$$ may mean "I don't want this connection, flush it" */
   i32 retval;
+  u8 session_type;
+  u8 session_thread_index;
+  u32 session_index;
 };
 
 /** \brief bidirectional disconnect API

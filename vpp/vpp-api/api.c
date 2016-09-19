@@ -86,6 +86,7 @@
 #include <vnet/ipsec-gre/ipsec_gre.h>
 #include <vnet/flow/flow_report_classify.h>
 #include <vnet/uri/uri.h>
+#include <vnet/uri/uri_db.h>
 
 #undef BIHASH_TYPE
 #undef __included_bihash_template_h__
@@ -413,7 +414,7 @@ _(BIND_URI, bind_uri)                                                   \
 _(UNBIND_URI, unbind_uri)                                               \
 _(CONNECT_URI, connect_uri)						\
 _(MAP_ANOTHER_SEGMENT_REPLY, map_another_segment_reply)                 \
-_(ACCEPT_REPLY, accept_reply)                                           \
+_(ACCEPT_SESSION_REPLY, accept_session_reply) 				\
 _(DISCONNECT_URI, disconnect_uri)                                       \
 _(DISCONNECT_URI_REPLY, disconnect_uri_reply)
   
@@ -8614,19 +8615,66 @@ vl_api_delete_subif_t_handler (vl_api_delete_subif_t * mp)
   REPLY_MACRO (VL_API_DELETE_SUBIF_REPLY);
 }
 
+int send_session_create_callback (stream_server_t * ss, stream_session_t * s)
+{
+  int rv;
+  vl_api_accept_t * mp;
+  unix_shared_memory_queue_t * q;
+  udp4_session_t *s4;
+  // $$$$ udp6_session_t * s6;
+  
+  q = vl_api_client_index_to_input_queue (ss->api_client_index);
+
+  if (!q)
+    return -1;
+  
+  mp = vl_msg_api_alloc (sizeof (*mp));
+  mp->_vl_msg_id = ntohs (ACCEPT_SESSION);
+
+  key_size = 0;
+
+  switch (ss->session_type)
+    {
+    case SESSION_TYPE_IP4_TCP:
+    case SESSION_TYPE_IP4_UDP:
+      memcpy (mp->key, s->u4.key, sizeof (s->u4.key));
+
+    case SESSION_TYPE_IP6_TCP:
+    case SESSION_TYPE_IP6_UDP:
+      ASSERT(0);
+    }
+
+  mp->accept_cookie = ss->accept_cookie;
+  mp->server_rx_fifo = s->server_rx_fifo;
+  mp->server_tx_fifo = s->server_tx_fifo;
+  vl_msg_api_send_shmem (q, (u8 *) & mp);
+
+  return 0;
+}
+
 static void
 vl_api_bind_uri_t_handler (vl_api_bind_uri_t * mp)
 {
   vl_api_bind_uri_reply_t * rmp;
+  vnet_bind_uri_args_t _a, *a = & _a;
   char segment_name[128];
   u32 segment_name_length;
   int rv;
 
   segment_name_length = ARRAY_LEN(segment_name);
 
-  rv = vnet_bind_uri ((char *) mp->uri, mp->client_index, mp->accept_cookie,
-                      mp->segment_size, mp->options, segment_name, 
-                      &segment_name_length);
+  memset (a, 0, sizeof (*a));
+
+  a->uri = mp->uri;
+  a->api_client_index = mp->client_index;
+  a->accept_cookie = mp->accept_cookie;
+  a->segment_size = mp->segment_size;
+  a->options = mp->options;
+  a->segment_name = segment_name;
+  a->segment_name_length = &segment_name_length;
+  a->send_session_create_callback = send_session_create_callback;
+
+  rv = vnet_bind_uri (a);
 
   REPLY_MACRO2 (VL_API_BIND_URI_REPLY,
   ({
@@ -8638,6 +8686,8 @@ vl_api_bind_uri_t_handler (vl_api_bind_uri_t * mp)
         memcpy (rmp->segment_name, segment_name, segment_name_length);
         rmp->segment_name_length = segment_name_length;
       }
+    rmp->server_event_queue_address = a->event_queue_address;
+    rmp->vpp_event_queue_address = a->event_queue_address;
   }));
 }
 
@@ -8695,11 +8745,29 @@ vl_api_map_another_segment_reply_t_handler
 
 }
 static void
-vl_api_accept_reply_t_handler (vl_api_accept_reply_t * mp)
+vl_api_accept_session_reply_t_handler (vl_api_accept_session_reply_t * mp)
 {
-  
-  
+  stream_server_main_t * ssm = &stream_server_main;
+  stream_server_t * ss;
+  stream_session_t * s;
+  int rv;
+
+  s = pool_elt_at_index (ssm->sessions[mp->session_thread_index],
+                         mp->session_index);
+
+  rv = mp->retval;
+
+  if (rv)
+    {
+      /* Server isn't interested, kill the session */
+      ss = pool_elt_at_index (ssm->servers, s->server_index);
+      ss->session_delete_callback (ss, s);
+      return;
+    }
+  /* set fifo states to ready */
+  s->state = SESSION_STATE_READY;
 }
+
 static void
 vl_api_disconnect_uri_reply_t_handler (vl_api_disconnect_uri_reply_t *mp)
 {

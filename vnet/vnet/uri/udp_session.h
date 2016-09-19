@@ -34,6 +34,7 @@ typedef CLIB_PACKED(struct
 
 typedef struct
 {
+  u8 session_type;
   u8 state;
   /** ersatz MTU to limit fifo pushes to test data size */
   u32 mtu:

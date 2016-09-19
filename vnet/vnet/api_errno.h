@@ -91,7 +91,8 @@ _(INVALID_ADDRESS_FAMILY, -97, "Invalid address family")                \
 _(INVALID_SUB_SW_IF_INDEX, -98, "Invalid sub-interface sw_if_index")	\
 _(UNKNOWN_URI_TYPE, -99, "Unknown URI type")				\
 _(ADDRESS_IN_USE, -100, "Address in use")				\
-_(ADDRESS_NOT_IN_USE, -101, "Address not in use")
+_(ADDRESS_NOT_IN_USE, -101, "Address not in use")			\
+_(URI_FIFO_CREATE_FAILED, -102, "URI FIFO segment create failed")
 
 typedef enum
 {

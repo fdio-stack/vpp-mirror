@@ -35,13 +35,30 @@ typedef enum
   FIFO_EVENT_SERVER_RX,
   FIFO_EVENT_SERVER_TX,
   FIFO_EVENT_TIMEOUT,
-} fifo_event_t;
+  FIFO_EVENT_SERVER_EXIT,
+} fifo_event_type_t;
+
+typdef enum
+{
+  SESSION_TYPE_IP4_TCP,
+  SESSION_TYPE_IP4_UDP,
+  SESSION_TYPE_IP6_TCP,
+  SESSION_TYPE_IP6_UDP,
+  SESSION_TYPE_FIFO,
+}
+
+typedef enum
+{
+  SESSION_STATE_CONNECTING,
+  SESSION_STATE_READY,
+  SESSION_STATE_DISCONNECTING,
+}
 
 typedef CLIB_PACKED(struct
 {
   svm_fifo_t * fifo;
   u8 event_type;
-}) fifo_event;
+}) fifo_event_t;
 
 typedef struct
 {
@@ -54,7 +71,11 @@ typedef struct
   u8 session_thread_index;
   /** To avoid n**2 "one event per frame" check */
   u8 enqueue_epoch;
-  u8 pad[1];
+  /** vpp-side session state */
+  u8 session_state;
+
+  /** Session index in per_thread pool */
+  u32 session_index;
 
   /** stream server pool index */
   u32 server_index;
@@ -86,9 +107,14 @@ typedef struct _stream_server
   /** Binary API connection index, ~0 if internal */
   u32 api_client_index;
   
-  /** Shoulder-tap the server */
-  void (*session_create_callback) (struct _stream_server *server, 
-                                   stream_session_t *new_session);
+  /** Accept cookie, for multiple session flavors ($$$ maybe) */
+  u32 accept_cookie;
+
+  /** Shoulder-taps for the server */
+  int (*session_create_callback) (struct _stream_server *server, 
+                                  stream_session_t *new_session);
+  void (*session_delete_callback (struct _stream_server *server,
+                                  stream_session_t *dead_session);
 } stream_server_t;
 
 typedef struct
