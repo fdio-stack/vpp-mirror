@@ -93,6 +93,9 @@ uri_queue_node_fn (vlib_main_t * vm,
   u32 next0;
 
   q = ssm->vpp_event_queue;
+  if (PREDICT_FALSE (q == 0))
+    return 0;
+
   /* min number of events we can dequeue without blocking */
   n_to_dequeue = q->cursize;
 

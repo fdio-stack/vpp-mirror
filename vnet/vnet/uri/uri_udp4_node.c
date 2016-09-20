@@ -193,6 +193,7 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
           stream_server_t *ss0;
           u16 udp_len0;
           u16 i0;
+          u8 * data0;
           
           /* speculatively enqueue b0 to the current next frame */
 	  bi0 = from[0];
@@ -204,7 +205,10 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
 
 	  b0 = vlib_get_buffer (vm, bi0);
 
-          udp0 = vlib_buffer_get_current (b0);
+          /* udp_local hands us a pointer to the udp data */
+
+          data0 = vlib_buffer_get_current (b0);
+          udp0 = (udp_header_t *)(data0 - sizeof (*udp0));
 
           /* $$$$ fixme: udp_local doesn't do ip options correctly anyhow */
           ip0 = (ip4_header_t *) ((u8 *)udp0) - sizeof (*ip0);
@@ -271,7 +275,8 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
                   goto trace0;
                   
                 }
-              ss0 = pool_elt_at_index (ssm->servers, i0);
+              /* Note: -1 to dodge SPARSE_VEC_INVALID_INDEX */
+              ss0 = pool_elt_at_index (ssm->servers, i0-1);
 
               /* Create a session */
               s0 = v4_stream_session_create (ssm, ss0, &key0, my_thread_index, 

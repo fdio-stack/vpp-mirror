@@ -135,6 +135,7 @@ int vnet_bind_udp4_uri (vnet_bind_uri_args_t * a)
   char * cp;
   u32 port_number_host_byte_order;
   fifo_bind_table_entry_t * e;
+  u16 * n;
 
   ASSERT(a->segment_name_length);
 
@@ -231,6 +232,10 @@ int vnet_bind_udp4_uri (vnet_bind_uri_args_t * a)
   ss->session_create_callback = a->send_session_create_callback;
   ss->session_delete_callback = v4_stream_session_delete;
   ss->api_client_index = a->api_client_index;
+
+  n = sparse_vec_validate (ssm->stream_server_by_dst_port, 
+                           clib_host_to_net_u16(port_number_host_byte_order));
+  n[0] = (ss - ssm->servers) + 1; /* avoid SPARSE_VEC_INDEX_INVALID */
 
   pool_get (um->fifo_bind_table, e);
   memset (e, 0, sizeof (*e));
