@@ -366,8 +366,6 @@ VLIB_REGISTER_NODE (udp4_uri_input_node) = {
   },
 };
 
-/* Uses stream_server_main_t, currently no init routine */
-
 /*
  * fd.io coding-style-patch-verification: ON
  *

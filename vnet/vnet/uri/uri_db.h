@@ -173,6 +173,7 @@ typedef struct _stream_server_main
 } stream_server_main_t;
 
 extern stream_server_main_t stream_server_main;
+extern vlib_node_registration_t udp4_uri_input_node;
 
 u32 uri_tx_ip4_udp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b);
 u32 uri_tx_ip4_tcp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b);

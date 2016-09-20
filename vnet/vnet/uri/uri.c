@@ -20,6 +20,7 @@
 */
 
 uri_main_t uri_main;
+stream_server_main_t stream_server_main;
 
 /* types: fifo, tcp4, udp4, tcp6, udp6 */
 

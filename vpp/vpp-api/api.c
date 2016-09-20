@@ -8617,8 +8617,7 @@ vl_api_delete_subif_t_handler (vl_api_delete_subif_t * mp)
 
 int send_session_create_callback (stream_server_t * ss, stream_session_t * s)
 {
-  int rv;
-  vl_api_accept_t * mp;
+  vl_api_accept_session_t * mp;
   unix_shared_memory_queue_t * q;
   udp4_session_t *s4;
   // $$$$ udp6_session_t * s6;
@@ -8629,15 +8628,16 @@ int send_session_create_callback (stream_server_t * ss, stream_session_t * s)
     return -1;
   
   mp = vl_msg_api_alloc (sizeof (*mp));
-  mp->_vl_msg_id = ntohs (ACCEPT_SESSION);
+  mp->_vl_msg_id = clib_host_to_net_u16 (VL_API_ACCEPT_SESSION);
 
-  key_size = 0;
+  /* Note: session_type is the first octet in all types of sessions */
+  s4 = &s->u4;
 
-  switch (ss->session_type)
+  switch (s4->session_type)
     {
     case SESSION_TYPE_IP4_TCP:
     case SESSION_TYPE_IP4_UDP:
-      memcpy (mp->key, s->u4.key, sizeof (s->u4.key));
+      memcpy (mp->key, &s4->key, sizeof (s4->key));
 
     case SESSION_TYPE_IP6_TCP:
     case SESSION_TYPE_IP6_UDP:
@@ -8645,8 +8645,9 @@ int send_session_create_callback (stream_server_t * ss, stream_session_t * s)
     }
 
   mp->accept_cookie = ss->accept_cookie;
-  mp->server_rx_fifo = s->server_rx_fifo;
-  mp->server_tx_fifo = s->server_tx_fifo;
+  mp->server_rx_fifo = (u64) s->server_rx_fifo;
+  mp->server_tx_fifo = (u64) s->server_tx_fifo;
+  mp->session_type = s4->session_type;
   vl_msg_api_send_shmem (q, (u8 *) & mp);
 
   return 0;
@@ -8665,13 +8666,13 @@ vl_api_bind_uri_t_handler (vl_api_bind_uri_t * mp)
 
   memset (a, 0, sizeof (*a));
 
-  a->uri = mp->uri;
+  a->uri = (char *) mp->uri;
   a->api_client_index = mp->client_index;
   a->accept_cookie = mp->accept_cookie;
   a->segment_size = mp->segment_size;
   a->options = mp->options;
   a->segment_name = segment_name;
-  a->segment_name_length = &segment_name_length;
+  a->segment_name_length = segment_name_length;
   a->send_session_create_callback = send_session_create_callback;
   a->segment_size = mp->segment_size;
 
@@ -8687,8 +8688,8 @@ vl_api_bind_uri_t_handler (vl_api_bind_uri_t * mp)
         memcpy (rmp->segment_name, segment_name, segment_name_length);
         rmp->segment_name_length = segment_name_length;
       }
-    rmp->server_event_queue_address = a->event_queue_address;
-    rmp->vpp_event_queue_address = a->event_queue_address;
+    rmp->server_event_queue_address = a->server_event_queue_address;
+    rmp->vpp_event_queue_address = a->vpp_event_queue_address;
   }));
 }
 
@@ -8751,6 +8752,7 @@ vl_api_accept_session_reply_t_handler (vl_api_accept_session_reply_t * mp)
   stream_server_main_t * ssm = &stream_server_main;
   stream_server_t * ss;
   stream_session_t * s;
+  udp4_session_t * u4;
   int rv;
 
   s = pool_elt_at_index (ssm->sessions[mp->session_thread_index],
@@ -8762,11 +8764,25 @@ vl_api_accept_session_reply_t_handler (vl_api_accept_session_reply_t * mp)
     {
       /* Server isn't interested, kill the session */
       ss = pool_elt_at_index (ssm->servers, s->server_index);
-      ss->session_delete_callback (ss, s);
+      ss->session_delete_callback (ssm, s);
       return;
     }
-  /* set fifo states to ready */
-  s->state = SESSION_STATE_READY;
+
+  u4 = &s->u4;
+
+  switch (u4->session_type)
+    {
+    case SESSION_TYPE_IP4_UDP:
+      /* set fifo states to ready */
+      u4->state = UDP_SESSION_STATE_READY;
+      break;
+
+    case SESSION_TYPE_IP4_TCP:
+    case SESSION_TYPE_IP6_TCP:
+    case SESSION_TYPE_IP6_UDP:
+    default:
+      clib_warning ("session type %d unimplemented", u4->session_type);
+    }
 }
 
 static void

@@ -20,6 +20,7 @@
 #include "uri.h"
 #include <vlibapi/api.h>
 #include <vlibmemory/api.h>
+#include <vnet/ip/udp.h>
 
 /** Create a session, ping the server by callback */
 stream_session_t *
@@ -127,8 +128,12 @@ int vnet_bind_udp4_uri (vnet_bind_uri_args_t * a)
   vl_api_registration_t *regp;
   uword * p;
   u8 * segment_name;
+  u8 * server_name;
   void * oldheap;
   int rv;
+  char * cp;
+  u32 port_number_host_byte_order;
+  fifo_bind_table_entry_t * e;
 
   ASSERT(a->segment_name_length);
 
@@ -142,10 +147,33 @@ int vnet_bind_udp4_uri (vnet_bind_uri_args_t * a)
     {
       regp = vl_api_client_index_to_registration (a->api_client_index);
       ASSERT(regp);
+      server_name = format (0, "%s%c", regp->name, 0);
     }
+  else
+    server_name = format (0, "<internal>%c", 0);
 
   /* $$$$$ FIXME add udp port registration */
+  
+  /* "udp4:12345" */
+  cp = &a->uri[5];
+  if (*cp == 0)
+    return VNET_API_ERROR_INVALID_VALUE;
 
+  port_number_host_byte_order = 0;
+  while (*cp != 0 && (*cp >= '0' && *cp <= '9'))
+    {
+      port_number_host_byte_order = (port_number_host_byte_order<<3) + 
+        (port_number_host_byte_order<<1);
+      port_number_host_byte_order += *cp - '0';
+      cp++;
+    }
+
+  if (port_number_host_byte_order > 65535)
+    return VNET_API_ERROR_INVALID_VALUE;
+
+  udp_register_dst_port (um->vlib_main, port_number_host_byte_order,
+                         udp4_uri_input_node.index,
+                         1 /* is_ipv4 */);
 
   /* 
    * $$$$ lookup client by api client index, to see if we're already
