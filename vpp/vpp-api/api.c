@@ -8647,6 +8647,8 @@ int send_session_create_callback (stream_server_t * ss, stream_session_t * s)
   mp->accept_cookie = ss->accept_cookie;
   mp->server_rx_fifo = (u64) s->server_rx_fifo;
   mp->server_tx_fifo = (u64) s->server_tx_fifo;
+  mp->session_thread_index = s->session_thread_index;
+  mp->session_index = s->session_index;
   mp->session_type = s4->session_type;
   vl_msg_api_send_shmem (q, (u8 *) & mp);
 

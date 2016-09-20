@@ -28,6 +28,8 @@
 #include <vpp-api/vpe_msg_enum.h>
 #include <svm_fifo_segment.h>
 
+#include <vnet/uri/uri.h>
+
 #define vl_typedefs		/* define message structures */
 #include <vpp-api/vpe_all_api_h.h>
 #undef vl_typedefs
@@ -69,7 +71,8 @@ typedef struct
   svm_fifo_t * server_tx_fifo;
 
   /* Our event queue */
-  unix_shared_memory_queue_t * event_queue;
+  unix_shared_memory_queue_t * our_event_queue;
+  unix_shared_memory_queue_t * vpp_event_queue;
 
   /* For deadman timers */
   clib_time_t clib_time;
@@ -141,7 +144,11 @@ vl_api_bind_uri_reply_t_handler (vl_api_bind_uri_reply_t * mp)
       return;
     }
 
-  utm->event_queue_address = mp->event_queue_address;
+  utm->our_event_queue = (unix_shared_memory_queue_t *)
+    mp->server_event_queue_address;
+
+  utm->vpp_event_queue = (unix_shared_memory_queue_t *)
+    mp->vpp_event_queue_address;
 
   utm->state = STATE_READY;
 }
@@ -161,13 +168,22 @@ static void
 vl_api_accept_session_t_handler (vl_api_accept_session_t * mp)
 {
   uri_udp_test_main_t *utm = &uri_udp_test_main;
+  vl_api_accept_session_reply_t *rmp;
 
   clib_warning ("accepting: type %d cookie 0x%x", mp->session_type,
                 mp->accept_cookie);
 
-  utm->server_rx_fifo = mp->server_rx_fifo;
-  utm->server_tx_fifo = mp->server_tx_fifo;
+  utm->server_rx_fifo = (svm_fifo_t *)mp->server_rx_fifo;
+  utm->server_tx_fifo = (svm_fifo_t *)mp->server_tx_fifo;
   utm->state = STATE_READY;
+
+  rmp = vl_msg_api_alloc (sizeof (*rmp));
+  memset (rmp, 0, sizeof (*rmp));
+  rmp->_vl_msg_id = ntohs (VL_API_ACCEPT_SESSION_REPLY);
+  rmp->session_type = mp->session_type;
+  rmp->session_index = mp->session_index;
+  rmp->session_thread_index = mp->session_thread_index;
+  vl_msg_api_send_shmem (utm->vl_input_queue, (u8 *)&rmp);
 }
 
 #define foreach_uri_msg                         \
@@ -224,8 +240,20 @@ init_error_string_table (uri_udp_test_main_t * utm)
   hash_set (utm->error_string_by_error_number, 99, "Misc");
 }
 
-void handle_fifo_event_server_rx (svm_fifo_t * fifo)
+void handle_fifo_event_server_rx (uri_udp_test_main_t *utm, 
+                                  svm_fifo_t * f)
+{
+  u32 nbytes;
+  static u8 * buf = 0;
 
+  nbytes = svm_fifo_max_dequeue (f);
+
+  vec_validate (buf, nbytes - 1);
+
+  nbytes = svm_fifo_dequeue (f, 0, nbytes, buf);
+
+  svm_fifo_enqueue (utm->server_tx_fifo, 0, nbytes, buf);
+}
 
 void handle_event_queue (uri_udp_test_main_t * utm)
 {
@@ -233,11 +261,12 @@ void handle_event_queue (uri_udp_test_main_t * utm)
 
   while (1)
     {
-      unix_shared_memory_queue_sub (uri->event_queue, e, 0 /* nowait */);
+      unix_shared_memory_queue_sub (utm->our_event_queue, (u8 *)e, 
+                                    0 /* nowait */);
       switch (e->event_type)
         {
         case FIFO_EVENT_SERVER_RX:
-          handle_fifo_event_server_rx (e->fifo);
+          handle_fifo_event_server_rx (utm, e->fifo);
           break;
           
         case FIFO_EVENT_SERVER_EXIT:
@@ -250,15 +279,10 @@ void handle_event_queue (uri_udp_test_main_t * utm)
     }
 }
 
-
-
 void uri_udp_test (uri_udp_test_main_t * utm)
 {
   vl_api_bind_uri_t * bmp;
   vl_api_unbind_uri_t * ump;
-  int i;
-  u32 reply_len;
-  int mypid = getpid();
   
   bmp = vl_msg_api_alloc (sizeof (*bmp));
   memset (bmp, 0, sizeof (*bmp));

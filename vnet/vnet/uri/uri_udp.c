@@ -74,6 +74,7 @@ v4_stream_session_create (stream_server_main_t *ssm,
   s->server_index = ss - ssm->servers;
   s->server_segment_index = fifo_segment - ss->segments;
   s->session_thread_index = my_thread_index;
+  s->session_index = pool_index;
 
   kv0.key[0] = key0->as_u64[0];
   kv0.key[1] = key0->as_u64[1];

@@ -5071,6 +5071,8 @@ define accept_session {
   u32 accept_cookie;
   u64 server_rx_fifo;
   u64 server_tx_fifo;
+  u32 session_index;
+  u32 session_thread_index;
   u8 session_type;
   /* v6 size */
   u8 key [48];
