@@ -8673,6 +8673,7 @@ vl_api_bind_uri_t_handler (vl_api_bind_uri_t * mp)
   a->segment_name = segment_name;
   a->segment_name_length = &segment_name_length;
   a->send_session_create_callback = send_session_create_callback;
+  a->segment_size = mp->segment_size;
 
   rv = vnet_bind_uri (a);
 

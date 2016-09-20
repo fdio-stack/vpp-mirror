@@ -41,6 +41,8 @@ clib_bihash_is_free_24_8 (clib_bihash_kv_24_8_t * v)
 }
 
 #if __SSE4_2__
+#ifndef __defined_crc_u32__
+#define __defined_crc_u32__
 static inline u32
 crc_u32 (u32 data, u32 value)
 {
@@ -48,6 +50,7 @@ crc_u32 (u32 data, u32 value)
 		    "rm" (data));
   return value;
 }
+#endif /* __defined_crc_u32__ */
 
 static inline u64
 clib_bihash_hash_24_8 (clib_bihash_kv_24_8_t * v)

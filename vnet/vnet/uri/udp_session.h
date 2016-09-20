@@ -15,6 +15,8 @@
 #ifndef __included_udp_session_h__
 #define __included_udp_session_h__
 
+#include <vnet/ip/ip.h>
+
 typedef enum
 {
   UDP_SESSION_STATE_NONE,
@@ -24,12 +26,21 @@ typedef enum
 } udp_session_state_t;
 
 /* 16 octets */
-typedef CLIB_PACKED(struct
+typedef CLIB_PACKED (struct
 {
-  ip4_address_t src, dst;
-  u16 src_port, dst_port;
-  /* align by making this 4 octets even though its a 1-bit field */
-  u32 is_tcp;
+  union 
+  {
+    struct 
+    {
+      ip4_address_t src;
+      ip4_address_t dst;
+      u16 src_port; 
+      u16 dst_port;
+      /* align by making this 4 octets even though its a 1-bit field */
+      u32 is_tcp;
+    };
+    u64 as_u64[2];
+  };
 }) udp4_session_key_t;
 
 typedef struct
@@ -37,7 +48,7 @@ typedef struct
   u8 session_type;
   u8 state;
   /** ersatz MTU to limit fifo pushes to test data size */
-  u32 mtu:
+  u32 mtu;
 
   /** session key */
   union 

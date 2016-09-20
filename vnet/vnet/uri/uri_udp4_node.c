@@ -24,14 +24,14 @@
 #include <vppinfra/error.h>
 #include <vppinfra/elog.h>
 
-#include <ip/udp_packet.h>
+#include <vnet/ip/udp_packet.h>
 
 vlib_node_registration_t udp4_uri_input_node;
 
 typedef struct 
 {
   u32 session;
-  u32 disposition
+  u32 disposition;
   u32 thread_index;
 } udp4_uri_input_trace_t;
 
@@ -70,7 +70,7 @@ static char * udp4_uri_input_error_strings[] = {
 };
 
 typedef enum {
-  UDP4_URI_INPUT_NEXT_DROP
+  UDP4_URI_INPUT_NEXT_DROP,
   UDP4_URI_INPUT_N_NEXT,
 } udp4_uri_input_next_t;
 
@@ -85,8 +85,9 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
   u32 my_thread_index = vm->cpu_index;
   u8 my_enqueue_epoch;
   u32 * session_indices_to_enqueue;
+  int i;
 
-  my_enqueue_epoch = ++ssm->enqueue_epoch[my_thread_index];
+  my_enqueue_epoch = ++ssm->current_enqueue_epoch[my_thread_index];
 
   from = vlib_frame_vector_args (frame);
   n_left_from = frame->n_vectors;
@@ -182,12 +183,12 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
           u32 bi0;
 	  vlib_buffer_t * b0;
           u32 next0 = UDP4_URI_INPUT_NEXT_DROP;
-          u32 error0 = UDP_URI_INPUT_ERROR_ENQUEUED;
+          u32 error0 = UDP4_URI_INPUT_ERROR_ENQUEUED;
           udp_header_t * udp0;
           clib_bihash_kv_16_8_t kv0;
           udp4_session_key_t key0;
           ip4_header_t * ip0;
-          udp4_session_t * s0;
+          stream_session_t * s0;
           svm_fifo_t * f0;
           stream_server_t *ss0;
           u16 udp_len0;
@@ -206,68 +207,67 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
           udp0 = vlib_buffer_get_current (b0);
 
           /* $$$$ fixme: udp_local doesn't do ip options correctly anyhow */
-          ip0 = ((u8 *)udp0) - sizeof (*ip0);
+          ip0 = (ip4_header_t *) ((u8 *)udp0) - sizeof (*ip0);
           s0 = 0;
 
-          key0.src.as_u32 = ip0->src.as_u32;
-          key0.dst.as_u32 = ip0->dst.as_u32;
+          key0.src.as_u32 = ip0->src_address.as_u32;
+          key0.dst.as_u32 = ip0->dst_address.as_u32;
           key0.src_port = udp0->src_port;
           key0.dst_port = udp0->dst_port;
           key0.is_tcp = 0;
 
-          kv0.key.as_u64[0] = key0.as_u64[0];
-          kv0.key.as_u64[1] = key0.as_u64[1];
+          kv0.key[0] = key0.as_u64[0];
+          kv0.key[1] = key0.as_u64[1];
           kv0.value = ~0ULL;
 
           /* look for session */
-          clib_bihash_16_8_search_inline (ssm->v4_session_hash, &kv0);
+          clib_bihash_search_inline_16_8 (&ssm->v4_session_hash, &kv0);
 
           if (PREDICT_TRUE (kv0.value != ~0ULL))
             {
-              s0 = pool_elt_at_index (ssm->sessions_by_thread[my_thread_index],
+              s0 = pool_elt_at_index (ssm->sessions[my_thread_index],
                                       kv0.value & 0xFFFFFFFFULL);
-
-              ASSERT(s0->
  
               f0 = s0->server_rx_fifo;
               
-              if (PREDICT_FALSE(f0->state != UDP_SESSION_STATE_READY))
+              if (PREDICT_FALSE(s0->u4.state != UDP_SESSION_STATE_READY))
                 {
-                  error0 = UDP4_URI_INPUT_NOT_READY
+                  error0 = UDP4_URI_INPUT_ERROR_NOT_READY;
                   goto trace0;
                 }
 
               udp_len0 = clib_net_to_host_u16 (udp0->length);
 
-              if (PREDICT_FALSE(udp->len0 > svm_fifo_max_enqueue (f0)))
+              if (PREDICT_FALSE(udp_len0 > svm_fifo_max_enqueue (f0)))
                 {
-                  error0 = UDP4_URI_INPUT_FIFO_FULL;
+                  error0 = UDP4_URI_INPUT_ERROR_FIFO_FULL;
                   goto trace0;
                 }
 
               svm_fifo_enqueue (f0, 0 /* pid */, udp_len0,
                                 (u8 *)(udp0+1));
 
-              b0->error = node->errors[UDP4_URI_INPUT_ENQUEUED];
+              b0->error = node->errors[UDP4_URI_INPUT_ERROR_ENQUEUED];
 
               /* We need to send an RX event on this fifo, see below */
-              if(f0->enqueue_epoch != my_enqueue_epoch)
+              if(s0->enqueue_epoch != my_enqueue_epoch)
                 {
-                  f0->enqueue_epoch = my_enqueue_epoch;
+                  s0->enqueue_epoch = my_enqueue_epoch;
                   vec_add1 (ssm->session_indices_to_enqueue_by_thread
-                            [my_thread_index], s0 - ssm->sessions);
+                            [my_thread_index], 
+                            s0 - ssm->sessions[my_thread_index]);
                 }
             } 
           else
             {
-              b0->error = node->errors[UDP4_URI_INPUT_NOT_READY];
+              b0->error = node->errors[UDP4_URI_INPUT_ERROR_NOT_READY];
               
               /* Find the server */
               i0 = sparse_vec_index (ssm->stream_server_by_dst_port,
                                      udp0->dst_port);
               if (i0 == SPARSE_VEC_INVALID_INDEX)
                 {
-                  error0 = UDP4_URI_INPUT_NO_LISTENER;
+                  error0 = UDP4_URI_INPUT_ERROR_NO_LISTENER;
                   goto trace0;
                   
                 }
@@ -289,7 +289,7 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
 
               t->session = ~0;
               if (s0)
-                t->session s0 - ssm->sessions_by_thread[my_thread_index];
+                t->session = s0 - ssm->sessions[my_thread_index];
               t->disposition = error0;
               t->thread_index = my_thread_index;
             }
@@ -306,15 +306,17 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
   /* Send enqueue events */
 
   session_indices_to_enqueue = 
-    ssm->sessions_indices_to_enqueue_by_thread[my_thread_index];
+    ssm->session_indices_to_enqueue_by_thread[my_thread_index];
 
   for (i = 0; i < vec_len (session_indices_to_enqueue); i++)
     {
       fifo_event_t evt;
-      unix_shared_memory_queue * q;
+      unix_shared_memory_queue_t * q;
+      stream_session_t * s0;
+      stream_server_t *ss0;
       
       /* Get session */
-      s0 = pool_elt_at_index(ssm->sessions_by_thread, 
+      s0 = pool_elt_at_index(ssm->sessions[my_thread_index], 
                              session_indices_to_enqueue[i]);
 
       /* Get session's server */
@@ -325,20 +327,23 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
       evt.event_type = FIFO_EVENT_SERVER_RX;
 
       /* Add event to server's event queue */
-      q = ss0->queue;
+      q = ss0->event_queue;
 
       /* Don't block for lack of space */
       if (PREDICT_TRUE (q->cursize < q->maxsize))
-        unix_shared_memory_queue_add (ss0->queue, &evt, 
+        unix_shared_memory_queue_add (ss0->event_queue, (u8 *)&evt, 
                                       0 /* do wait for mutex */);
       else
         {
-          vlib_node_increment_counter (vm, foo_node.index, 
-                                       FOO_ERROR_SWAPPED, pkts_swapped);
+          vlib_node_increment_counter (vm, udp4_uri_input_node.index,
+                                       UDP4_URI_INPUT_ERROR_FIFO_FULL, 1);
         }
     }
 
-  vec_reset_length (ssm->sessions_to_enqueue_by_thread[my_thread_index]);
+  vec_reset_length (session_indices_to_enqueue);
+
+  ssm->session_indices_to_enqueue_by_thread[my_thread_index] =
+    session_indices_to_enqueue;
 
   return frame->n_vectors;
 }

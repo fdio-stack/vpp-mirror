@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Cisco and/or its affiliates.
+ * Copyright (c) 2016 Cisco and/or its affiliates.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at:
@@ -41,6 +41,8 @@ clib_bihash_is_free_16_8 (clib_bihash_kv_16_8_t * v)
 }
 
 #if __SSE4_2__
+#ifndef __defined_crc_u32__
+#define __defined_crc_u32__
 static inline u32
 crc_u32 (u32 data, u32 value)
 {
@@ -48,6 +50,7 @@ crc_u32 (u32 data, u32 value)
 		    "rm" (data));
   return value;
 }
+#endif /* __defined_crc_u32__ */
 
 static inline u64
 clib_bihash_hash_16_8 (clib_bihash_kv_16_8_t * v)

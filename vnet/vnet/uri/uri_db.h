@@ -18,6 +18,9 @@
 #include <vlibmemory/unix_shared_memory_queue.h>
 #include "udp_session.h"
 #include <vppinfra/sparse_vec.h>
+#include <svm_fifo_segment.h>
+#include <vppinfra/bihash_16_8.h>
+
 
 /** @file
     URI-related database
@@ -53,9 +56,9 @@ typedef enum {
   _(IP6_UDP, ip6_udp)                           \
   _(FIFO, fifo)
 
-typdef enum
+typedef enum
 {
-#define _(a) SESSION_TYPE_##a,
+#define _(A, a) SESSION_TYPE_##A,
   foreach_uri_session_type
 #undef _
   SESSION_TYPE_N_TYPES,
@@ -110,6 +113,8 @@ typedef struct
   };
 } stream_session_t;
 
+struct _stream_server_main;
+
 typedef struct _stream_server
 {
   /** Vector of svm segments mapped by this server */
@@ -127,11 +132,11 @@ typedef struct _stream_server
   /** Shoulder-taps for the server */
   int (*session_create_callback) (struct _stream_server *server, 
                                   stream_session_t *new_session);
-  void (*session_delete_callback (struct _stream_server *server,
-                                  stream_session_t *dead_session);
+  void (*session_delete_callback) (struct _stream_server_main *ssm,
+                                   stream_session_t *dead_session);
 } stream_server_t;
 
-typedef struct
+typedef struct _stream_server_main
 {
   /** Lookup tables */
   clib_bihash_16_8_t v4_session_hash;
@@ -151,10 +156,10 @@ typedef struct
   u8 * current_enqueue_epoch;
 
   /** Per-worker thread vector of sessions to enqueue */
-  u32 **sessions_indices_to_enqueue_by_thread;
+  u32 **session_indices_to_enqueue_by_thread;
 
   /** per-worker tx buffer free lists */
-  u32 ** tx_buffer;
+  u32 ** tx_buffers;
 
   /** per-worker active event vectors */
   fifo_event_t ** fifo_events;
@@ -169,6 +174,19 @@ typedef struct
 
 extern stream_server_main_t stream_server_main;
 
+u32 uri_tx_ip4_udp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b);
+u32 uri_tx_ip4_tcp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b);
+u32 uri_tx_ip6_udp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b);
+u32 uri_tx_ip6_tcp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b);
+u32 uri_tx_fifo (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b);
+
+int vnet_unbind_udp4_uri (char *uri, u32 api_client_index);
+int vnet_disconnect_udp4_uri (char * uri, u32 api_client_index);
+
+stream_session_t * v4_stream_session_create (stream_server_main_t *ssm, 
+                                             stream_server_t * ss, 
+                                             udp4_session_key_t * key0,
+                                             int my_thread_index, int is_tcp);
 /*
  * fd.io coding-style-patch-verification: ON
  *

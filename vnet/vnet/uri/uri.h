@@ -59,7 +59,7 @@ typedef struct
   char *segment_name;
 
   /** segment name length (result) */
-  u32 *name_length;
+  u32 segment_name_length;
 
   /** Event queue addresses (result)*/
   u64 server_event_queue_address;
@@ -76,6 +76,7 @@ int vnet_connect_uri (char * uri, u32 api_client_index,
 
 int vnet_disconnect_uri (char * uri, u32 api_client_index);
 
+int vnet_bind_udp4_uri (vnet_bind_uri_args_t * a);
 
 #endif /* __included_uri_h__ */
 

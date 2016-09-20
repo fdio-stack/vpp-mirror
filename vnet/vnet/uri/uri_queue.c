@@ -23,11 +23,12 @@
 #include <vppinfra/hash.h>
 #include <vppinfra/error.h>
 #include <vppinfra/elog.h>
+#include <vlibmemory/unix_shared_memory_queue.h>
 
-#include <ip/udp_packet.h>
+#include <vnet/ip/udp_packet.h>
 
-static u32 (*event_queue_tx_fns)(vlib_main_t *, stream_session_t *,
-                                 vlib_buffer_t *) [SESSION_TYPE_N_TYPES] = 
+static u32 (*event_queue_tx_fns[SESSION_TYPE_N_TYPES]) 
+(vlib_main_t *, stream_session_t *, vlib_buffer_t *) = 
 {
 #define _(A,a) uri_tx_##a,
   foreach_uri_session_type
@@ -38,8 +39,8 @@ vlib_node_registration_t uri_queue_node;
 
 typedef struct 
 {
-  u32 next_index;
-  u32 sw_if_index;
+  u32 session_index;
+  u32 server_thread_index;
 } uri_queue_trace_t;
 
 /* packet trace format function */
@@ -49,15 +50,16 @@ static u8 * format_uri_queue_trace (u8 * s, va_list * args)
   CLIB_UNUSED (vlib_node_t * node) = va_arg (*args, vlib_node_t *);
   uri_queue_trace_t * t = va_arg (*args, uri_queue_trace_t *);
   
-  s = format (s, "URI_QUEUE: sw_if_index %d, next index %d",
-              t->sw_if_index, t->next_index);
+  s = format (s, "URI_QUEUE: session index %d, server thread index %d",
+              t->session_index, t->server_thread_index);
   return s;
 }
 
 vlib_node_registration_t uri_queue_node;
 
-#define foreach_uri_queue_error \
-_(SWAPPED, "Mac swap packets processed")
+#define foreach_uri_queue_error                 \
+_(TX, "Packets transmitted")                    \
+_(TIMER, "Timer events")
 
 typedef enum {
 #define _(sym,str) URI_QUEUE_ERROR_##sym,
@@ -78,24 +80,26 @@ uri_queue_node_fn (vlib_main_t * vm,
 		  vlib_frame_t * frame)
 {
   stream_server_main_t *ssm = &stream_server_main;
-  u32 n_left_from, * from, * to_next;
+  u32 n_left_to_next, * to_next;
   u32 next_index;
-  u32 n_left_to_next, *to_next;
-  uri_queue_next_t next_index;
   u32 * my_tx_buffers;
-  fifo_event_t * my_fifo_events, *e0;
+  fifo_event_t * my_fifo_events, *e;
   u32 n_to_dequeue, n_free_buffers;
   u32 buffer_freelist_index;
   int i;
-  unix_shared_memory_queue * q;
-  int n_tx_packets;
-  u32 last_put_next = ~0;
+  unix_shared_memory_queue_t * q;
+  int n_tx_packets = 0;
   u32 n_trace = vlib_get_trace_count (vm, node);
+  u32 next0;
 
-  my_tx_buffers = vec_elt_at_index (ssm->tx_buffers, vm->cpu_index);
-
+  q = ssm->vpp_event_queue;
   /* min number of events we can dequeue without blocking */
   n_to_dequeue = q->cursize;
+
+  if (n_to_dequeue == 0)
+    return 0;
+
+  my_tx_buffers = ssm->tx_buffers[vm->cpu_index];
 
   /* $$$ config parameter */
   if (PREDICT_FALSE(vec_len (my_tx_buffers) < n_to_dequeue))
@@ -107,19 +111,17 @@ uri_queue_node_fn (vlib_main_t * vm,
 
       _vec_len(my_tx_buffers) +=
         vlib_buffer_alloc_from_free_list
-        (vm, my_tx_buffers[len], n_free_buffers - len, 
+        (vm, &my_tx_buffers[len], n_free_buffers - len, 
          VLIB_BUFFER_DEFAULT_FREE_LIST_INDEX);
     }
   
   ssm->tx_buffers[vm->cpu_index] = my_tx_buffers;
 
   /* Buffer shortage? Try again later... */
-  if (vec_len (n_free_buffers) < n_to_dequeue)
+  if (vec_len (my_tx_buffers) < n_to_dequeue)
     return 0;
   
   my_fifo_events = ssm->fifo_events[vm->cpu_index];
-
-  q = ssm->vpp_event_queue;
 
   /* See you in the next life, don't be late */
   if (pthread_mutex_trylock (&q->mutex))
@@ -130,7 +132,7 @@ uri_queue_node_fn (vlib_main_t * vm,
   for (i = 0; i < n_to_dequeue; i++)
     {
       vec_add2 (my_fifo_events, e, 1);
-      unix_shared_memory_queue_sub_raw (q, e);
+      unix_shared_memory_queue_sub_raw (q, (u8 *) e);
       n_to_dequeue--;
     }
   pthread_mutex_unlock (&q->mutex);
@@ -151,8 +153,9 @@ uri_queue_node_fn (vlib_main_t * vm,
       svm_fifo_t * f0;          /* $$$ prefetch 1 ahead maybe */
       stream_session_t * s0;
       u32 server_session_index0, server_thread_index0;
+      fifo_event_t * e0;
 
-      e0 = my_fifo_events[i];
+      e0 = &my_fifo_events[i];
       f0 = e0->fifo;
       server_session_index0 = f0->server_session_index;
       server_thread_index0 = f0->server_thread_index;
@@ -160,11 +163,11 @@ uri_queue_node_fn (vlib_main_t * vm,
       /* $$$ add multiple event queues, per vpp worker thread */
       ASSERT(server_thread_index0 == vm->cpu_index);
 
-      s0 = pool_elt_at_index (ssm->sessions[f0->thread_index],
+      s0 = pool_elt_at_index (ssm->sessions[f0->server_thread_index],
                               server_session_index0);
       b0 = 0;
 
-      switch (e->type)
+      switch (e0->event_type)
         {
         case FIFO_EVENT_SERVER_TX:
           bi0 = my_tx_buffers[buffer_freelist_index];
@@ -178,15 +181,16 @@ uri_queue_node_fn (vlib_main_t * vm,
                                  b0, /* follow_chain */ 1);
               n_trace--;
               t0 = vlib_add_trace (vm, node, b0, sizeof (*t0));
-              /* $$$ fill in trace */
+              t0->session_index = s0 - ssm->sessions[f0->server_thread_index];
+              t0->server_thread_index = f0->server_thread_index;
             }
 
-          next0 = event_queue_tx_fns [s0->type] (vm, s0, b0);
+          next0 = event_queue_tx_fns [e0->event_type] (vm, s0, b0);
           n_tx_packets++;
           break;
 
         default:
-          clib_warning ("unhandled event type %d", e->type);
+          clib_warning ("unhandled event type %d", e0->event_type);
         }
 
       if (b0)
@@ -197,7 +201,6 @@ uri_queue_node_fn (vlib_main_t * vm,
           if (n_left_to_next == 0)
             {
               vlib_put_next_frame (vm, node, next_index, n_left_to_next);
-              last_put_next = n_tx_packets;
               vlib_get_next_frame (vm, node, next_index,
                                    to_next, n_left_to_next);
             }
@@ -206,26 +209,29 @@ uri_queue_node_fn (vlib_main_t * vm,
   
   vlib_put_next_frame (vm, node, next_index, n_left_to_next);
 
+  vlib_node_increment_counter (vm, uri_queue_node.index, 
+                               URI_QUEUE_ERROR_TX, n_tx_packets);
   return n_tx_packets;
 }
 
 VLIB_REGISTER_NODE (uri_queue_node) = {
   .function = uri_queue_node_fn,
-  .name = "uri_queue",
-  .vector_size = sizeof (u32),
+  .name = "uri-queue",
   .format_trace = format_uri_queue_trace,
-  .type = VLIB_NODE_TYPE_INTERNAL,
+  .type = VLIB_NODE_TYPE_INPUT,
   
   .n_errors = ARRAY_LEN(uri_queue_error_strings),
   .error_strings = uri_queue_error_strings,
 
   .n_next_nodes = URI_QUEUE_N_NEXT,
 
+  /* .state = VLIB_NODE_STATE_DISABLED, enable on-demand? */
+
   /* edit / add dispositions here */
   .next_nodes = {
     [URI_QUEUE_NEXT_DROP] = "error-drop",
-    [URI_QUEUE_IP4_LOOKUP] = "ip4-lookup",
-    [URI_QUEUE_IP6_LOOKUP] = "ip6-lookup",
+    [URI_QUEUE_NEXT_IP4_LOOKUP] = "ip4-lookup",
+    [URI_QUEUE_NEXT_IP6_LOOKUP] = "ip6-lookup",
   },
 };
 

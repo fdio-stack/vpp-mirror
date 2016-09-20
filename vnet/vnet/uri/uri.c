@@ -25,7 +25,7 @@ uri_main_t uri_main;
 
 /**** fifo uri */
 
-int vnet_bind_fifo_uri (vl_api_bind_uri_args_t *a)
+int vnet_bind_fifo_uri (vnet_bind_uri_args_t *a)
 {
   uri_main_t * um = &uri_main;
   fifo_bind_table_entry_t * e;
@@ -33,7 +33,7 @@ int vnet_bind_fifo_uri (vl_api_bind_uri_args_t *a)
   uword * p;
   u8 * server_name, * segment_name;
 
-  ASSERT(segment_name_length);
+  ASSERT(a->segment_name_length);
 
   p = hash_get_mem (um->fifo_bind_table_entry_by_name, a->uri);
 
@@ -51,19 +51,19 @@ int vnet_bind_fifo_uri (vl_api_bind_uri_args_t *a)
     server_name = format (0, "<internal>%c", 0);
 
   /* Unique segment name, per vpp instance */
-  segment_name = format (0, "%d-%s%c", getpid(), uri, 0);
+  segment_name = format (0, "%d-%s%c", getpid(), a->uri, 0);
   ASSERT (vec_len(a->segment_name) <= 128);
-  *a->segment_name_length = vec_len(segment_name);
-  memcpy (a->segment_name, segment_name, *a->segment_name_length);
+  a->segment_name_length = vec_len(segment_name);
+  memcpy (a->segment_name, segment_name, a->segment_name_length);
 
   pool_get (um->fifo_bind_table, e);
   memset (e, 0, sizeof (*e));
 
-  e->fifo_name = format (0, "%s%c", uri, 0);
+  e->fifo_name = format (0, "%s%c", a->uri, 0);
   e->server_name = server_name;
   e->segment_name = segment_name;
-  e->bind_client_index = api_client_index;
-  e->accept_cookie = accept_cookie;
+  e->bind_client_index = a->api_client_index;
+  e->accept_cookie = a->accept_cookie;
 
   hash_set_mem (um->fifo_bind_table_entry_by_name, e->fifo_name, 
                 e - um->fifo_bind_table);
@@ -145,14 +145,14 @@ int vnet_disconnect_fifo_uri (char *uri, u32 api_client_index)
 
 /**** end fifo URI */
 
-int vnet_bind_uri (vl_api_bind_uri_args_t *a)
+int vnet_bind_uri (vnet_bind_uri_args_t *a)
 {
-  ASSERT(uri);
+  ASSERT(a->uri);
 
   /* Mumble top-level decode mumble */
-  if (uri[0] == 'f')
+  if (a->uri[0] == 'f')
     return vnet_bind_fifo_uri (a);
-  else if (uri[0] == 'u' && uri[3] == '4')
+  else if (a->uri[0] == 'u' && a->uri[3] == '4')
     return vnet_bind_udp4_uri (a);
   else
     return VNET_API_ERROR_UNKNOWN_URI_TYPE;
@@ -209,6 +209,34 @@ uri_init (vlib_main_t * vm)
 }
 
 VLIB_INIT_FUNCTION (uri_init);
+
+static clib_error_t * 
+stream_server_init (vlib_main_t * vm)
+{
+  u32 num_threads;
+  vlib_thread_main_t *tm = &vlib_thread_main;
+  stream_server_main_t * ssm = &stream_server_main;
+
+  num_threads = tm->n_thread_stacks;
+
+  if (num_threads < 1)
+    return clib_error_return (0, "n_thread_stacks not set");
+
+  /* configure per-thread ** vectors */
+  vec_validate (ssm->sessions, num_threads - 1);
+  vec_validate (ssm->session_indices_to_enqueue_by_thread, num_threads-1);
+  vec_validate (ssm->tx_buffers, num_threads - 1);
+  vec_validate (ssm->fifo_events, num_threads - 1);
+  vec_validate (ssm->current_enqueue_epoch, num_threads - 1);
+
+  clib_bihash_init_16_8 (&ssm->v4_session_hash, "v4 session table",
+                         16 /* $$$$ config parameter nbuckets */,
+                         (32<<20) /*$$$ config parameter table size */);
+  return 0;
+}
+
+VLIB_INIT_FUNCTION (stream_server_init);
+
 
 /*
  * fd.io coding-style-patch-verification: ON
