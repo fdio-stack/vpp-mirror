@@ -248,7 +248,7 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
                   goto trace0;
                 }
 
-              svm_fifo_enqueue (f0, 0 /* pid */, udp_len0,
+              svm_fifo_enqueue (f0, 0 /* pid */, udp_len0 - sizeof(*udp0),
                                 (u8 *)(udp0+1));
 
               b0->error = node->errors[UDP4_URI_INPUT_ERROR_ENQUEUED];

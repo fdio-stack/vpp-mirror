@@ -176,6 +176,10 @@ uri_queue_node_fn (vlib_main_t * vm,
           buffer_freelist_index--;
           b0 = vlib_get_buffer (vm, bi0);
 
+          /* RX on the local interface. tx in default fib */
+	  vnet_buffer (b0)->sw_if_index[VLIB_RX] = 0;
+	  vnet_buffer (b0)->sw_if_index[VLIB_TX] = (u32) ~ 0;
+
           /* usual speculation, or the enqueue_x1 macro will barf */
 	  to_next[0] = bi0;
 	  to_next += 1;
