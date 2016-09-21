@@ -245,6 +245,8 @@ void handle_fifo_event_server_rx (uri_udp_test_main_t *utm,
 {
   u32 nbytes;
   static u8 * buf = 0;
+  fifo_event_t evt;
+  unix_shared_memory_queue_t *q;
 
   nbytes = svm_fifo_max_dequeue (f);
 
@@ -253,6 +255,12 @@ void handle_fifo_event_server_rx (uri_udp_test_main_t *utm,
   nbytes = svm_fifo_dequeue (f, 0, nbytes, buf);
 
   svm_fifo_enqueue (utm->server_tx_fifo, 0, nbytes, buf);
+
+  /* Fabricate TX event, send to vpp */
+  evt.fifo = utm->server_tx_fifo;
+  evt.event_type = FIFO_EVENT_SERVER_TX;
+  q = utm->vpp_event_queue;
+  unix_shared_memory_queue_add (q, (u8 *)&evt, 0 /* do wait for mutex */);
 }
 
 void handle_event_queue (uri_udp_test_main_t * utm)

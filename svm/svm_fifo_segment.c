@@ -67,7 +67,7 @@ svm_fifo_segment_create (svm_fifo_segment_create_args_t * a)
   ssvm_pop_heap (oldheap);
 
   sh->ready = 1;
-  a->rv = s;
+  a->new_segment_index = s - sm->segments;
   return (0);
 }
 
@@ -104,7 +104,7 @@ svm_fifo_segment_attach (svm_fifo_segment_create_args_t * a)
   fsh = (svm_fifo_segment_header_t *) sh->opaque[0];
   s->h = fsh;
 
-  a->rv = s;
+  a->new_segment_index = s - sm->segments;
   return (0);
 }
 

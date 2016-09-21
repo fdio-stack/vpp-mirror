@@ -8638,6 +8638,7 @@ int send_session_create_callback (stream_server_t * ss, stream_session_t * s)
     case SESSION_TYPE_IP4_TCP:
     case SESSION_TYPE_IP4_UDP:
       memcpy (mp->key, &s4->key, sizeof (s4->key));
+      break;
 
     case SESSION_TYPE_IP6_TCP:
     case SESSION_TYPE_IP6_UDP:

@@ -211,7 +211,7 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
           udp0 = (udp_header_t *)(data0 - sizeof (*udp0));
 
           /* $$$$ fixme: udp_local doesn't do ip options correctly anyhow */
-          ip0 = (ip4_header_t *) ((u8 *)udp0) - sizeof (*ip0);
+          ip0 = (ip4_header_t *) (((u8 *)udp0) - sizeof (*ip0));
           s0 = 0;
 
           key0.src.as_u32 = ip0->src_address.as_u32;

@@ -50,7 +50,6 @@ typedef struct
 
 static inline int svm_fifo_lock (svm_fifo_t * f, u32 pid, u32 tag, int nowait)
 {
-  ASSERT (f->owner_pid != pid);
   if (PREDICT_TRUE (nowait == 0))
     pthread_mutex_lock (&f->mutex);
   else

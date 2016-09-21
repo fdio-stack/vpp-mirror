@@ -34,11 +34,12 @@ v4_stream_session_create (stream_server_main_t *ssm,
   svm_fifo_segment_private_t * fifo_segment;
   stream_session_t * s;
   u32 pool_index;
-
-  ASSERT (ss->segments);
+  u32 fifo_segment_index;
 
   /* $$$ better allocation policy? */
-  fifo_segment = vec_elt_at_index(ss->segments, vec_len(ss->segments)-1);
+  ASSERT (vec_len(ss->segment_indices));
+  fifo_segment_index = ss->segment_indices[vec_len(ss->segment_indices)-1];
+  fifo_segment = svm_fifo_get_segment (fifo_segment_index);
 
   /* $$$ size policy */
   server_rx_fifo = svm_fifo_segment_alloc_fifo 
@@ -63,6 +64,8 @@ v4_stream_session_create (stream_server_main_t *ssm,
   server_tx_fifo->server_session_index = pool_index;
   server_tx_fifo->server_thread_index = my_thread_index;
 
+  s->server_rx_fifo = server_rx_fifo;
+  s->server_tx_fifo = server_tx_fifo;
   
   /* Initialize state machine, such as it is... */
   s->u4.session_type = is_tcp ? SESSION_TYPE_IP4_TCP : SESSION_TYPE_IP4_UDP;
@@ -72,7 +75,7 @@ v4_stream_session_create (stream_server_main_t *ssm,
   s->u4.key.as_u64[1] = key0->as_u64[1];
 
   s->server_index = ss - ssm->servers;
-  s->server_segment_index = fifo_segment - ss->segments;
+  s->server_segment_index = fifo_segment_index;
   s->session_thread_index = my_thread_index;
   s->session_index = pool_index;
 
@@ -93,7 +96,6 @@ void v4_stream_session_delete (stream_server_main_t *ssm,
 {
   clib_bihash_kv_16_8_t kv0;
   int rv;
-  stream_server_t * ss;
   svm_fifo_segment_private_t * fifo_segment;
   u32 my_thread_index = ssm->vlib_main->cpu_index;
   
@@ -107,11 +109,8 @@ void v4_stream_session_delete (stream_server_main_t *ssm,
   if (rv)
     clib_warning ("hash delete error, rv %d", rv);
 
-  /* Recover the server from the session */
-  ss = pool_elt_at_index (ssm->servers, s->server_index);
-
-  /* And the fifo segment from the server */
-  fifo_segment = vec_elt_at_index (ss->segments, s->server_segment_index);
+  /* recover the fifo segment */
+  fifo_segment = svm_fifo_get_segment (s->server_segment_index);
 
   svm_fifo_segment_free_fifo (fifo_segment, s->server_rx_fifo);
   svm_fifo_segment_free_fifo (fifo_segment, s->server_tx_fifo);
@@ -232,6 +231,8 @@ int vnet_bind_udp4_uri (vnet_bind_uri_args_t * a)
   ss->session_create_callback = a->send_session_create_callback;
   ss->session_delete_callback = v4_stream_session_delete;
   ss->api_client_index = a->api_client_index;
+  
+  vec_add1 (ss->segment_indices, ca->new_segment_index);
 
   n = sparse_vec_validate (ssm->stream_server_by_dst_port, 
                            clib_host_to_net_u16(port_number_host_byte_order));
@@ -287,16 +288,16 @@ u32 uri_tx_ip4_udp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b)
   b->current_length = sizeof (*ip) + sizeof (*udp) + actual_length;
 
   /* Build packet header, swap rx key src + dst fields */
-  ip->src_address.as_u32 = s->u4.key.as_key.dst.as_u32;
-  ip->dst_address.as_u32 = s->u4.key.as_key.src.as_u32;
+  ip->src_address.as_u32 = us->key.as_key.dst.as_u32;
+  ip->dst_address.as_u32 = us->key.as_key.src.as_u32;
   ip->ip_version_and_header_length = 0x45;
   ip->ttl = 254;
   ip->protocol = IP_PROTOCOL_UDP;
   ip->length = clib_host_to_net_u16 (b->current_length);
   ip->checksum = ip4_header_checksum(ip);
 
-  udp->src_port = us->key.as_key.src_port;
-  udp->dst_port = us->key.as_key.dst_port;
+  udp->src_port = us->key.as_key.dst_port;
+  udp->dst_port = us->key.as_key.src_port;
   udp->length = clib_host_to_net_u16 (actual_length + sizeof (*udp));
   udp->checksum = 0;
   

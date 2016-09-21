@@ -112,7 +112,7 @@ uri_queue_node_fn (vlib_main_t * vm,
       n_free_buffers = (n_to_dequeue > 32) ? n_to_dequeue : 32;
       vec_validate (my_tx_buffers, n_free_buffers - 1);
 
-      _vec_len(my_tx_buffers) +=
+      _vec_len(my_tx_buffers) = len +
         vlib_buffer_alloc_from_free_list
         (vm, &my_tx_buffers[len], n_free_buffers - len, 
          VLIB_BUFFER_DEFAULT_FREE_LIST_INDEX);
@@ -136,7 +136,6 @@ uri_queue_node_fn (vlib_main_t * vm,
     {
       vec_add2 (my_fifo_events, e, 1);
       unix_shared_memory_queue_sub_raw (q, (u8 *) e);
-      n_to_dequeue--;
     }
   pthread_mutex_unlock (&q->mutex);
 
@@ -176,6 +175,12 @@ uri_queue_node_fn (vlib_main_t * vm,
           bi0 = my_tx_buffers[buffer_freelist_index];
           buffer_freelist_index--;
           b0 = vlib_get_buffer (vm, bi0);
+
+          /* usual speculation, or the enqueue_x1 macro will barf */
+	  to_next[0] = bi0;
+	  to_next += 1;
+	  n_left_to_next -= 1;
+
           VLIB_BUFFER_TRACE_TRAJECTORY_INIT(b0);
           if (PREDICT_FALSE(n_trace > 0)) 
             {
@@ -214,6 +219,9 @@ uri_queue_node_fn (vlib_main_t * vm,
 
   vlib_node_increment_counter (vm, uri_queue_node.index, 
                                URI_QUEUE_ERROR_TX, n_tx_packets);
+
+  _vec_len (my_tx_buffers) = buffer_freelist_index + 1;
+
   return n_tx_packets;
 }
 

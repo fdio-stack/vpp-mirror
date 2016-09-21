@@ -37,7 +37,7 @@ hello_world (int verbose)
   if (rv)
     return clib_error_return (0, "svm_fifo_segment_create returned %d", rv);
 
-  sp = a->rv;
+  sp = svm_fifo_get_segment (a->new_segment_index);
 
   f = svm_fifo_segment_alloc_fifo (sp, 4096);
 
@@ -91,7 +91,7 @@ master (int verbose)
   if (rv)
     return clib_error_return (0, "svm_fifo_segment_create returned %d", rv);
 
-  sp = a->rv;
+  sp = svm_fifo_get_segment (a->new_segment_index);
 
   f = svm_fifo_segment_alloc_fifo (sp, 4096);
 
@@ -127,7 +127,7 @@ mempig (int verbose)
   if (rv)
     return clib_error_return (0, "svm_fifo_segment_create returned %d", rv);
 
-  sp = a->rv;
+  sp = svm_fifo_get_segment (a->new_segment_index);
 
   for (i = 0; i < 1000; i++)
     {
@@ -187,7 +187,7 @@ slave (int verbose)
   if (rv)
     return clib_error_return (0, "svm_fifo_segment_attach returned %d", rv);
 
-  sp = a->rv;
+  sp = svm_fifo_get_segment (a->new_segment_index);
   sh = sp->ssvm.sh;
   fsh = (svm_fifo_segment_header_t *)sh->opaque[0];
 

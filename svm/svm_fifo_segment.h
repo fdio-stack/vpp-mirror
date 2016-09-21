@@ -45,8 +45,15 @@ typedef struct
 {
   char * segment_name;
   u32 segment_size;
-  svm_fifo_segment_private_t *rv;
+  u32 new_segment_index;
 } svm_fifo_segment_create_args_t;
+
+static inline svm_fifo_segment_private_t * 
+svm_fifo_get_segment (u32 segment_index)
+{
+  svm_fifo_segment_main_t * ssm = &svm_fifo_segment_main;
+  return vec_elt_at_index (ssm->segments, segment_index);
+}
 
 #define foreach_ssvm_fifo_segment_api_error             \
 _(OUT_OF_SPACE, "Out of space in segment", -200)

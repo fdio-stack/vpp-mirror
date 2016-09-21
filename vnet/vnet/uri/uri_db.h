@@ -117,8 +117,8 @@ struct _stream_server_main;
 
 typedef struct _stream_server
 {
-  /** Vector of svm segments mapped by this server */
-  svm_fifo_segment_private_t *segments;
+  /** segments mapped by this server */
+  u32 * segment_indices;
 
   /** Server listens for events on this svm queue */
   unix_shared_memory_queue_t *event_queue;
