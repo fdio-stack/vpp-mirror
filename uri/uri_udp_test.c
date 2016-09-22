@@ -67,6 +67,9 @@ typedef struct
   /* fifo segment */
   svm_fifo_segment_private_t *seg;
 
+  /* intermediate rx buffer */
+  u8 * rx_buf;
+
   svm_fifo_t * server_rx_fifo;
   svm_fifo_t * server_tx_fifo;
 
@@ -241,24 +244,30 @@ init_error_string_table (uri_udp_test_main_t * utm)
 }
 
 void handle_fifo_event_server_rx (uri_udp_test_main_t *utm, 
-                                  svm_fifo_t * f)
+                                  fifo_event_t * e)
 {
-  u32 nbytes;
-  static u8 * buf = 0;
+  svm_fifo_t * f;
+  int nbytes;
+
   fifo_event_t evt;
   unix_shared_memory_queue_t *q;
+  int rv;
 
-  nbytes = svm_fifo_max_dequeue (f);
+  f = e->fifo;
 
-  vec_validate (buf, nbytes - 1);
-
-  nbytes = svm_fifo_dequeue (f, 0, nbytes, buf);
-
-  svm_fifo_enqueue (utm->server_tx_fifo, 0, nbytes, buf);
+  do {
+    nbytes = svm_fifo_dequeue_nowait2 (f, 0, vec_len(utm->rx_buf), utm->rx_buf);
+  } while (nbytes <= 0);
+  do {
+    rv = svm_fifo_enqueue_nowait2 (utm->server_tx_fifo, 0, nbytes, utm->rx_buf);
+  } while (rv == -2);
 
   /* Fabricate TX event, send to vpp */
   evt.fifo = utm->server_tx_fifo;
   evt.event_type = FIFO_EVENT_SERVER_TX;
+  /* $$$$ for event logging */
+  evt.enqueue_length = nbytes;
+  evt.event_id = e->event_id;
   q = utm->vpp_event_queue;
   unix_shared_memory_queue_add (q, (u8 *)&evt, 0 /* do wait for mutex */);
 }
@@ -274,7 +283,7 @@ void handle_event_queue (uri_udp_test_main_t * utm)
       switch (e->event_type)
         {
         case FIFO_EVENT_SERVER_RX:
-          handle_fifo_event_server_rx (utm, e->fifo);
+          handle_fifo_event_server_rx (utm, e);
           break;
           
         case FIFO_EVENT_SERVER_EXIT:
@@ -344,6 +353,8 @@ main (int argc, char **argv)
 
   /* make the main heap thread-safe */
   h->flags |= MHEAP_FLAG_THREAD_SAFE;
+
+  vec_validate (utm->rx_buf, 8192);
 
   clib_time_init (&utm->clib_time);
   init_error_string_table (utm);

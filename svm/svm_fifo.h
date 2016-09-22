@@ -36,16 +36,19 @@ typedef struct
   pthread_cond_t condvar;	/* 8 bytes */
   u32 owner_pid;
   svm_lock_tag_t tag;
-  u32 head;
-  u32 tail;
-  u32 cursize;
+  volatile u32 cursize;
   u32 nitems;
   /* Backpointers */
   u32 server_session_index;
   u32 client_session_index;
   u8 server_thread_index;
   u8 client_thread_index;
-  CLIB_CACHE_LINE_ALIGN_MARK (data);
+  CLIB_CACHE_LINE_ALIGN_MARK(end_shared);
+  u32 head;
+  CLIB_CACHE_LINE_ALIGN_MARK(end_consumer);
+  u32 tail;
+  /* producer */
+ CLIB_CACHE_LINE_ALIGN_MARK (data);
 } svm_fifo_t;
 
 static inline int svm_fifo_lock (svm_fifo_t * f, u32 pid, u32 tag, int nowait)
@@ -93,6 +96,12 @@ int svm_fifo_dequeue (svm_fifo_t * f, int pid, u32 max_bytes,
                       u8 * copy_here);
 
 int svm_fifo_dequeue_nowait (svm_fifo_t * f, int pid, u32 max_bytes, 
+                             u8 * copy_here);
+
+int svm_fifo_enqueue_nowait2 (svm_fifo_t * f, int pid, u32 max_bytes, 
+                             u8 * copy_from_here);
+
+int svm_fifo_dequeue_nowait2 (svm_fifo_t * f, int pid, u32 max_bytes, 
                              u8 * copy_here);
 
 #endif /* __included_ssvm_fifo_h__ */

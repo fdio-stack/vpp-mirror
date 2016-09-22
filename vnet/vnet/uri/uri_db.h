@@ -75,6 +75,9 @@ typedef CLIB_PACKED(struct
 {
   svm_fifo_t * fifo;
   u8 event_type;
+  /* $$$$ for event logging */
+  u16 event_id;
+  u16 enqueue_length;
 }) fifo_event_t;
 
 typedef struct

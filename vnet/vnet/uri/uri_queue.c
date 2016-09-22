@@ -27,6 +27,7 @@
 
 #include <vnet/ip/udp_packet.h>
 
+
 static u32 (*event_queue_tx_fns[SESSION_TYPE_N_TYPES]) 
 (vlib_main_t *, stream_session_t *, vlib_buffer_t *) = 
 {
@@ -196,7 +197,20 @@ uri_queue_node_fn (vlib_main_t * vm,
               t0->session_index = s0 - ssm->sessions[f0->server_thread_index];
               t0->server_thread_index = f0->server_thread_index;
             }
-
+          
+          if (1)
+            {
+              ELOG_TYPE_DECLARE(e) = 
+                {
+                  .format = "evt-dequeue: id %d length %d",
+                  .format_args = "i4i4",
+                };
+              struct { u32 data[2];} * ed;
+              ed = ELOG_DATA (&vm->elog_main, e);
+              ed->data[0] = e0->event_id;
+              ed->data[1] = e0->enqueue_length;
+            }
+          
           next0 = event_queue_tx_fns [e0->event_type] (vm, s0, b0);
           n_tx_packets++;
           break;

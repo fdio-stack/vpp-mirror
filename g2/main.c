@@ -62,6 +62,8 @@ int main (int argc, char **argv)
     int curarg=1;
     char *homedir;
     
+    clib_mem_init (0, 512<<20);
+
     gtk_init(&argc, &argv);
 
     homedir = getenv ("HOME");

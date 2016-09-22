@@ -281,6 +281,13 @@ u32 uri_tx_ip4_udp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b)
 
   /* Dequeue a bunch of data into the packet buffer */
   max_dequeue = svm_fifo_max_dequeue (f);
+
+  if (max_dequeue == 0)
+    {
+      /* $$$$ set b0->error = node->errors[nil dequeue] */
+      return URI_QUEUE_NEXT_DROP;
+    }
+
   len_to_dequeue = max_dequeue < s->u4.mtu ? max_dequeue : s->u4.mtu;
   
   actual_length = svm_fifo_dequeue (f, 0, len_to_dequeue, data);

@@ -49,12 +49,13 @@ static u8 * format_udp4_uri_input_trace (u8 * s, va_list * args)
 
 vlib_node_registration_t udp4_uri_input_node;
 
-#define foreach_udp4_uri_input_error                            \
-_(NO_SESSION, "No session drops")                               \
-_(NO_LISTENER, "No listener for dst port drops")                \
-_(ENQUEUED, "Packets pushed into rx fifo")                      \
-_(NOT_READY, "Session not ready packets")                       \
-_(FIFO_FULL, "Packets dropped for lack of rx fifo space")
+#define foreach_udp4_uri_input_error                                    \
+_(NO_SESSION, "No session drops")                                       \
+_(NO_LISTENER, "No listener for dst port drops")                        \
+_(ENQUEUED, "Packets pushed into rx fifo")                              \
+_(NOT_READY, "Session not ready packets")                               \
+_(FIFO_FULL, "Packets dropped for lack of rx fifo space")               \
+_(EVENT_FIFO_FULL, "Events not sent for lack of event fifo space")      \
 
 typedef enum {
 #define _(sym,str) UDP4_URI_INPUT_ERROR_##sym,
@@ -85,6 +86,7 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
   u32 my_thread_index = vm->cpu_index;
   u8 my_enqueue_epoch;
   u32 * session_indices_to_enqueue;
+  static u32 serial_number;
   int i;
 
   my_enqueue_epoch = ++ssm->current_enqueue_epoch[my_thread_index];
@@ -157,24 +159,24 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
             {
               if (b0->flags & VLIB_BUFFER_IS_TRACED) 
                 {
-                    udp4_uri_input_trace_t *t = 
-                      vlib_add_trace (vm, node, b0, sizeof (*t));
-                    t->sw_if_index = sw_if_index0;
-                    t->next_index = next0;
-                  }
-                if (b1->flags & VLIB_BUFFER_IS_TRACED) 
-                  {
-                    udp4_uri_input_trace_t *t = 
-                      vlib_add_trace (vm, node, b1, sizeof (*t));
-                    t->sw_if_index = sw_if_index1;
-                    t->next_index = next1;
-                  }
-              }
+                  udp4_uri_input_trace_t *t = 
+                    vlib_add_trace (vm, node, b0, sizeof (*t));
+                  t->sw_if_index = sw_if_index0;
+                  t->next_index = next0;
+                }
+              if (b1->flags & VLIB_BUFFER_IS_TRACED) 
+                {
+                  udp4_uri_input_trace_t *t = 
+                    vlib_add_trace (vm, node, b1, sizeof (*t));
+                  t->sw_if_index = sw_if_index1;
+                  t->next_index = next1;
+                }
+            }
             
-            /* verify speculative enqueues, maybe switch current next frame */
-            vlib_validate_buffer_enqueue_x2 (vm, node, next_index,
-                                             to_next, n_left_to_next,
-                                             bi0, bi1, next0, next1);
+          /* verify speculative enqueues, maybe switch current next frame */
+          vlib_validate_buffer_enqueue_x2 (vm, node, next_index,
+                                           to_next, n_left_to_next,
+                                           bi0, bi1, next0, next1);
         }
 #endif /* dual loop off */
 
@@ -248,20 +250,22 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
                   goto trace0;
                 }
 
-              svm_fifo_enqueue (f0, 0 /* pid */, udp_len0 - sizeof(*udp0),
-                                (u8 *)(udp0+1));
+              svm_fifo_enqueue_nowait2 (f0, 0 /* pid */, 
+                                        udp_len0 - sizeof(*udp0), 
+                                        (u8 *)(udp0+1));
 
               b0->error = node->errors[UDP4_URI_INPUT_ERROR_ENQUEUED];
 
-              /* We need to send an RX event on this fifo, see below */
+              /* We need to send an RX event on this fifo */
               if(s0->enqueue_epoch != my_enqueue_epoch)
-                {
+              {
                   s0->enqueue_epoch = my_enqueue_epoch;
+                  
                   vec_add1 (ssm->session_indices_to_enqueue_by_thread
                             [my_thread_index], 
                             s0 - ssm->sessions[my_thread_index]);
-                }
-            } 
+              }
+            }
           else
             {
               b0->error = node->errors[UDP4_URI_INPUT_ERROR_NOT_READY];
@@ -290,7 +294,7 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
                             && (b0->flags & VLIB_BUFFER_IS_TRACED))) 
             {
               udp4_uri_input_trace_t *t = 
-                 vlib_add_trace (vm, node, b0, sizeof (*t));
+                vlib_add_trace (vm, node, b0, sizeof (*t));
 
               t->session = ~0;
               if (s0)
@@ -307,9 +311,9 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
 
       vlib_put_next_frame (vm, node, next_index, n_left_to_next);
     }
-
+  
   /* Send enqueue events */
-
+  
   session_indices_to_enqueue = 
     ssm->session_indices_to_enqueue_by_thread[my_thread_index];
 
@@ -323,17 +327,19 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
       /* Get session */
       s0 = pool_elt_at_index(ssm->sessions[my_thread_index], 
                              session_indices_to_enqueue[i]);
-
+      
       /* Get session's server */
       ss0 = pool_elt_at_index (ssm->servers, s0->server_index);
-
+      
       /* Fabricate event */
       evt.fifo = s0->server_rx_fifo;
       evt.event_type = FIFO_EVENT_SERVER_RX;
+      evt.event_id = serial_number++;
+      evt.enqueue_length = svm_fifo_max_dequeue (s0->server_rx_fifo);
 
       /* Add event to server's event queue */
       q = ss0->event_queue;
-
+      
       /* Don't block for lack of space */
       if (PREDICT_TRUE (q->cursize < q->maxsize))
         unix_shared_memory_queue_add (ss0->event_queue, (u8 *)&evt, 
@@ -342,6 +348,18 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
         {
           vlib_node_increment_counter (vm, udp4_uri_input_node.index,
                                        UDP4_URI_INPUT_ERROR_FIFO_FULL, 1);
+        }
+      if (1)
+        {
+          ELOG_TYPE_DECLARE(e) = 
+            {
+              .format = "evt-enqueue: id %d length %d",
+              .format_args = "i4i4",
+            };
+          struct { u32 data[2];} * ed;
+          ed = ELOG_DATA (&vlib_global_main.elog_main, e);
+          ed->data[0] = evt.event_id;
+          ed->data[1] = evt.enqueue_length;
         }
     }
 
