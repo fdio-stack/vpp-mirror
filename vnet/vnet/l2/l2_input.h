@@ -86,6 +86,9 @@ l2input_bd_config_from_index (l2input_main_t * l2im, u32 bd_index)
   return bd_is_valid (bd_config) ? bd_config : NULL;
 }
 
+/* L2 input indication packet is from BVI, using -2 */
+#define L2INPUT_BVI ((u32) (~0-1))
+
 /* L2 input features */
 
 /* Mappings from feature ID to graph node name */
@@ -244,10 +247,7 @@ vnet_update_l2_len (vlib_buffer_t * b)
    */
   vnet_buffer (b)->l2.l2_len = sizeof (ethernet_header_t);
   ethertype = clib_net_to_host_u16 (eth->type);
-  if ((ethertype == ETHERNET_TYPE_VLAN) ||
-      (ethertype == ETHERNET_TYPE_DOT1AD) ||
-      (ethertype == ETHERNET_TYPE_VLAN_9100) ||
-      (ethertype == ETHERNET_TYPE_VLAN_9200))
+  if (ethernet_frame_is_tagged (ethertype))
     {
       ethernet_vlan_header_t *vlan;
       vnet_buffer (b)->l2.l2_len += sizeof (*vlan);

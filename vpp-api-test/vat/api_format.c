@@ -35,7 +35,7 @@
 #include <vnet/l2/l2_vtr.h>
 #include <vnet/classify/input_acl.h>
 #include <vnet/classify/policer_classify.h>
-#include <vnet/mpls-gre/mpls.h>
+#include <vnet/mpls/mpls.h>
 #if DPDK > 0
 #include <vnet/ipsec/ipsec.h>
 #include <vnet/ipsec/ikev2.h>
@@ -5346,6 +5346,7 @@ api_ip_add_del_route (vat_main_t * vam)
   u32 random_seed = 0xdeaddabe;
   u32 classify_table_index = ~0;
   u8 is_classify = 0;
+  u8 resolve_host, resolve_attached;
 
   /* Parse args required to build the message */
   while (unformat_check_input (i) != UNFORMAT_END_OF_INPUT)
@@ -5401,6 +5402,10 @@ api_ip_add_del_route (vat_main_t * vam)
 	is_add = 1;
       else if (unformat (i, "not-last"))
 	not_last = 1;
+      else if (unformat (i, "resolve-via-host"))
+	resolve_host = 1;
+      else if (unformat (i, "resolve-via-attached"))
+	resolve_attached = 1;
       else if (unformat (i, "multipath"))
 	is_multipath = 1;
       else if (unformat (i, "vrf %d", &vrf_id))
@@ -5497,6 +5502,8 @@ api_ip_add_del_route (vat_main_t * vam)
       mp->is_local = is_local;
       mp->is_classify = is_classify;
       mp->is_multipath = is_multipath;
+      mp->is_resolve_host = resolve_host;
+      mp->is_resolve_attached = resolve_attached;
       mp->not_last = not_last;
       mp->next_hop_weight = next_hop_weight;
       mp->dst_address_length = dst_address_length;
@@ -7860,7 +7867,6 @@ out:
 }
 
 #define foreach_ip_next                         \
-_(miss, MISS)                                   \
 _(drop, DROP)                                   \
 _(local, LOCAL)                                 \
 _(rewrite, REWRITE)
@@ -9446,6 +9452,7 @@ api_gre_add_del_tunnel (vat_main_t * vam)
   f64 timeout;
   ip4_address_t src4, dst4;
   u8 is_add = 1;
+  u8 teb = 0;
   u8 src_set = 0;
   u8 dst_set = 0;
   u32 outer_fib_id = 0;
@@ -9460,6 +9467,8 @@ api_gre_add_del_tunnel (vat_main_t * vam)
 	dst_set = 1;
       else if (unformat (line_input, "outer-fib-id %d", &outer_fib_id))
 	;
+      else if (unformat (line_input, "teb"))
+	teb = 1;
       else
 	{
 	  errmsg ("parse error '%U'\n", format_unformat_error, line_input);
@@ -9485,6 +9494,7 @@ api_gre_add_del_tunnel (vat_main_t * vam)
   clib_memcpy (&mp->dst_address, &dst4, sizeof (dst4));
   mp->outer_fib_id = ntohl (outer_fib_id);
   mp->is_add = is_add;
+  mp->teb = teb;
 
   S;
   W;
@@ -9497,10 +9507,11 @@ static void vl_api_gre_tunnel_details_t_handler
 {
   vat_main_t *vam = &vat_main;
 
-  fformat (vam->ofp, "%11d%15U%15U%14d\n",
+  fformat (vam->ofp, "%11d%15U%15U%6d%14d\n",
 	   ntohl (mp->sw_if_index),
 	   format_ip4_address, &mp->src_address,
-	   format_ip4_address, &mp->dst_address, ntohl (mp->outer_fib_id));
+	   format_ip4_address, &mp->dst_address,
+	   mp->teb, ntohl (mp->outer_fib_id));
 }
 
 static void vl_api_gre_tunnel_details_t_handler_json
@@ -9523,6 +9534,7 @@ static void vl_api_gre_tunnel_details_t_handler_json
   vat_json_object_add_ip4 (node, "src_address", ip4);
   clib_memcpy (&ip4, &mp->dst_address, sizeof (ip4));
   vat_json_object_add_ip4 (node, "dst_address", ip4);
+  vat_json_object_add_uint (node, "teb", mp->teb);
   vat_json_object_add_uint (node, "outer_fib_id", ntohl (mp->outer_fib_id));
 }
 
@@ -9551,8 +9563,9 @@ api_gre_tunnel_dump (vat_main_t * vam)
 
   if (!vam->json_output)
     {
-      fformat (vam->ofp, "%11s%15s%15s%14s\n",
-	       "sw_if_index", "src_address", "dst_address", "outer_fib_id");
+      fformat (vam->ofp, "%11s%15s%15s%6s%14s\n",
+	       "sw_if_index", "src_address", "dst_address", "teb",
+	       "outer_fib_id");
     }
 
   /* Get list of gre-tunnel interfaces */
@@ -12956,6 +12969,12 @@ api_lisp_locator_dump (vat_main_t * vam)
       return -99;
     }
 
+  if (vec_len (ls_name) > 62)
+    {
+      errmsg ("error: locator set name too long!");
+      return -99;
+    }
+
   if (!vam->json_output)
     {
       fformat (vam->ofp, "%=16s%=16s%=16s\n", "locator", "priority",
@@ -12970,7 +12989,8 @@ api_lisp_locator_dump (vat_main_t * vam)
   else
     {
       vec_add1 (ls_name, 0);
-      strcpy ((char *) mp->ls_name, (char *) ls_name);
+      strncpy ((char *) mp->ls_name, (char *) ls_name,
+	       sizeof (mp->ls_name) - 1);
     }
 
   /* send it... */
@@ -15281,7 +15301,7 @@ _(vxlan_add_del_tunnel,                                                 \
   " [decap-next l2|ip4|ip6] [del]")                                     \
 _(vxlan_tunnel_dump, "[<intfc> | sw_if_index <nn>]")                    \
 _(gre_add_del_tunnel,                                                   \
-  "src <ip4-addr> dst <ip4-addr> [outer-fib-id <nn>] [del]\n")          \
+  "src <ip4-addr> dst <ip4-addr> [outer-fib-id <nn>] [teb] [del]\n")    \
 _(gre_tunnel_dump, "[<intfc> | sw_if_index <nn>]")                      \
 _(l2_fib_clear_table, "")                                               \
 _(l2_interface_efp_filter, "sw_if_index <nn> enable | disable")         \

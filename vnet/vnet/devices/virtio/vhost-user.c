@@ -153,6 +153,45 @@ static inline void *
 map_guest_mem (vhost_user_intf_t * vui, uword addr)
 {
   int i;
+#if __SSE4_2__
+  __m128i rl, rh, al, ah, r;
+  al = _mm_set1_epi64x (addr + 1);
+  ah = _mm_set1_epi64x (addr);
+
+  rl = _mm_loadu_si128 ((__m128i *) & vui->region_guest_addr_lo[0]);
+  rl = _mm_cmpgt_epi64 (al, rl);
+  rh = _mm_loadu_si128 ((__m128i *) & vui->region_guest_addr_hi[0]);
+  rh = _mm_cmpgt_epi64 (rh, ah);
+  r = _mm_and_si128 (rl, rh);
+
+  rl = _mm_loadu_si128 ((__m128i *) & vui->region_guest_addr_lo[2]);
+  rl = _mm_cmpgt_epi64 (al, rl);
+  rh = _mm_loadu_si128 ((__m128i *) & vui->region_guest_addr_hi[2]);
+  rh = _mm_cmpgt_epi64 (rh, ah);
+  r = _mm_blend_epi16 (r, _mm_and_si128 (rl, rh), 0x22);
+
+  rl = _mm_loadu_si128 ((__m128i *) & vui->region_guest_addr_lo[4]);
+  rl = _mm_cmpgt_epi64 (al, rl);
+  rh = _mm_loadu_si128 ((__m128i *) & vui->region_guest_addr_hi[4]);
+  rh = _mm_cmpgt_epi64 (rh, ah);
+  r = _mm_blend_epi16 (r, _mm_and_si128 (rl, rh), 0x44);
+
+  rl = _mm_loadu_si128 ((__m128i *) & vui->region_guest_addr_lo[6]);
+  rl = _mm_cmpgt_epi64 (al, rl);
+  rh = _mm_loadu_si128 ((__m128i *) & vui->region_guest_addr_hi[6]);
+  rh = _mm_cmpgt_epi64 (rh, ah);
+  r = _mm_blend_epi16 (r, _mm_and_si128 (rl, rh), 0x88);
+
+  r = _mm_shuffle_epi8 (r, _mm_set_epi64x (0, 0x0e060c040a020800));
+  i = __builtin_ctzll (_mm_movemask_epi8 (r));
+
+  if (i < vui->nregions)
+    {
+      return (void *) (vui->region_mmap_addr[i] + addr -
+		       vui->regions[i].guest_phys_addr);
+    }
+
+#else
   for (i = 0; i < vui->nregions; i++)
     {
       if ((vui->regions[i].guest_phys_addr <= addr) &&
@@ -163,6 +202,7 @@ map_guest_mem (vhost_user_intf_t * vui, uword addr)
 			   vui->regions[i].guest_phys_addr);
 	}
     }
+#endif
   DBG_VQ ("failed to map guest mem addr %llx", addr);
   return 0;
 }
@@ -252,10 +292,11 @@ vhost_user_if_disconnect (vhost_user_intf_t * vui)
       unix_file_del (&unix_main, unix_main.file_pool + vui->unix_file_index);
       vui->unix_file_index = ~0;
     }
+  else
+    close (vui->unix_fd);
 
   hash_unset (vum->vhost_user_interface_index_by_sock_fd, vui->unix_fd);
   hash_unset (vum->vhost_user_interface_index_by_listener_fd, vui->unix_fd);
-  close (vui->unix_fd);
   vui->unix_fd = -1;
   vui->is_up = 0;
   for (q = 0; q < vui->num_vrings; q++)
@@ -390,7 +431,8 @@ vhost_user_socket_read (unix_file_t * uf)
 	(1 << FEAT_VIRTIO_F_INDIRECT_DESC) |
 	(1 << FEAT_VHOST_F_LOG_ALL) |
 	(1 << FEAT_VIRTIO_NET_F_GUEST_ANNOUNCE) |
-	(1 << FEAT_VHOST_USER_F_PROTOCOL_FEATURES);
+	(1 << FEAT_VHOST_USER_F_PROTOCOL_FEATURES) |
+	(1UL << FEAT_VIRTIO_F_VERSION_1);
       msg.u64 &= vui->feature_mask;
 
       msg.size = sizeof (msg.u64);
@@ -461,6 +503,9 @@ vhost_user_socket_read (unix_file_t * uf)
 
 	  vui->region_mmap_addr[i] = mmap (0, map_sz, PROT_READ | PROT_WRITE,
 					   MAP_SHARED, fds[i], 0);
+	  vui->region_guest_addr_lo[i] = vui->regions[i].guest_phys_addr;
+	  vui->region_guest_addr_hi[i] = vui->regions[i].guest_phys_addr +
+	    vui->regions[i].memory_size;
 
 	  DBG_SOCK
 	    ("map memory region %d addr 0 len 0x%lx fd %d mapped 0x%lx "
@@ -802,6 +847,8 @@ vhost_user_init (vlib_main_t * vm)
   clib_error_t *error;
   vhost_user_main_t *vum = &vhost_user_main;
   vlib_thread_main_t *tm = vlib_get_thread_main ();
+  vlib_thread_registration_t *tr;
+  uword *p;
 
   error = vlib_call_init_function (vm, ip4_init);
   if (error)
@@ -818,6 +865,18 @@ vhost_user_init (vlib_main_t * vm)
 
   vec_validate_aligned (vum->rx_buffers, tm->n_vlib_mains - 1,
 			CLIB_CACHE_LINE_BYTES);
+
+  /* find out which cpus will be used for input */
+  vum->input_cpu_first_index = 0;
+  vum->input_cpu_count = 1;
+  p = hash_get_mem (tm->thread_registrations_by_name, "workers");
+  tr = p ? (vlib_thread_registration_t *) p[0] : 0;
+
+  if (tr && tr->count > 0)
+    {
+      vum->input_cpu_first_index = tr->first_index;
+      vum->input_cpu_count = tr->count;
+    }
 
   return 0;
 }
@@ -1254,10 +1313,7 @@ vhost_user_input (vlib_main_t * vm,
 		  vlib_node_runtime_t * node, vlib_frame_t * f)
 {
   vhost_user_main_t *vum = &vhost_user_main;
-#if DPDK > 0
-  dpdk_main_t *dm = &dpdk_main;
   u32 cpu_index = os_get_cpu_number ();
-#endif
   vhost_user_intf_t *vui;
   uword n_rx_packets = 0;
   int i;
@@ -1267,10 +1323,8 @@ vhost_user_input (vlib_main_t * vm,
       vui = vec_elt_at_index (vum->vhost_user_interfaces, i);
       if (vui->is_up)
 	{
-#if DPDK > 0
-	  if ((i % dm->input_cpu_count) ==
-	      (cpu_index - dm->input_cpu_first_index))
-#endif
+	  if ((i % vum->input_cpu_count) ==
+	      (cpu_index - vum->input_cpu_first_index))
 	    n_rx_packets += vhost_user_if_input (vm, vum, vui, node);
 	}
     }
@@ -1905,11 +1959,8 @@ static void
 vhost_user_vui_register (vlib_main_t * vm, vhost_user_intf_t * vui)
 {
   vhost_user_main_t *vum = &vhost_user_main;
-#if DPDK > 0
-  dpdk_main_t *dm = &dpdk_main;
   int cpu_index;
   vlib_thread_main_t *tm = vlib_get_thread_main ();
-#endif
 
   hash_set (vum->vhost_user_interface_index_by_listener_fd, vui->unix_fd,
 	    vui - vum->vhost_user_interfaces);
@@ -1917,19 +1968,15 @@ vhost_user_vui_register (vlib_main_t * vm, vhost_user_intf_t * vui)
 	    vui - vum->vhost_user_interfaces);
 
   /* start polling */
-#if DPDK > 0
-  cpu_index = dm->input_cpu_first_index +
-    (vui - vum->vhost_user_interfaces) % dm->input_cpu_count;
+  cpu_index = vum->input_cpu_first_index +
+    (vui - vum->vhost_user_interfaces) % vum->input_cpu_count;
 
   if (tm->n_vlib_mains == 1)
-#endif
     vlib_node_set_state (vm, vhost_user_input_node.index,
 			 VLIB_NODE_STATE_POLLING);
-#if DPDK > 0
   else
     vlib_node_set_state (vlib_mains[cpu_index], vhost_user_input_node.index,
 			 VLIB_NODE_STATE_POLLING);
-#endif
 
   /* tell process to start polling for sockets */
   vlib_process_signal_event (vm, vhost_user_process_node.index, 0, 0);

@@ -281,7 +281,7 @@ static_always_inline
 
   n_packets = ring->tx_head - ring->tx_tail;
 
-  tx_head = ring->tx_head % DPDK_TX_RING_SIZE;
+  tx_head = ring->tx_head % xd->nb_tx_desc;
 
   /*
    * Ensure rte_eth_tx_burst is not called with 0 packets, which can lead to
@@ -296,7 +296,7 @@ static_always_inline
    * a bit because it decreases the probability of having to issue two tx_burst
    * calls due to a ring wrap.
    */
-  ASSERT (n_packets < DPDK_TX_RING_SIZE);
+  ASSERT (n_packets < xd->nb_tx_desc);
 
   /*
    * If there is no flowcontrol callback, there is only temporary buffering
@@ -317,13 +317,13 @@ static_always_inline
   do
     {
       /* start the burst at the tail */
-      tx_tail = ring->tx_tail % DPDK_TX_RING_SIZE;
+      tx_tail = ring->tx_tail % xd->nb_tx_desc;
 
       /*
        * This device only supports one TX queue,
        * and we're running multi-threaded...
        */
-      if (PREDICT_FALSE (xd->dev_type != VNET_DPDK_DEV_VHOST_USER &&
+      if (PREDICT_FALSE ((xd->flags & DPDK_DEVICE_FLAG_VHOST_USER) == 0 &&
 			 xd->lockp != 0))
 	{
 	  queue_id = queue_id % xd->tx_q_used;
@@ -332,7 +332,7 @@ static_always_inline
 	    queue_id = (queue_id + 1) % xd->tx_q_used;
 	}
 
-      if (PREDICT_TRUE (xd->dev_type == VNET_DPDK_DEV_ETH))
+      if (PREDICT_TRUE (xd->flags & DPDK_DEVICE_FLAG_PMD))
 	{
 	  if (PREDICT_TRUE (tx_head > tx_tail))
 	    {
@@ -354,19 +354,18 @@ static_always_inline
 	      rv = rte_eth_tx_burst (xd->device_index,
 				     (uint16_t) queue_id,
 				     &tx_vector[tx_tail],
-				     (uint16_t) (DPDK_TX_RING_SIZE -
-						 tx_tail));
+				     (uint16_t) (xd->nb_tx_desc - tx_tail));
 
 	      /*
 	       * If we transmitted everything we wanted, then allow 1 retry
 	       * so we can try to transmit the rest. If we didn't transmit
 	       * everything, stop now.
 	       */
-	      n_retry = (rv == DPDK_TX_RING_SIZE - tx_tail) ? 1 : 0;
+	      n_retry = (rv == xd->nb_tx_desc - tx_tail) ? 1 : 0;
 	    }
 	}
 #if DPDK_VHOST_USER
-      else if (xd->dev_type == VNET_DPDK_DEV_VHOST_USER)
+      else if (xd->flags & DPDK_DEVICE_FLAG_VHOST_USER)
 	{
 	  u32 offset = 0;
 	  if (xd->need_txlock)
@@ -438,7 +437,7 @@ static_always_inline
 	      int i;
 	      u32 bytes = 0;
 	      struct rte_mbuf **pkts = &tx_vector[tx_tail];
-	      for (i = 0; i < (DPDK_TX_RING_SIZE - tx_tail); i++)
+	      for (i = 0; i < (xd->nb_tx_desc - tx_tail); i++)
 		{
 		  struct rte_mbuf *buff = pkts[i];
 		  bytes += rte_pktmbuf_data_len (buff);
@@ -447,7 +446,7 @@ static_always_inline
 		rte_vhost_enqueue_burst (&xd->vu_vhost_dev,
 					 offset + VIRTIO_RXQ,
 					 &tx_vector[tx_tail],
-					 (uint16_t) (DPDK_TX_RING_SIZE -
+					 (uint16_t) (xd->nb_tx_desc -
 						     tx_tail));
 
 	      if (PREDICT_TRUE (rv > 0))
@@ -476,7 +475,7 @@ static_always_inline
 		    rte_pktmbuf_free (tx_vector[tx_tail + c]);
 		}
 
-	      n_retry = (rv == DPDK_TX_RING_SIZE - tx_tail) ? 1 : 0;
+	      n_retry = (rv == xd->nb_tx_desc - tx_tail) ? 1 : 0;
 	    }
 
 	  if (xd->need_txlock)
@@ -484,7 +483,7 @@ static_always_inline
 	}
 #endif
 #if RTE_LIBRTE_KNI
-      else if (xd->dev_type == VNET_DPDK_DEV_KNI)
+      else if (xd->flags & DPDK_DEVICE_FLAG_KNI)
 	{
 	  if (PREDICT_TRUE (tx_head > tx_tail))
 	    {
@@ -504,15 +503,14 @@ static_always_inline
 	       */
 	      rv = rte_kni_tx_burst (xd->kni,
 				     &tx_vector[tx_tail],
-				     (uint16_t) (DPDK_TX_RING_SIZE -
-						 tx_tail));
+				     (uint16_t) (xd->nb_tx_desc - tx_tail));
 
 	      /*
 	       * If we transmitted everything we wanted, then allow 1 retry
 	       * so we can try to transmit the rest. If we didn't transmit
 	       * everything, stop now.
 	       */
-	      n_retry = (rv == DPDK_TX_RING_SIZE - tx_tail) ? 1 : 0;
+	      n_retry = (rv == xd->nb_tx_desc - tx_tail) ? 1 : 0;
 	    }
 	}
 #endif
@@ -522,7 +520,7 @@ static_always_inline
 	  rv = 0;
 	}
 
-      if (PREDICT_FALSE (xd->dev_type != VNET_DPDK_DEV_VHOST_USER &&
+      if (PREDICT_FALSE ((xd->flags & DPDK_DEVICE_FLAG_VHOST_USER) == 0 &&
 			 xd->lockp != 0))
 	*xd->lockp[queue_id] = 0;
 
@@ -632,7 +630,7 @@ dpdk_interface_tx (vlib_main_t * vm,
 
   ASSERT (n_packets <= VLIB_FRAME_SIZE);
 
-  if (PREDICT_FALSE (n_on_ring + n_packets > DPDK_TX_RING_SIZE))
+  if (PREDICT_FALSE (n_on_ring + n_packets > xd->nb_tx_desc))
     {
       /*
        * Overflowing the ring should never happen.
@@ -668,7 +666,7 @@ dpdk_interface_tx (vlib_main_t * vm,
 
   from = vlib_frame_vector_args (f);
   n_left = n_packets;
-  i = ring->tx_head % DPDK_TX_RING_SIZE;
+  i = ring->tx_head % xd->nb_tx_desc;
 
   while (n_left >= 4)
     {
@@ -770,9 +768,9 @@ dpdk_interface_tx (vlib_main_t * vm,
 
       if (PREDICT_TRUE (any_clone == 0))
 	{
-	  tx_vector[i % DPDK_TX_RING_SIZE] = mb0;
+	  tx_vector[i % xd->nb_tx_desc] = mb0;
 	  i++;
-	  tx_vector[i % DPDK_TX_RING_SIZE] = mb1;
+	  tx_vector[i % xd->nb_tx_desc] = mb1;
 	  i++;
 	}
       else
@@ -780,12 +778,12 @@ dpdk_interface_tx (vlib_main_t * vm,
 	  /* cloning was done, need to check for failure */
 	  if (PREDICT_TRUE ((b0->flags & VLIB_BUFFER_REPL_FAIL) == 0))
 	    {
-	      tx_vector[i % DPDK_TX_RING_SIZE] = mb0;
+	      tx_vector[i % xd->nb_tx_desc] = mb0;
 	      i++;
 	    }
 	  if (PREDICT_TRUE ((b1->flags & VLIB_BUFFER_REPL_FAIL) == 0))
 	    {
-	      tx_vector[i % DPDK_TX_RING_SIZE] = mb1;
+	      tx_vector[i % xd->nb_tx_desc] = mb1;
 	      i++;
 	    }
 	}
@@ -839,7 +837,7 @@ dpdk_interface_tx (vlib_main_t * vm,
 
       if (PREDICT_TRUE ((b0->flags & VLIB_BUFFER_REPL_FAIL) == 0))
 	{
-	  tx_vector[i % DPDK_TX_RING_SIZE] = mb0;
+	  tx_vector[i % xd->nb_tx_desc] = mb0;
 	  i++;
 	}
       n_left--;
@@ -919,7 +917,7 @@ dpdk_device_renumber (vnet_hw_interface_t * hi, u32 new_dev_instance)
   dpdk_main_t *dm = &dpdk_main;
   dpdk_device_t *xd = vec_elt_at_index (dm->devices, hi->dev_instance);
 
-  if (!xd || xd->dev_type != VNET_DPDK_DEV_VHOST_USER)
+  if (!xd || (xd->flags & DPDK_DEVICE_FLAG_VHOST_USER) == 0)
     {
       clib_warning
 	("cannot renumber non-vhost-user interface (sw_if_index: %d)",
@@ -950,7 +948,7 @@ dpdk_clear_hw_interface_counters (u32 instance)
 	       sizeof (xd->last_cleared_xstats[0]));
 
 #if DPDK_VHOST_USER
-  if (PREDICT_FALSE (xd->dev_type == VNET_DPDK_DEV_VHOST_USER))
+  if (PREDICT_FALSE (xd->flags & DPDK_DEVICE_FLAG_VHOST_USER))
     {
       int i;
       for (i = 0; i < xd->rx_q_used * VIRTIO_QNUM; i++)
@@ -1025,7 +1023,7 @@ dpdk_interface_admin_up_down (vnet_main_t * vnm, u32 hw_if_index, u32 flags)
   int rv = 0;
 
 #ifdef RTE_LIBRTE_KNI
-  if (xd->dev_type == VNET_DPDK_DEV_KNI)
+  if (xd->flags & DPDK_DEVICE_FLAG_KNI)
     {
       if (is_up)
 	{
@@ -1066,7 +1064,7 @@ dpdk_interface_admin_up_down (vnet_main_t * vnm, u32 hw_if_index, u32 flags)
     }
 #endif
 #if DPDK_VHOST_USER
-  if (xd->dev_type == VNET_DPDK_DEV_VHOST_USER)
+  if (xd->flags & DPDK_DEVICE_FLAG_VHOST_USER)
     {
       if (is_up)
 	{
@@ -1165,27 +1163,29 @@ dpdk_subif_add_del_function (vnet_main_t * vnm,
   dpdk_device_t *xd = vec_elt_at_index (xm->devices, hw->dev_instance);
   vnet_sw_interface_t *t = (vnet_sw_interface_t *) st;
   int r, vlan_offload;
-  u32 prev_subifs = xd->vlan_subifs;
+  u32 prev_subifs = xd->num_subifs;
+  clib_error_t *err = 0;
 
   if (is_add)
-    xd->vlan_subifs++;
-  else if (xd->vlan_subifs)
-    xd->vlan_subifs--;
+    xd->num_subifs++;
+  else if (xd->num_subifs)
+    xd->num_subifs--;
 
-  if (xd->dev_type != VNET_DPDK_DEV_ETH)
-    return 0;
+  if ((xd->flags & DPDK_DEVICE_FLAG_PMD) == 0)
+    goto done;
 
   /* currently we program VLANS only for IXGBE VF and I40E VF */
   if ((xd->pmd != VNET_DPDK_PMD_IXGBEVF) && (xd->pmd != VNET_DPDK_PMD_I40EVF))
-    return 0;
+    goto done;
 
   if (t->sub.eth.flags.no_tags == 1)
-    return 0;
+    goto done;
 
   if ((t->sub.eth.flags.one_tag != 1) || (t->sub.eth.flags.exact_match != 1))
     {
-      xd->vlan_subifs = prev_subifs;
-      return clib_error_return (0, "unsupported VLAN setup");
+      xd->num_subifs = prev_subifs;
+      err = clib_error_return (0, "unsupported VLAN setup");
+      goto done;
     }
 
   vlan_offload = rte_eth_dev_get_vlan_offload (xd->device_index);
@@ -1193,9 +1193,10 @@ dpdk_subif_add_del_function (vnet_main_t * vnm,
 
   if ((r = rte_eth_dev_set_vlan_offload (xd->device_index, vlan_offload)))
     {
-      xd->vlan_subifs = prev_subifs;
-      return clib_error_return (0, "rte_eth_dev_set_vlan_offload[%d]: err %d",
-				xd->device_index, r);
+      xd->num_subifs = prev_subifs;
+      err = clib_error_return (0, "rte_eth_dev_set_vlan_offload[%d]: err %d",
+			       xd->device_index, r);
+      goto done;
     }
 
 
@@ -1203,12 +1204,19 @@ dpdk_subif_add_del_function (vnet_main_t * vnm,
        rte_eth_dev_vlan_filter (xd->device_index, t->sub.eth.outer_vlan_id,
 				is_add)))
     {
-      xd->vlan_subifs = prev_subifs;
-      return clib_error_return (0, "rte_eth_dev_vlan_filter[%d]: err %d",
-				xd->device_index, r);
+      xd->num_subifs = prev_subifs;
+      err = clib_error_return (0, "rte_eth_dev_vlan_filter[%d]: err %d",
+			       xd->device_index, r);
+      goto done;
     }
 
-  return 0;
+done:
+  if (xd->num_subifs)
+    xd->flags |= DPDK_DEVICE_FLAG_HAVE_SUBIF;
+  else
+    xd->flags &= ~DPDK_DEVICE_FLAG_HAVE_SUBIF;
+
+  return err;
 }
 
 /* *INDENT-OFF* */

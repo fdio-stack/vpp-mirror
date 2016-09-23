@@ -60,6 +60,33 @@ ethernet_mac_address_is_multicast_u64 (u64 a)
   return (a & (1ULL << (5 * 8))) != 0;
 }
 
+static_always_inline int
+ethernet_frame_is_tagged (u16 type)
+{
+#if __SSE4_2__
+  const __m128i ethertype_mask = _mm_set_epi16 (ETHERNET_TYPE_VLAN,
+						ETHERNET_TYPE_DOT1AD,
+						ETHERNET_TYPE_VLAN_9100,
+						ETHERNET_TYPE_VLAN_9200,
+						/* duplicate last one to
+						   fill register */
+						ETHERNET_TYPE_VLAN_9200,
+						ETHERNET_TYPE_VLAN_9200,
+						ETHERNET_TYPE_VLAN_9200,
+						ETHERNET_TYPE_VLAN_9200);
+
+  __m128i r = _mm_set1_epi16 (type);
+  r = _mm_cmpeq_epi16 (ethertype_mask, r);
+  return !_mm_test_all_zeros (r, r);
+#else
+  if ((type == ETHERNET_TYPE_VLAN) ||
+      (type == ETHERNET_TYPE_DOT1AD) ||
+      (type == ETHERNET_TYPE_VLAN_9100) || (type == ETHERNET_TYPE_VLAN_9200))
+    return 1;
+#endif
+  return 0;
+}
+
 /* Max. sized ethernet/vlan header for parsing. */
 typedef struct
 {
@@ -371,13 +398,11 @@ void ethernet_set_rx_redirect (vnet_main_t * vnm, vnet_hw_interface_t * hi,
 
 int
 vnet_arp_set_ip4_over_ethernet (vnet_main_t * vnm,
-				u32 sw_if_index,
-				u32 fib_index, void *a_arg, int is_static);
+				u32 sw_if_index, void *a_arg, int is_static);
 
 int
 vnet_arp_unset_ip4_over_ethernet (vnet_main_t * vnm,
-				  u32 sw_if_index, u32 fib_index,
-				  void *a_arg);
+				  u32 sw_if_index, void *a_arg);
 
 int vnet_proxy_arp_fib_reset (u32 fib_id);
 
@@ -510,8 +535,6 @@ int vnet_add_del_ip4_arp_change_event (vnet_main_t * vnm,
 				       uword node_index,
 				       uword type_opaque,
 				       uword data, int is_add);
-
-u32 vnet_arp_glean_add (u32 fib_index, void *next_hop_arg);
 
 extern vlib_node_registration_t ethernet_input_node;
 

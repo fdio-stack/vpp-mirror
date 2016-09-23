@@ -75,14 +75,6 @@ extern vnet_device_class_t dpdk_device_class;
 extern vlib_node_registration_t dpdk_input_node;
 extern vlib_node_registration_t handoff_dispatch_node;
 
-typedef enum
-{
-  VNET_DPDK_DEV_ETH = 1,	/* Standard DPDK PMD driver */
-  VNET_DPDK_DEV_KNI,		/* Kernel NIC Interface */
-  VNET_DPDK_DEV_VHOST_USER,
-  VNET_DPDK_DEV_UNKNOWN,	/* must be last */
-} dpdk_device_type_t;
-
 #define foreach_dpdk_pmd          \
   _ ("rte_nicvf_pmd", THUNDERX)	  \
   _ ("rte_em_pmd", E1000EM)       \
@@ -211,26 +203,29 @@ typedef struct
   /* vector of traced contexts, per device */
   u32 *d_trace_buffers;
 
-  /* number of sub-interfaces */
-  u16 vlan_subifs;
-
-  dpdk_device_type_t dev_type:8;
   dpdk_pmd_t pmd:8;
   i8 cpu_socket;
 
   u16 flags;
-#define DPDK_DEVICE_FLAG_ADMIN_UP (1 << 0)
-#define DPDK_DEVICE_FLAG_PROMISC  (1 << 1)
+#define DPDK_DEVICE_FLAG_ADMIN_UP       (1 << 0)
+#define DPDK_DEVICE_FLAG_PROMISC        (1 << 1)
+#define DPDK_DEVICE_FLAG_PMD            (1 << 2)
+#define DPDK_DEVICE_FLAG_KNI            (1 << 3)
+#define DPDK_DEVICE_FLAG_VHOST_USER     (1 << 4)
+#define DPDK_DEVICE_FLAG_HAVE_SUBIF     (1 << 5)
 
+  u16 nb_tx_desc;
     CLIB_CACHE_LINE_ALIGN_MARK (cacheline1);
 
   u8 *interface_name_suffix;
+
+  /* number of sub-interfaces */
+  u16 num_subifs;
 
   /* PMD related */
   u16 tx_q_used;
   u16 rx_q_used;
   u16 nb_rx_desc;
-  u16 nb_tx_desc;
   u16 *cpu_socket_id_by_queue;
   struct rte_eth_conf port_conf;
   struct rte_eth_txconf tx_conf;
@@ -269,9 +264,6 @@ typedef struct
   dpdk_efd_agent_t efd_agent;
   u8 need_txlock;		/* Used by VNET_DPDK_DEV_VHOST_USER */
 } dpdk_device_t;
-
-
-#define DPDK_TX_RING_SIZE (4 * 1024)
 
 #define DPDK_STATS_POLL_INTERVAL      (10.0)
 #define DPDK_MIN_STATS_POLL_INTERVAL  (0.001)	/* 1msec */

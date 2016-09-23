@@ -20,7 +20,7 @@
 #include <vnet/vnet.h>
 #include <vnet/ip/ip.h>
 #include <vnet/unix/tuntap.h>
-#include <vnet/mpls-gre/mpls.h>
+#include <vnet/mpls/mpls.h>
 #include <vnet/dhcp/proxy.h>
 #include <vnet/dhcpv6/proxy.h>
 #include <vnet/l2tp/l2tp.h>
@@ -1416,6 +1416,9 @@ static void *vl_api_vxlan_add_del_tunnel_t_print
   if (mp->is_add == 0)
     s = format (s, "del ");
 
+  if (mp->is_add == 0)
+    s = format (s, "del ");
+
   FINISH;
 }
 
@@ -1445,6 +1448,9 @@ static void *vl_api_gre_add_del_tunnel_t_print
   s = format (s, "src %U ", format_ip46_address,
 	      (ip46_address_t *) & (mp->src_address),
 	      mp->is_ipv6 ? IP46_TYPE_IP6 : IP46_TYPE_IP4);
+
+  if (mp->teb)
+    s = format (s, "teb ");
 
   if (mp->outer_fib_id)
     s = format (s, "outer-fib-id %d ", ntohl (mp->outer_fib_id));

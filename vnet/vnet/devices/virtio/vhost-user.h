@@ -55,7 +55,8 @@
  _ (VIRTIO_F_INDIRECT_DESC, 28)         \
  _ (VHOST_F_LOG_ALL, 26)                \
  _ (VIRTIO_NET_F_GUEST_ANNOUNCE, 21)    \
- _ (VHOST_USER_F_PROTOCOL_FEATURES, 30)
+ _ (VHOST_USER_F_PROTOCOL_FEATURES, 30) \
+ _ (VIRTIO_F_VERSION_1, 32)
 
 
 typedef enum
@@ -231,6 +232,8 @@ typedef struct
   u32 num_vrings;
   vhost_user_memory_region_t regions[VHOST_MEMORY_MAX_NREGIONS];
   void *region_mmap_addr[VHOST_MEMORY_MAX_NREGIONS];
+  u64 region_guest_addr_lo[VHOST_MEMORY_MAX_NREGIONS];
+  u64 region_guest_addr_hi[VHOST_MEMORY_MAX_NREGIONS];
   u32 region_mmap_fd[VHOST_MEMORY_MAX_NREGIONS];
   vhost_user_vring_t vrings[2];
   int virtio_net_hdr_sz;
@@ -254,6 +257,12 @@ typedef struct
   u32 coalesce_frames;
   f64 coalesce_time;
   int dont_dump_vhost_user_memory;
+
+  /* first cpu index */
+  u32 input_cpu_first_index;
+
+  /* total cpu count */
+  u32 input_cpu_count;
 } vhost_user_main_t;
 
 typedef struct

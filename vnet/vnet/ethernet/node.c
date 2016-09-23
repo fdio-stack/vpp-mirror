@@ -130,10 +130,7 @@ parse_header (ethernet_input_variant_t variant,
   vlan_count = 0;
 
   // check for vlan encaps
-  if ((*type == ETHERNET_TYPE_VLAN) ||
-      (*type == ETHERNET_TYPE_DOT1AD) ||
-      (*type == ETHERNET_TYPE_VLAN_9100) ||
-      (*type == ETHERNET_TYPE_VLAN_9200))
+  if (ethernet_frame_is_tagged (*type))
     {
       ethernet_vlan_header_t *h0;
       u16 tag;
@@ -238,7 +235,8 @@ determine_next_node (ethernet_main_t * em,
     {
       *next0 = em->l2_next;
       // record the L2 len and reset the buffer so the L2 header is preserved
-      vnet_buffer (b0)->l2.l2_len = b0->current_data;
+      u32 eth_start = vnet_buffer (b0)->ethernet.start_of_ethernet_header;
+      vnet_buffer (b0)->l2.l2_len = b0->current_data - eth_start;
       vlib_buffer_advance (b0, -ethernet_buffer_header_size (b0));
 
       // check for common IP/MPLS ethertypes

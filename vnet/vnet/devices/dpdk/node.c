@@ -21,7 +21,7 @@
 #include <vnet/ethernet/ethernet.h>
 #include <vnet/devices/dpdk/dpdk.h>
 #include <vnet/classify/vnet_classify.h>
-#include <vnet/mpls-gre/packet.h>
+#include <vnet/mpls/packet.h>
 #include <vnet/handoff.h>
 
 #include "dpdk_priv.h"
@@ -121,7 +121,8 @@ dpdk_rx_next_and_error_from_mb_flags_x1 (dpdk_device_t * xd,
 	      HANDOFF_DISPATCH_NEXT_ETHERNET_INPUT;
 	}
       else
-	if (PREDICT_FALSE (xd->vlan_subifs || (mb_flags & PKT_RX_VLAN_PKT)))
+	if (PREDICT_FALSE ((xd->flags & DPDK_DEVICE_FLAG_HAVE_SUBIF) ||
+			   (mb_flags & PKT_RX_VLAN_PKT)))
 	n0 = DPDK_RX_NEXT_ETHERNET_INPUT;
       else
 	{
@@ -287,7 +288,7 @@ dpdk_rx_burst (dpdk_main_t * dm, dpdk_device_t * xd, u16 queue_id)
   n_left = VLIB_FRAME_SIZE;
   n_buffers = 0;
 
-  if (PREDICT_TRUE (xd->dev_type == VNET_DPDK_DEV_ETH))
+  if (PREDICT_TRUE (xd->flags & DPDK_DEVICE_FLAG_PMD))
     {
       while (n_left)
 	{
@@ -303,7 +304,7 @@ dpdk_rx_burst (dpdk_main_t * dm, dpdk_device_t * xd, u16 queue_id)
 	}
     }
 #if DPDK_VHOST_USER
-  else if (xd->dev_type == VNET_DPDK_DEV_VHOST_USER)
+  else if (xd->flags & DPDK_DEVICE_FLAG_VHOST_USER)
     {
       vlib_main_t *vm = vlib_get_main ();
       vlib_buffer_main_t *bm = vm->buffer_main;
@@ -367,7 +368,7 @@ dpdk_rx_burst (dpdk_main_t * dm, dpdk_device_t * xd, u16 queue_id)
     }
 #endif
 #ifdef RTE_LIBRTE_KNI
-  else if (xd->dev_type == VNET_DPDK_DEV_KNI)
+  else if (xd->flags & DPDK_DEVICE_FLAG_KNI)
     {
       n_buffers =
 	rte_kni_rx_burst (xd->kni, xd->rx_vectors[queue_id], VLIB_FRAME_SIZE);
@@ -686,7 +687,7 @@ poll_rate_limit (dpdk_main_t * dm)
 
     <em>Next Nodes:</em>
     - Static arcs to: error-drop, ethernet-input,
-      ip4-input-no-checksum, ip6-input, mpls-gre-input
+      ip4-input-no-checksum, ip6-input, mpls-input
     - per-interface redirection, controlled by
       <code>xd->per_interface_next_index</code>
 */
@@ -790,7 +791,7 @@ VLIB_REGISTER_NODE (dpdk_input_node) = {
     [DPDK_RX_NEXT_ETHERNET_INPUT] = "ethernet-input",
     [DPDK_RX_NEXT_IP4_INPUT] = "ip4-input-no-checksum",
     [DPDK_RX_NEXT_IP6_INPUT] = "ip6-input",
-    [DPDK_RX_NEXT_MPLS_INPUT] = "mpls-gre-input",
+    [DPDK_RX_NEXT_MPLS_INPUT] = "mpls-input",
   },
 };
 
@@ -804,7 +805,6 @@ VLIB_NODE_FUNCTION_MULTIARCH_CLONE(dpdk_input_efd)
 CLIB_MULTIARCH_SELECT_FN(dpdk_input);
 CLIB_MULTIARCH_SELECT_FN(dpdk_input_rss);
 CLIB_MULTIARCH_SELECT_FN(dpdk_input_efd);
-/* *INDENT-ON* */
 
 /*
  * Override the next nodes for the dpdk input nodes.
@@ -875,11 +875,3 @@ efd_config (u32 enabled,
   set_efd_bitmap (&tm->efd.mpls_exp_bitmap, mpls_exp, mpls_op);
   set_efd_bitmap (&tm->efd.vlan_cos_bitmap, vlan_cos, vlan_op);
 }
-
-/*
- * fd.io coding-style-patch-verification: ON
- *
- * Local Variables:
- * eval: (c-set-style "gnu")
- * End:
- */

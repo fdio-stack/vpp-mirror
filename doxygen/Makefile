@@ -16,14 +16,27 @@
 # Build the documentation
 #
 
+# Default target
+.PHONY: all
+all: doxygen
+
 # These should be passed in by the root Makefile
 WS_ROOT ?= $(CURDIR)/..
 BR ?= $(WS_ROOT)/build-root
+
+# We support MacOS for docs generation
+ifeq ($(shell uname),Darwin)
+OS_ID = darwin
+endif
+
+# Work out the OS if we haven't already
 OS_ID ?= $(shell grep '^ID=' /etc/os-release | cut -f2- -d= | sed -e 's/\"//g')
 
 # Package dependencies
-DOC_DEB_DEPENDS = doxygen graphviz python-pyparsing
-DOC_RPM_DEPENDS = doxygen graphviz pyparsing
+DOC_DEB_DEPENDS = doxygen graphviz python-pyparsing python-jinja2
+DOC_RPM_DEPENDS = doxygen graphviz pyparsing python-jinja2
+DOC_MAC_BIN_DEPENDS = doxygen dot git
+DOC_MAC_PY_DEPENDS = pyparsing jinja2
 
 # Doxygen configuration and our utility scripts
 DOXY_DIR ?= $(WS_ROOT)/doxygen
@@ -40,9 +53,13 @@ DOXY_SRC_DIRECTORIES = \
 
 # Input directories and files
 DOXY_INPUT ?= \
-	README.md \
+	$(wildcard $(WS_ROOT)/*.md) \
+	$(wildcard $(DOXY_DIR)/*.md) \
 	$(DOXY_SRC_DIRECTORIES) \
 	plugins
+
+# Strip leading workspace path from input names
+DOXY_INPUT := $(subst $(WS_ROOT)/,,$(DOXY_INPUT))
 
 # Files to exclude, from pre-Doxygen steps, eg because they're
 # selectively compiled.
@@ -100,27 +117,45 @@ SIPHON_OUTPUT ?= $(DOXY_OUTPUT)/siphon_docs
 EXTRA_DOXY_INPUT += $(SIPHON_OUTPUT)
 
 # All the siphon types we know about
-SIPHONS ?= clicmd
+SIPHONS ?= clicmd syscfg
 
 SIPHON_FILES = $(addprefix $(SIPHON_INPUT)/,$(addsuffix .siphon,$(SIPHONS)))
 SIPHON_DOCS = $(addprefix $(SIPHON_OUTPUT)/,$(addsuffix .md,$(SIPHONS)))
 
-$(BR)/.doxygen-bootstrap.ok:
+$(BR)/.doxygen-bootstrap.ok: Makefile
 	@echo "Checking whether dependencies for Doxygen are installed..."
 ifeq ($(OS_ID),ubuntu)
 	@set -e; inst=; \
 		for i in $(DOC_DEB_DEPENDS); do \
 			dpkg-query --show $$i >/dev/null 2>&1 || inst="$$inst $$i"; \
 		done; \
-		if [ "$$inst" ]; then sudo apt-get $(CONFIRM) $(FORCE) install $$inst; fi
+		if [ "$$inst" ]; then \
+			sudo apt-get update; \
+			sudo apt-get $(CONFIRM) $(FORCE) install $$inst; \
+		fi
 	@if [ ! -s /usr/lib/graphviz/config6a ]; then \
 		echo "Rebuidlding system Graphviz configuration."; \
 		sudo dot -c; \
 	fi
 else ifneq ("$(wildcard /etc/redhat-release)","")
 	@sudo yum install $(CONFIRM) $(DOC_RPM_DEPENDS)
+else ifeq ($(OS_ID),darwin)
+	@set -e; \
+	for bin in $(DOC_MAC_BIN_DEPENDS); do \
+		which -s $${bin} || (\
+			echo "Program '$${bin}' not found, please install it."; \
+			false; \
+		); \
+	done
+	@set -e; \
+	for py in $(DOC_MAC_PY_DEPENDS); do \
+		python -c "import $${py}" >/dev/null 2>&1 || (\
+			echo "Python package '$${py}' not found, please install it."; \
+			false; \
+		); \
+	done
 else
-	$(error "This option currently works only on Ubuntu or Centos systems")
+	$(error "Building documentation currently works only on Ubuntu, CentOS or MacOS systems.")
 endif
 	@touch $@
 
@@ -141,8 +176,12 @@ $(BR)/.doxygen-siphon.dep: Makefile
 # Include the source -> siphon dependencies
 -include $(BR)/.doxygen-siphon.dep
 
+# Generate .siphon files that contain fragments of source file that
+# relate to the siphons we support.
 .NOTPARALLEL: $(SIPHON_FILES)
-$(SIPHON_FILES): $(DOXY_DIR)/siphon_generate.py $(BR)/.doxygen-bootstrap.ok
+$(SIPHON_FILES): $(BR)/.doxygen-bootstrap.ok \
+		$(DOXY_DIR)/siphon-generate \
+		$(wildcard $(DOXY_DIR)/siphon/*.py)
 	@rm -rf "$(SIPHON_INPUT)" "$(SIPHON_OUTPUT)"
 	@mkdir -p "$(SIPHON_INPUT)" "$(SIPHON_OUTPUT)"
 	@touch $(SIPHON_INPUT)/files
@@ -155,23 +194,33 @@ $(SIPHON_FILES): $(DOXY_DIR)/siphon_generate.py $(BR)/.doxygen-bootstrap.ok
 			>> $(SIPHON_INPUT)/files; \
 	done
 	@echo "Generating siphons..."
-	@set -e; cd "$(WS_ROOT)"; $(DOXY_DIR)/siphon_generate.py \
+	@set -e; \
+	cd "$(WS_ROOT)"; \
+	$(DOXY_DIR)/siphon-generate \
 		--output="$(SIPHON_INPUT)" \
 		"@$(SIPHON_INPUT)/files"
 
-
+# Process the .siphon source fragments and render them into doxygen flavored
+# markdown documentation
 .DELETE_ON_ERROR: $(SIPHON_DOCS)
-$(SIPHON_OUTPUT)/%.md: $(SIPHON_INPUT)/%.siphon $(DOXY_DIR)/siphon_process.py
+$(SIPHON_OUTPUT)/%.md: $(SIPHON_INPUT)/%.siphon \
+		$(DOXY_DIR)/siphon-process \
+		$(wildcard $(DOXY_DIR)/siphon/*.py) \
+		$(wildcard $(DOXY_DIR)/siphon_templates/*/*.md)
 	@echo "Processing siphon from $(notdir $<)..."
-	@set -e; cd "$(WS_ROOT)"; \
-		$(DOXY_DIR)/siphon_process.py --type=$(basename $(notdir $<)) \
-			--output="$(SIPHON_OUTPUT)" $< > $@
+	@set -e; \
+	cd "$(WS_ROOT)"; \
+	$(DOXY_DIR)/siphon-process \
+		--type=$(basename $(notdir $<)) \
+		--output="$@" \
+		"$<"
 
 # This target can be used just to generate the siphoned docs
 .PHONY: doxygen-siphon
 doxygen-siphon: $(SIPHON_DOCS)
 
 # Generate the doxygen docs
+.PHONY: doxygen
 doxygen: $(SIPHON_DOCS)
 	@mkdir -p "$(DOXY_OUTPUT)"
 	@echo "Running Doxygen..."
@@ -185,6 +234,9 @@ doxygen: $(SIPHON_DOCS)
 	    VERSION="`git describe --tags --dirty`" \
 	    doxygen $(DOXY_DIR)/doxygen.cfg
 
+.PHONY: wipe-doxygen
 wipe-doxygen:
 	rm -rf "$(BR)/docs" "$(BR)/.doxygen-siphon.d"
 
+.PHONY: clean
+clean: wipe-doxygen
