@@ -70,8 +70,8 @@ typedef struct
   /* intermediate rx buffer */
   u8 * rx_buf;
 
-  svm_fifo_t * server_rx_fifo;
-  svm_fifo_t * server_tx_fifo;
+  svm_fifo_t ** server_rx_fifos;
+  svm_fifo_t ** server_tx_fifos;
 
   /* Our event queue */
   unix_shared_memory_queue_t * our_event_queue;
@@ -172,12 +172,18 @@ vl_api_accept_session_t_handler (vl_api_accept_session_t * mp)
 {
   uri_udp_test_main_t *utm = &uri_udp_test_main;
   vl_api_accept_session_reply_t *rmp;
+  svm_fifo_t * rx_fifo, * tx_fifo;
 
   clib_warning ("accepting: type %d cookie 0x%x", mp->session_type,
                 mp->accept_cookie);
 
-  utm->server_rx_fifo = (svm_fifo_t *)mp->server_rx_fifo;
-  utm->server_tx_fifo = (svm_fifo_t *)mp->server_tx_fifo;
+  rx_fifo = (svm_fifo_t *)mp->server_rx_fifo;
+  rx_fifo->client_session_index = vec_len (utm->server_rx_fifos);
+  tx_fifo = (svm_fifo_t *)mp->server_tx_fifo;
+  rx_fifo->client_session_index = vec_len (utm->server_tx_fifos);
+  vec_add1 (utm->server_rx_fifos, rx_fifo);
+  vec_add1 (utm->server_tx_fifos, tx_fifo);
+
   utm->state = STATE_READY;
 
   rmp = vl_msg_api_alloc (sizeof (*rmp));
@@ -246,24 +252,26 @@ init_error_string_table (uri_udp_test_main_t * utm)
 void handle_fifo_event_server_rx (uri_udp_test_main_t *utm, 
                                   fifo_event_t * e)
 {
-  svm_fifo_t * f;
+  svm_fifo_t * rx_fifo, * tx_fifo;
   int nbytes;
 
   fifo_event_t evt;
   unix_shared_memory_queue_t *q;
   int rv;
 
-  f = e->fifo;
+  rx_fifo = e->fifo;
+  tx_fifo = utm->server_tx_fifos[rx_fifo->client_session_index];
 
   do {
-    nbytes = svm_fifo_dequeue_nowait2 (f, 0, vec_len(utm->rx_buf), utm->rx_buf);
+    nbytes = svm_fifo_dequeue_nowait2 (rx_fifo, 0, 
+                                       vec_len(utm->rx_buf), utm->rx_buf);
   } while (nbytes <= 0);
   do {
-    rv = svm_fifo_enqueue_nowait2 (utm->server_tx_fifo, 0, nbytes, utm->rx_buf);
+    rv = svm_fifo_enqueue_nowait2 (tx_fifo, 0, nbytes, utm->rx_buf);
   } while (rv == -2);
 
   /* Fabricate TX event, send to vpp */
-  evt.fifo = utm->server_tx_fifo;
+  evt.fifo = tx_fifo;
   evt.event_type = FIFO_EVENT_SERVER_TX;
   /* $$$$ for event logging */
   evt.enqueue_length = nbytes;
