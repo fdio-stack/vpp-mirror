@@ -35,6 +35,7 @@ v4_stream_session_create (stream_server_main_t *ssm,
   stream_session_t * s;
   u32 pool_index;
   u32 fifo_segment_index;
+  unix_shared_memory_queue_t * vpp_event_queue;
 
   /* $$$ better allocation policy? */
   ASSERT (vec_len(ss->segment_indices));
@@ -86,8 +87,10 @@ v4_stream_session_create (stream_server_main_t *ssm,
   /* Add to the main lookup table */
   clib_bihash_add_del_16_8 (&ssm->v4_session_hash, &kv0, 1 /* is_add */);
 
+  vpp_event_queue = ssm->vpp_event_queues[my_thread_index];
+
   /* Shoulder-tap the registered server */
-  ss->session_create_callback (ss, s);
+  ss->session_create_callback (ss, s, vpp_event_queue);
   return (s);
 }
 
@@ -122,6 +125,7 @@ int vnet_bind_udp4_uri (vnet_bind_uri_args_t * a)
 {
   uri_main_t * um = &uri_main;
   api_main_t *am = &api_main;
+  u32 my_thread_index = um->vlib_main->cpu_index;
   svm_fifo_segment_create_args_t _ca, *ca = &_ca;
   stream_server_main_t * ssm = &stream_server_main;
   stream_server_t * ss;
@@ -205,9 +209,9 @@ int vnet_bind_udp4_uri (vnet_bind_uri_args_t * a)
   oldheap = svm_push_data_heap (am->vlib_rp);
 
   /* Allocate vpp event queue (once) */
-  if (ssm->vpp_event_queue == 0)
+  if (ssm->vpp_event_queues[my_thread_index] == 0)
     {
-      ssm->vpp_event_queue = unix_shared_memory_queue_init 
+      ssm->vpp_event_queues[my_thread_index] = unix_shared_memory_queue_init 
         (2048 /* nels $$$$ config */, 
          sizeof (fifo_event_t),
          0 /* consumer pid */,
@@ -225,7 +229,6 @@ int vnet_bind_udp4_uri (vnet_bind_uri_args_t * a)
     }
   svm_pop_heap (oldheap);
 
-  a->vpp_event_queue_address = (u64) ssm->vpp_event_queue;
   a->server_event_queue_address = (u64) ss->event_queue;
 
   ss->session_create_callback = a->send_session_create_callback;

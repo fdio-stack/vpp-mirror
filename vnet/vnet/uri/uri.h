@@ -63,8 +63,6 @@ typedef struct
 
   /** Event queue addresses (result)*/
   u64 server_event_queue_address;
-  u64 vpp_event_queue_address;
-
 } vnet_bind_uri_args_t;
 
 int vnet_bind_uri (vnet_bind_uri_args_t *);

@@ -75,6 +75,8 @@ typedef struct
 
   /* Our event queue */
   unix_shared_memory_queue_t * our_event_queue;
+
+  /* $$$ single thread only for the moment */
   unix_shared_memory_queue_t * vpp_event_queue;
 
   /* For deadman timers */
@@ -150,9 +152,6 @@ vl_api_bind_uri_reply_t_handler (vl_api_bind_uri_reply_t * mp)
   utm->our_event_queue = (unix_shared_memory_queue_t *)
     mp->server_event_queue_address;
 
-  utm->vpp_event_queue = (unix_shared_memory_queue_t *)
-    mp->vpp_event_queue_address;
-
   utm->state = STATE_READY;
 }
 
@@ -176,6 +175,9 @@ vl_api_accept_session_t_handler (vl_api_accept_session_t * mp)
 
   clib_warning ("accepting: type %d cookie 0x%x", mp->session_type,
                 mp->accept_cookie);
+
+  utm->vpp_event_queue = (unix_shared_memory_queue_t *)
+    mp->vpp_event_queue_address;
 
   rx_fifo = (svm_fifo_t *)mp->server_rx_fifo;
   rx_fifo->client_session_index = vec_len (utm->server_rx_fifos);

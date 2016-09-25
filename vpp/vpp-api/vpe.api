@@ -5005,7 +5005,6 @@ define bind_uri_reply {
     i32 retval;
     /** 0 if this connection shouldn't send events */
     u64 server_event_queue_address;
-    u64 vpp_event_queue_address;
     /** length non-zero if binder should map segment */
     u8 segment_name_length;
     u32 segment_size;
@@ -5101,6 +5100,7 @@ define accept_session {
   u64 server_tx_fifo;
   u32 session_index;
   u32 session_thread_index;
+  u64 vpp_event_queue_address;
   u8 session_type;
   /* v6 size */
   u8 key [48];

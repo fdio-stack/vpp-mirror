@@ -5,12 +5,12 @@ packet-generator new {
   size 100-100
   no-recycle
   data {
-   UDP: 1.2.3.4 -> 5.6.7.8
+   UDP: 192.168.1.1 -> 192.168.2.1
    UDP: 4321 -> 1234
     length 72
     incrementing 100
   }
 }
 
-ip route 5.6.7.8/32 via local
-ip route 1.2.3.4/32 via local
+ip route add 192.168.1.1/32 via drop
+ip route add 192.168.2.1/24 via local

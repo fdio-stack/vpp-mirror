@@ -8294,7 +8294,8 @@ vl_api_delete_subif_t_handler (vl_api_delete_subif_t * mp)
   REPLY_MACRO (VL_API_DELETE_SUBIF_REPLY);
 }
 
-int send_session_create_callback (stream_server_t * ss, stream_session_t * s)
+int send_session_create_callback (stream_server_t * ss, stream_session_t * s,
+                                  unix_shared_memory_queue_t * vpp_event_queue)
 {
   vl_api_accept_session_t * mp;
   unix_shared_memory_queue_t * q;
@@ -8330,6 +8331,7 @@ int send_session_create_callback (stream_server_t * ss, stream_session_t * s)
   mp->session_thread_index = s->session_thread_index;
   mp->session_index = s->session_index;
   mp->session_type = s4->session_type;
+  mp->vpp_event_queue_address = (u64) vpp_event_queue;
   vl_msg_api_send_shmem (q, (u8 *) & mp);
 
   return 0;
@@ -8371,7 +8373,6 @@ vl_api_bind_uri_t_handler (vl_api_bind_uri_t * mp)
         rmp->segment_name_length = segment_name_length;
       }
     rmp->server_event_queue_address = a->server_event_queue_address;
-    rmp->vpp_event_queue_address = a->vpp_event_queue_address;
   }));
 }
 

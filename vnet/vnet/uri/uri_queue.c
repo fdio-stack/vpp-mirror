@@ -90,10 +90,11 @@ uri_queue_node_fn (vlib_main_t * vm,
   int i;
   unix_shared_memory_queue_t * q;
   int n_tx_packets = 0;
+  u32 my_thread_index = vm->cpu_index;
   u32 n_trace = vlib_get_trace_count (vm, node);
   u32 next0;
 
-  q = ssm->vpp_event_queue;
+  q = ssm->vpp_event_queues[my_thread_index];
   if (PREDICT_FALSE (q == 0))
     return 0;
 
@@ -103,7 +104,7 @@ uri_queue_node_fn (vlib_main_t * vm,
   if (n_to_dequeue == 0)
     return 0;
 
-  my_tx_buffers = ssm->tx_buffers[vm->cpu_index];
+  my_tx_buffers = ssm->tx_buffers[my_thread_index];
 
   /* $$$ config parameter */
   if (PREDICT_FALSE(vec_len (my_tx_buffers) < n_to_dequeue))
@@ -119,13 +120,13 @@ uri_queue_node_fn (vlib_main_t * vm,
          VLIB_BUFFER_DEFAULT_FREE_LIST_INDEX);
     }
   
-  ssm->tx_buffers[vm->cpu_index] = my_tx_buffers;
+  ssm->tx_buffers[my_thread_index] = my_tx_buffers;
 
   /* Buffer shortage? Try again later... */
   if (vec_len (my_tx_buffers) < n_to_dequeue)
     return 0;
   
-  my_fifo_events = ssm->fifo_events[vm->cpu_index];
+  my_fifo_events = ssm->fifo_events[my_thread_index];
 
   /* See you in the next life, don't be late */
   if (pthread_mutex_trylock (&q->mutex))
@@ -140,7 +141,7 @@ uri_queue_node_fn (vlib_main_t * vm,
     }
   pthread_mutex_unlock (&q->mutex);
 
-  ssm->fifo_events[vm->cpu_index] = my_fifo_events;
+  ssm->fifo_events[my_thread_index] = my_fifo_events;
 
   buffer_freelist_index = _vec_len (my_tx_buffers)-1;
 

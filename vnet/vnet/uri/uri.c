@@ -229,6 +229,7 @@ stream_server_init (vlib_main_t * vm)
   vec_validate (ssm->tx_buffers, num_threads - 1);
   vec_validate (ssm->fifo_events, num_threads - 1);
   vec_validate (ssm->current_enqueue_epoch, num_threads - 1);
+  vec_validate (ssm->vpp_event_queues, num_threads - 1);
 
   clib_bihash_init_16_8 (&ssm->v4_session_hash, "v4 session table",
                          16 /* $$$$ config parameter nbuckets */,

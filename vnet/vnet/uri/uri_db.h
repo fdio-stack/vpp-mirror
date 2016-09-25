@@ -134,7 +134,8 @@ typedef struct _stream_server
 
   /** Shoulder-taps for the server */
   int (*session_create_callback) (struct _stream_server *server, 
-                                  stream_session_t *new_session);
+                                  stream_session_t *new_session,
+                                  unix_shared_memory_queue_t *vpp_event_queue);
   void (*session_delete_callback) (struct _stream_server_main *ssm,
                                    stream_session_t *dead_session);
 } stream_server_t;
@@ -168,7 +169,7 @@ typedef struct _stream_server_main
   fifo_event_t ** fifo_events;
 
   /** vpp fifo event queue */
-  unix_shared_memory_queue_t *vpp_event_queue;
+  unix_shared_memory_queue_t **vpp_event_queues;
 
   /* Convenience */
   vlib_main_t *vlib_main;
