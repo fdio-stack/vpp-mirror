@@ -21,6 +21,7 @@
 #include <vlibapi/api.h>
 #include <vlibmemory/api.h>
 #include <vnet/ip/udp.h>
+#include <vppinfra/sparse_vec.h>
 
 /** Create a session, ping the server by callback */
 stream_session_t *
@@ -157,8 +158,6 @@ int vnet_bind_udp4_uri (vnet_bind_uri_args_t * a)
   else
     server_name = format (0, "<internal>%c", 0);
 
-  /* $$$$$ FIXME add udp port registration */
-  
   /* "udp4:12345" */
   cp = &a->uri[5];
   if (*cp == 0)
@@ -257,8 +256,85 @@ int vnet_bind_udp4_uri (vnet_bind_uri_args_t * a)
 
 int vnet_unbind_udp4_uri (char *uri, u32 api_client_index)
 {
-  clib_warning ("STUB");
-  return (-1);
+  uri_main_t * um = &uri_main;
+  api_main_t *am = &api_main;
+  stream_server_main_t * ssm = &stream_server_main;
+  stream_server_t * ss;
+  vl_api_registration_t *regp;
+  uword * p;
+  void * oldheap;
+  char * cp;
+  u32 port_number_host_byte_order;
+  u16 * n;
+
+  p = hash_get_mem (um->fifo_bind_table_entry_by_name, uri);
+
+  if (!p)
+    return VNET_API_ERROR_ADDRESS_NOT_IN_USE;
+
+  /* External client? */
+  if (api_client_index != ~0)
+    {
+      regp = vl_api_client_index_to_registration (api_client_index);
+      ASSERT(regp);
+    }
+
+  /* "udp4:12345" */
+  cp = (char *) &uri[5];
+  if (*cp == 0)
+    return VNET_API_ERROR_INVALID_VALUE;
+
+  port_number_host_byte_order = 0;
+  while (*cp != 0 && (*cp >= '0' && *cp <= '9'))
+    {
+      port_number_host_byte_order = (port_number_host_byte_order<<3) + 
+        (port_number_host_byte_order<<1);
+      port_number_host_byte_order += *cp - '0';
+      cp++;
+    }
+
+  if (port_number_host_byte_order > 65535)
+    return VNET_API_ERROR_INVALID_VALUE;
+
+  /* Turn off the uri-queue mapping */
+  n = sparse_vec_validate (ssm->stream_server_by_dst_port, 
+                           clib_host_to_net_u16(port_number_host_byte_order));
+  n[0] = SPARSE_VEC_INVALID_INDEX;
+
+  /* deregister the udp_local mapping */
+  udp_unregister_dst_port (um->vlib_main, port_number_host_byte_order, 
+                           1 /* is_ipv4 */);
+
+  /* 
+   * Find the stream_server_t corresponding to the api client 
+   * $$$$ maybe add a hash table? There may only be three or four... 
+   */
+  pool_foreach (ss, ssm->servers, 
+  ({ 
+    if (ss->api_client_index == api_client_index)
+      goto found;
+  }));
+
+  /* Better never happen... */
+  return VNET_API_ERROR_INVALID_VALUE_2;
+
+ found:
+
+  /* $$$$ need to write svm_fifo_segment_delete (...) */
+
+  /* Free the event fifo in the /vpe-api shared-memory segment */
+  oldheap = svm_push_data_heap (am->vlib_rp);
+
+  if (ss->event_queue)
+    unix_shared_memory_queue_free (ss->event_queue);
+
+  svm_pop_heap (oldheap);
+
+  hash_unset_mem (um->fifo_bind_table_entry_by_name, uri);
+
+  pool_put (ssm->servers, ss);
+
+  return 0;
 }
 
 int vnet_disconnect_udp4_uri (char * uri, u32 api_client_index)

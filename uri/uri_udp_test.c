@@ -15,6 +15,7 @@
 
 #include <stdio.h>
 #include <setjmp.h>
+#include <signal.h>
 #include <vppinfra/clib.h>
 #include <vppinfra/format.h>
 #include <vppinfra/error.h>
@@ -85,6 +86,8 @@ typedef struct
   /* State of the connection, shared between msg RX thread and main thread */
   volatile connection_state_t state;
 
+  volatile int time_to_stop;
+
   /* VNET_API_ERROR_FOO -> "Foo" hash table */
   uword * error_string_by_error_number;
 } uri_udp_test_main_t;
@@ -96,6 +99,23 @@ typedef struct
 #endif
 
 uri_udp_test_main_t uri_udp_test_main;
+
+static void
+stop_signal (int signum)
+{
+  uri_udp_test_main_t *um = &uri_udp_test_main;
+
+  um->time_to_stop = 1;
+}
+
+static clib_error_t *
+setup_signal_handlers (void)
+{
+  signal (SIGINT, stop_signal);
+  signal (SIGQUIT, stop_signal);
+
+  return 0;
+}
 
 u8 *
 format_api_error (u8 * s, va_list * args)
@@ -303,6 +323,8 @@ void handle_event_queue (uri_udp_test_main_t * utm)
           clib_warning ("unknown event type %d", e->event_type);
           break;
         }
+      if (utm->time_to_stop)
+        break;
     }
 }
 
@@ -343,7 +365,7 @@ void uri_udp_test (uri_udp_test_main_t * utm)
       return;
     }
 
-  fformat (stdout, "Master done...\n");
+  fformat (stdout, "Test complete...\n");
 }
 
 int
@@ -387,6 +409,8 @@ main (int argc, char **argv)
     }
 
   utm->uri = format (0, "%s%c", fifo_name, 0);
+
+  setup_signal_handlers();
 
   uri_api_hookup (utm);
 

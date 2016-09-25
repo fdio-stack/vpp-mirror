@@ -113,6 +113,9 @@ unformat_function_t unformat_udp_header;
 void udp_register_dst_port (vlib_main_t * vm,
                             udp_dst_port_t dst_port,
                             u32 node_index, u8 is_ip4);
+void
+udp_unregister_dst_port (vlib_main_t * vm,
+                         udp_dst_port_t dst_port, u8 is_ip4);
 
 always_inline void
 ip_udp_fixup_one (vlib_main_t * vm,
