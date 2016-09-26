@@ -266,6 +266,7 @@ int vnet_unbind_udp4_uri (char *uri, u32 api_client_index)
   char * cp;
   u32 port_number_host_byte_order;
   u16 * n;
+  int i, j;
 
   p = hash_get_mem (um->fifo_bind_table_entry_by_name, uri);
 
@@ -320,7 +321,44 @@ int vnet_unbind_udp4_uri (char *uri, u32 api_client_index)
 
  found:
 
-  /* $$$$ need to write svm_fifo_segment_delete (...) */
+  /* Across all fifo segment used by the server */
+  for (j = 0; j < vec_len (ss->segment_indices); j++)
+    {
+      svm_fifo_segment_private_t * fifo_segment;
+      svm_fifo_t ** fifos;
+      /* Vector of fifos allocated in the segment */
+      fifo_segment = svm_fifo_get_segment (ss->segment_indices[j]);
+      fifos = (svm_fifo_t **) fifo_segment->h->fifos;
+
+      /* 
+       * Remove any residual sessions from the session lookup table 
+       * Don't bother deleting the individual fifos, we're going to 
+       * throw away the fifo segment in a minute.
+       */
+      for (i = 0; i < vec_len(fifos); i++)
+        {
+          clib_bihash_kv_16_8_t kv0;
+          svm_fifo_t * fifo;
+          u32 session_index, thread_index;
+          stream_session_t * session;
+          
+          fifo = fifos[0];
+          session_index = fifo->server_session_index;
+          thread_index = fifo->server_thread_index;
+          
+          session = pool_elt_at_index (ssm->sessions[thread_index], 
+                                       session_index);
+          
+          kv0.key[0] = session->u4.key.as_u64[0];
+          kv0.key[1] = session->u4.key.as_u64[1];
+          kv0.value = ~0ULL;
+          
+          clib_bihash_add_del_16_8 (&ssm->v4_session_hash, &kv0, 
+                                    0 /* is_add */);
+        }
+
+      svm_fifo_segment_delete (fifo_segment);
+    }
 
   /* Free the event fifo in the /vpe-api shared-memory segment */
   oldheap = svm_push_data_heap (am->vlib_rp);

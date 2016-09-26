@@ -67,6 +67,7 @@ typedef enum
 
 int svm_fifo_segment_create (svm_fifo_segment_create_args_t * a);
 int svm_fifo_segment_attach (svm_fifo_segment_create_args_t * a);
+void svm_fifo_segment_delete (svm_fifo_segment_private_t * s);
 
 svm_fifo_t * svm_fifo_segment_alloc_fifo (svm_fifo_segment_private_t * s,
                                           u32 data_size_in_bytes);

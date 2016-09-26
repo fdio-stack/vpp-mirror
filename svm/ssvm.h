@@ -146,6 +146,7 @@ typedef enum
 
 int ssvm_master_init (ssvm_private_t * ssvm, u32 master_index);
 int ssvm_slave_init (ssvm_private_t * ssvm, int timeout_in_seconds);
+void ssvm_delete (ssvm_private_t * ssvm);
 
 #endif /* __included_ssvm_h__ */
 
