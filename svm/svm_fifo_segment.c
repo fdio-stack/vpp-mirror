@@ -168,12 +168,12 @@ svm_fifo_segment_free_fifo (svm_fifo_segment_private_t * s,
   ssvm_pop_heap (oldheap);
 }
 
-void svm_fifo_segment_init (void)
+void svm_fifo_segment_init (u64 baseva, u32 timeout_in_seconds)
 {
   svm_fifo_segment_main_t * sm = &svm_fifo_segment_main;
 
-  sm->next_baseva = 0x200000000ULL;
-  sm->timeout_in_seconds = 20;
+  sm->next_baseva = baseva;
+  sm->timeout_in_seconds = timeout_in_seconds;
 }
 
 /*

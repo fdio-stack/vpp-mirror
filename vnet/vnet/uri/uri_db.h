@@ -69,6 +69,7 @@ typedef enum
   SESSION_STATE_CONNECTING,
   SESSION_STATE_READY,
   SESSION_STATE_DISCONNECTING,
+  SESSION_STATE_DELETED,
 } stream_session_state_t;
 
 typedef CLIB_PACKED(struct
@@ -192,6 +193,8 @@ stream_session_t * v4_stream_session_create (stream_server_main_t *ssm,
                                              stream_server_t * ss, 
                                              udp4_session_key_t * key0,
                                              int my_thread_index, int is_tcp);
+format_function_t format_ip4_stream_session;
+
 /*
  * fd.io coding-style-patch-verification: ON
  *

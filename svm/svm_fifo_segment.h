@@ -74,7 +74,7 @@ svm_fifo_t * svm_fifo_segment_alloc_fifo (svm_fifo_segment_private_t * s,
 void svm_fifo_segment_free_fifo (svm_fifo_segment_private_t * s, 
                                  svm_fifo_t * f);
 
-void svm_fifo_segment_init (void);
+void svm_fifo_segment_init (u64 baseva, u32 timeout_in_seconds);
 
 #endif /* __included_ssvm_fifo_segment_h__ */
 

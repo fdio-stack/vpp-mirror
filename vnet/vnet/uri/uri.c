@@ -244,10 +244,15 @@ stream_server_init (vlib_main_t * vm)
   vlib_thread_main_t *tm = &vlib_thread_main;
   stream_server_main_t * ssm = &stream_server_main;
 
-  num_threads = tm->n_thread_stacks;
+  num_threads = 1 /* main thread */ + tm->n_eal_threads;
 
   if (num_threads < 1)
     return clib_error_return (0, "n_thread_stacks not set");
+
+  
+  /* $$$ config parameters */
+  svm_fifo_segment_init(0x200000000ULL /* first segment base VA */, 
+                        20 /* timeout in seconds */);
 
   /* configure per-thread ** vectors */
   vec_validate (ssm->sessions, num_threads - 1);

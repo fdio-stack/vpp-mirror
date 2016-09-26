@@ -417,7 +417,7 @@ main (int argc, char **argv)
 
   clib_time_init (&utm->clib_time);
   init_error_string_table (utm);
-  svm_fifo_segment_init();
+  svm_fifo_segment_init(0x200000000ULL, 20);
   unformat_init_command_line (a, argv);
 
   utm->uri = format (0, "%s%c", fifo_name, 0);

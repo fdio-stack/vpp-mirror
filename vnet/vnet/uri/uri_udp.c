@@ -267,6 +267,8 @@ int vnet_unbind_udp4_uri (char *uri, u32 api_client_index)
   u32 port_number_host_byte_order;
   u16 * n;
   int i, j;
+  u32 * deleted_sessions = 0;
+  u32 * deleted_thread_indices = 0;
 
   p = hash_get_mem (um->fifo_bind_table_entry_by_name, uri);
 
@@ -321,7 +323,7 @@ int vnet_unbind_udp4_uri (char *uri, u32 api_client_index)
 
  found:
 
-  /* Across all fifo segment used by the server */
+  /* Across all fifo segments used by the server */
   for (j = 0; j < vec_len (ss->segment_indices); j++)
     {
       svm_fifo_segment_private_t * fifo_segment;
@@ -349,16 +351,34 @@ int vnet_unbind_udp4_uri (char *uri, u32 api_client_index)
           session = pool_elt_at_index (ssm->sessions[thread_index], 
                                        session_index);
           
+          /* Add to the deleted_sessions vector (once!) */
+          if (session->session_state != SESSION_STATE_DELETED)
+            {
+              session->session_state = SESSION_STATE_DELETED;
+              vec_add1 (deleted_sessions, 
+                        session - ssm->sessions[thread_index]);
+              vec_add1 (deleted_thread_indices, thread_index);
+            }
+
           kv0.key[0] = session->u4.key.as_u64[0];
           kv0.key[1] = session->u4.key.as_u64[1];
           kv0.value = ~0ULL;
           
           clib_bihash_add_del_16_8 (&ssm->v4_session_hash, &kv0, 
                                     0 /* is_add */);
-        }
+      }
+      for (i = 0; i < vec_len (deleted_sessions); i++)
+        pool_put_index (ssm->sessions[deleted_thread_indices[i]], 
+                        deleted_sessions[i]);
 
+      vec_reset_length (deleted_sessions);
+      vec_reset_length (deleted_thread_indices);
+      
       svm_fifo_segment_delete (fifo_segment);
     }
+
+  vec_free (deleted_sessions);
+  vec_free (deleted_thread_indices);
 
   /* Free the event fifo in the /vpe-api shared-memory segment */
   oldheap = svm_push_data_heap (am->vlib_rp);
@@ -452,37 +472,113 @@ u32 uri_tx_fifo (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b)
   return 0;
 }
 
+u8 * format_ip4_stream_session (u8 * s, va_list * args)
+{
+  stream_session_t * s0 = va_arg (*args, stream_session_t *);
+  int verbose = va_arg (*args, int);
+  udp4_session_t *u4;
+
+  if (s0 == 0)
+    {
+      s = format (s, "%-20s%-20s%-10s%-10s%-8s",
+                  "Src", "Dst", "SrcP", "DstP", "Proto");
+
+      if (verbose)
+        s = format (s, "%-20s%-20s%", "Rx fifo", "Tx fifo");
+
+      return s;
+    }
+  
+  u4 = &s0->u4;
+  
+  s = format (s, "%-20U%-20U%-10d%-10d%-8s",
+              format_ip4_address, &u4->key.as_key.src,
+              format_ip4_address, &u4->key.as_key.dst,
+              clib_net_to_host_u16(u4->key.as_key.src_port),
+              clib_net_to_host_u16(u4->key.as_key.dst_port),
+              u4->key.as_key.is_tcp ? "tcp" : "udp");
+
+  if (verbose)
+    s = format (s, "%-20llx%-20llx", s0->server_rx_fifo, s0->server_tx_fifo);
+
+  return s;
+}
+
+
 static clib_error_t *
-show_uri_server_command_fn (vlib_main_t * vm,
-		 unformat_input_t * input,
-		 vlib_cli_command_t * cmd)
+show_uri_command_fn (vlib_main_t * vm,
+                     unformat_input_t * input,
+                     vlib_cli_command_t * cmd)
 {
   uri_main_t *um = &uri_main;
+  stream_server_main_t * ssm = &stream_server_main;
   fifo_bind_table_entry_t * e;
+  int do_server = 0;
+  int do_session = 0;
   int verbose = 0;
   
-  if (unformat (input, "verbose"))
-    verbose = 1;
-
-  if (pool_elts (um->fifo_bind_table))
+  while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT) 
     {
-      vlib_cli_output (vm, "%U", format_bind_table_entry, 0 /* header */,
-                       verbose);
-      pool_foreach (e, um->fifo_bind_table,
-      ({
-        vlib_cli_output (vm, "%U", format_bind_table_entry, e, verbose);
-      }));
+      if (unformat (input, "server"))
+        do_server = 1;
+      else if (unformat (input, "session"))
+        do_session = 1;
+      else if (unformat (input, "verbose"))
+        verbose = 1;
     }
-  else
-    vlib_cli_output (vm, "No active server bindings");
+
+  if (do_server)
+    {
+      if (pool_elts (um->fifo_bind_table))
+        {
+          vlib_cli_output (vm, "%U", format_bind_table_entry, 0 /* header */,
+                           verbose);
+          /* *INDENT-OFF* */
+          pool_foreach (e, um->fifo_bind_table,
+          ({
+            vlib_cli_output (vm, "%U", format_bind_table_entry, e, verbose);
+          }));
+          /* *INDENT-OFF* */
+        }
+      else
+        vlib_cli_output (vm, "No active server bindings");
+    }
+
+  if (do_session)
+    {
+      int i;
+      stream_session_t * pool;
+      stream_session_t * session;
+
+      for (i = 0; i < vec_len (ssm->sessions); i++)
+        {
+          pool = ssm->sessions[i];
+
+          if (pool_elts (pool))
+            {
+              vlib_cli_output (vm, "%U", format_ip4_stream_session, 
+                               0 /* header */, verbose);
+
+              /* *INDENT-OFF* */
+              pool_foreach (session, pool, 
+              ({
+                vlib_cli_output (vm, "%U", format_ip4_stream_session, 
+                                 session, verbose);
+              }));
+              /* *INDENT-OFF* */
+            }
+          else
+            vlib_cli_output (vm, "Thread %d: no active sessions", i);
+        }
+    }
 
   return 0;
 }
 
-VLIB_CLI_COMMAND (show_uri_server_command, static) = {
-    .path = "show uri server",
-    .short_help = "show uri server",
-    .function = show_uri_server_command_fn,
+VLIB_CLI_COMMAND (show_uri_command, static) = {
+    .path = "show uri",
+    .short_help = "show uri [server|session] [verbose]",
+    .function = show_uri_command_fn,
 };
 
 /*
