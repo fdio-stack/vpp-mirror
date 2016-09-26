@@ -76,6 +76,8 @@ int vnet_disconnect_uri (char * uri, u32 api_client_index);
 
 int vnet_bind_udp4_uri (vnet_bind_uri_args_t * a);
 
+format_function_t format_bind_table_entry;
+
 #endif /* __included_uri_h__ */
 
 /*

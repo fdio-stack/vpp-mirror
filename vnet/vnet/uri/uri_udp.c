@@ -368,7 +368,9 @@ int vnet_unbind_udp4_uri (char *uri, u32 api_client_index)
 
   svm_pop_heap (oldheap);
 
+  /* Clean out the uri->server name mapping */
   hash_unset_mem (um->fifo_bind_table_entry_by_name, uri);
+  pool_put_index (um->fifo_bind_table, p[0]);
 
   pool_put (ssm->servers, ss);
 
@@ -449,6 +451,39 @@ u32 uri_tx_fifo (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b)
   clib_warning ("unimplmented");
   return 0;
 }
+
+static clib_error_t *
+show_uri_server_command_fn (vlib_main_t * vm,
+		 unformat_input_t * input,
+		 vlib_cli_command_t * cmd)
+{
+  uri_main_t *um = &uri_main;
+  fifo_bind_table_entry_t * e;
+  int verbose = 0;
+  
+  if (unformat (input, "verbose"))
+    verbose = 1;
+
+  if (pool_elts (um->fifo_bind_table))
+    {
+      vlib_cli_output (vm, "%U", format_bind_table_entry, 0 /* header */,
+                       verbose);
+      pool_foreach (e, um->fifo_bind_table,
+      ({
+        vlib_cli_output (vm, "%U", format_bind_table_entry, e, verbose);
+      }));
+    }
+  else
+    vlib_cli_output (vm, "No active server bindings");
+
+  return 0;
+}
+
+VLIB_CLI_COMMAND (show_uri_server_command, static) = {
+    .path = "show uri server",
+    .short_help = "show uri server",
+    .function = show_uri_server_command_fn,
+};
 
 /*
  * fd.io coding-style-patch-verification: ON

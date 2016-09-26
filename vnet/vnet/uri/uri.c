@@ -24,6 +24,32 @@ stream_server_main_t stream_server_main;
 
 /* types: fifo, tcp4, udp4, tcp6, udp6 */
 
+u8 * format_bind_table_entry (u8 * s, va_list * args)
+{
+  fifo_bind_table_entry_t * e = va_arg (*args, fifo_bind_table_entry_t *);
+  int verbose = va_arg (*args, int);
+
+  if (e == 0)
+    {
+      if (verbose)
+        s = format (s, "%-15s%-15s%-20s%-10s%-10s",
+                    "URI", "Server", "Segment", "API Client", "Cookie");
+      else
+        s = format (s, "%-15s%-15s",
+                    "URI", "Server");
+      return s;
+    }
+
+  if (verbose)
+    s = format (s, "%-15s%-15s%-20s%-10d%-10d",
+                e->fifo_name, e->server_name, e->segment_name,
+                e->bind_client_index,
+                e->accept_cookie);
+  else
+    s = format (s, "%-15s%-15s", e->fifo_name, e->server_name);
+  return s;
+}
+
 /**** fifo uri */
 
 int vnet_bind_fifo_uri (vnet_bind_uri_args_t *a)
