@@ -137,8 +137,13 @@ typedef struct _stream_server
   int (*session_create_callback) (struct _stream_server *server, 
                                   stream_session_t *new_session,
                                   unix_shared_memory_queue_t *vpp_event_queue);
+  /* Rejected session callback */
   void (*session_delete_callback) (struct _stream_server_main *ssm,
-                                   stream_session_t *dead_session);
+                                   stream_session_t *session);
+  /* Existing session delete callback */
+  void (*session_clear_callback) (struct _stream_server_main *ssm,
+                                  struct _stream_server *server,
+                                  stream_session_t *session);
 } stream_server_t;
 
 typedef struct _stream_server_main

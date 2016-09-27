@@ -425,8 +425,8 @@ _(UNBIND_URI, unbind_uri)                                               \
 _(CONNECT_URI, connect_uri)						\
 _(MAP_ANOTHER_SEGMENT_REPLY, map_another_segment_reply)                 \
 _(ACCEPT_SESSION_REPLY, accept_session_reply) 				\
-_(DISCONNECT_URI, disconnect_uri)                                       \
-_(DISCONNECT_URI_REPLY, disconnect_uri_reply)
+_(DISCONNECT_SESSION, disconnect_session)                               \
+_(DISCONNECT_SESSION_REPLY, disconnect_session_reply)
   
 #define QUOTE_(x) #x
 #define QUOTE(x) QUOTE_(x)
@@ -8365,6 +8365,30 @@ int send_session_create_callback (stream_server_t * ss, stream_session_t * s,
   return 0;
 }
 
+int send_session_clear_callback (stream_server_main_t * ssm, 
+                                 stream_server_t * ss, 
+                                 stream_session_t * s)
+
+{
+  vl_api_accept_session_t * mp;
+  unix_shared_memory_queue_t * q;
+  
+  q = vl_api_client_index_to_input_queue (ss->api_client_index);
+
+  if (!q)
+    return -1;
+  
+  mp = vl_msg_api_alloc (sizeof (*mp));
+  memset (mp, 0, sizeof (*mp));
+  mp->_vl_msg_id = clib_host_to_net_u16 (VL_API_DISCONNECT_SESSION);
+
+  mp->session_thread_index = s->session_thread_index;
+  mp->session_index = s->session_index;
+  vl_msg_api_send_shmem (q, (u8 *) & mp);
+
+  return 0;
+}
+
 static void
 vl_api_bind_uri_t_handler (vl_api_bind_uri_t * mp)
 {
@@ -8386,6 +8410,8 @@ vl_api_bind_uri_t_handler (vl_api_bind_uri_t * mp)
   a->segment_name = segment_name;
   a->segment_name_length = segment_name_length;
   a->send_session_create_callback = send_session_create_callback;
+  a->send_session_clear_callback = send_session_clear_callback;
+
   a->segment_size = mp->segment_size;
 
   rv = vnet_bind_uri (a);
@@ -8441,14 +8467,35 @@ vl_api_connect_uri_t_handler (vl_api_connect_uri_t * mp)
 }
 
 static void
-vl_api_disconnect_uri_t_handler (vl_api_disconnect_uri_t * mp)
+vl_api_disconnect_session_t_handler (vl_api_disconnect_session_t * mp)
 {
-  vl_api_disconnect_uri_reply_t * rmp;
+  vl_api_disconnect_session_reply_t * rmp;
   int rv;
 
-  rv = vnet_disconnect_uri ((char *)mp->uri, mp->client_index);
+  rv = vnet_disconnect_uri_session (mp->client_index, mp->session_index,
+                                    mp->session_thread_index);
 
-  REPLY_MACRO (VL_API_DISCONNECT_URI_REPLY);
+  REPLY_MACRO (VL_API_DISCONNECT_SESSION_REPLY);
+}
+
+static void
+vl_api_disconnect_session_reply_t_handler 
+(vl_api_disconnect_session_reply_t * mp)
+{
+  int rv;
+
+  /* Client objected to clearing the session, log and continue */
+  if (mp->retval)
+    {
+      clib_warning ("client retval %d", mp->retval);
+      return;
+    }
+
+  rv = vnet_disconnect_uri_session (mp->client_index, mp->session_index,
+                                    mp->session_thread_index);
+
+  if (rv)
+    clib_warning ("vpp retval %d", rv);
 }
 
 static void
@@ -8495,13 +8542,6 @@ vl_api_accept_session_reply_t_handler (vl_api_accept_session_reply_t * mp)
       clib_warning ("session type %d unimplemented", u4->session_type);
     }
 }
-
-static void
-vl_api_disconnect_uri_reply_t_handler (vl_api_disconnect_uri_reply_t *mp)
-{
-  
-}
-
 
 #define BOUNCE_HANDLER(nn)                                              \
 static void vl_api_##nn##_t_handler (                                   \

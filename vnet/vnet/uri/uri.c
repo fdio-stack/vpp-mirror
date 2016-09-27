@@ -149,27 +149,6 @@ int vnet_connect_fifo_uri (char *uri, u32 api_client_index,
   return 0;
 }
 
-int vnet_disconnect_fifo_uri (char *uri, u32 api_client_index)
-{
-  uri_main_t * um = &uri_main;
-  fifo_bind_table_entry_t * e;
-  uword * p;
-
-  p = hash_get_mem (um->fifo_bind_table_entry_by_name, uri);
-
-  if (!p)
-    return VNET_API_ERROR_ADDRESS_NOT_IN_USE;
-
-  e = pool_elt_at_index (um->fifo_bind_table, p[0]);
-
-  /* Just in case */
-  if (e->connect_client_index != api_client_index)
-    return VNET_API_ERROR_INVALID_VALUE;
-  e->connect_client_index = ~0;
-
-  return 0;
-}
-
 /**** end fifo URI */
 
 int vnet_bind_uri (vnet_bind_uri_args_t *a)
@@ -207,19 +186,6 @@ int vnet_connect_uri (char * uri, u32 api_client_index,
   if (uri[0] == 'f')
     return vnet_connect_fifo_uri (uri, api_client_index, options, 
                                   segment_name, name_length);
-  else
-    return VNET_API_ERROR_UNKNOWN_URI_TYPE;
-}
-
-int vnet_disconnect_uri (char * uri, u32 api_client_index)
-{
-  ASSERT(uri);
-
-  /* Mumble top-level decode mumble */
-  if (uri[0] == 'f')
-    return vnet_disconnect_fifo_uri (uri, api_client_index);
-  else if (uri[0] == 'u' && uri[3] == '4')
-    return vnet_disconnect_udp4_uri (uri, api_client_index);
   else
     return VNET_API_ERROR_UNKNOWN_URI_TYPE;
 }
@@ -265,6 +231,10 @@ stream_server_init (vlib_main_t * vm)
   clib_bihash_init_16_8 (&ssm->v4_session_hash, "v4 session table",
                          16 /* $$$$ config parameter nbuckets */,
                          (32<<20) /*$$$ config parameter table size */);
+  
+  ssm->vlib_main = vm;
+  ssm->vnet_main = vnet_get_main();
+
   return 0;
 }
 

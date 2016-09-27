@@ -54,6 +54,8 @@ typedef struct
   u32 segment_size;
   u64 * options;
   void * send_session_create_callback;
+  void * send_session_delete_callback;
+  void * send_session_clear_callback;
 
   /** segment name (result) */
   char *segment_name;
@@ -72,7 +74,8 @@ int vnet_unbind_uri (char * uri, u32 api_client_index);
 int vnet_connect_uri (char * uri, u32 api_client_index,
                       u64 *options, char *segment_name, u32 *name_length);
 
-int vnet_disconnect_uri (char * uri, u32 api_client_index);
+int vnet_disconnect_uri_session (u32 client_index, u32 session_index,
+                                 u32 thread_index);
 
 int vnet_bind_udp4_uri (vnet_bind_uri_args_t * a);
 

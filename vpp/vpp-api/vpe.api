@@ -5174,13 +5174,15 @@ define accept_session_reply {
 /** \brief bidirectional disconnect API
     @param client_index - opaque cookie to identify the sender
     client to vpp direction only
-    @param client_context - sender context, to match reply w/ request
-    @param vpp_context - vpp context, to match reply w/ request
+    @param context - sender context, to match reply w/ request
+    @param session_index - cookie #1 from accept_session / connect_reply
+    @param session_thread_index - cookie #2
 */
-define disconnect_uri {
+define disconnect_session {
   u32 client_index;
   u32 context;
-  u8 uri [128];
+  u32 session_index;
+  u32 session_thread_index;
 };
 
 /** \brief bidirectional disconnect reply API
@@ -5189,10 +5191,12 @@ define disconnect_uri {
     @param client_context - sender context, to match reply w/ request
     @param vpp_context - vpp context, to match reply w/ request
 */
-define disconnect_uri_reply {
+define disconnect_session_reply {
   u32 client_index;
   u32 context;
   i32 retval;
+  u32 session_index;
+  u32 session_thread_index;
 };
 
 /*

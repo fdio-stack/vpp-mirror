@@ -65,6 +65,9 @@ typedef struct
   /* The URI we're playing with */
   u8 * uri;
 
+  /* Hash table for disconnect processing */
+  uword * session_index_by_vpp_handles;
+
   /* fifo segment */
   svm_fifo_segment_private_t *seg;
 
@@ -192,19 +195,25 @@ vl_api_accept_session_t_handler (vl_api_accept_session_t * mp)
   uri_udp_test_main_t *utm = &uri_udp_test_main;
   vl_api_accept_session_reply_t *rmp;
   svm_fifo_t * rx_fifo, * tx_fifo;
+  u64 key;
 
   clib_warning ("accepting: type %d cookie 0x%x", mp->session_type,
                 mp->accept_cookie);
 
   utm->vpp_event_queue = (unix_shared_memory_queue_t *)
     mp->vpp_event_queue_address;
-
+  
   rx_fifo = (svm_fifo_t *)mp->server_rx_fifo;
   rx_fifo->client_session_index = vec_len (utm->server_rx_fifos);
   tx_fifo = (svm_fifo_t *)mp->server_tx_fifo;
   rx_fifo->client_session_index = vec_len (utm->server_tx_fifos);
   vec_add1 (utm->server_rx_fifos, rx_fifo);
   vec_add1 (utm->server_tx_fifos, tx_fifo);
+
+  key = (((u64)mp->session_thread_index) << 32) | (u64)mp->session_index;
+
+  hash_set (utm->session_index_by_vpp_handles, key, 
+            vec_len (utm->server_rx_fifos)-1);
 
   utm->state = STATE_READY;
 
@@ -217,10 +226,44 @@ vl_api_accept_session_t_handler (vl_api_accept_session_t * mp)
   vl_msg_api_send_shmem (utm->vl_input_queue, (u8 *)&rmp);
 }
 
+static void
+vl_api_disconnect_session_t_handler (vl_api_disconnect_session_t * mp)
+{
+  uri_udp_test_main_t *utm = &uri_udp_test_main;
+  vl_api_disconnect_session_reply_t * rmp;
+  uword * p;
+  int rv = 0;
+  u64 key;
+  
+  key = (((u64)mp->session_thread_index) << 32) | (u64)mp->session_index;
+
+  p = hash_get (utm->session_index_by_vpp_handles, key);
+
+  if (p)
+    {
+      utm->server_rx_fifos[p[0]] = 0;
+      utm->server_tx_fifos[p[0]] = 0;
+      hash_unset (utm->session_index_by_vpp_handles, key);
+    }
+  else
+    {
+      clib_warning ("couldn't find session key %llx", key);
+    }
+
+  rmp = vl_msg_api_alloc (sizeof (*rmp));
+  memset (rmp, 0, sizeof (*rmp));
+  rmp->_vl_msg_id = ntohs (VL_API_DISCONNECT_SESSION_REPLY);
+  rmp->retval = rv;
+  rmp->session_index = mp->session_index;
+  rmp->session_thread_index = mp->session_thread_index;
+  vl_msg_api_send_shmem (utm->vl_input_queue, (u8 *)&rmp);
+}
+
 #define foreach_uri_msg                         \
 _(BIND_URI_REPLY, bind_uri_reply)               \
 _(UNBIND_URI_REPLY, unbind_uri_reply)           \
-_(ACCEPT_SESSION, accept_session)
+_(ACCEPT_SESSION, accept_session)		\
+_(DISCONNECT_SESSION, disconnect_session)
 
 void
 uri_api_hookup (uri_udp_test_main_t * utm)
@@ -387,6 +430,9 @@ main (int argc, char **argv)
   h->flags |= MHEAP_FLAG_THREAD_SAFE;
 
   vec_validate (utm->rx_buf, 8192);
+
+  utm->session_index_by_vpp_handles =
+    hash_create (0, sizeof(uword));
 
   clib_time_init (&utm->clib_time);
   init_error_string_table (utm);

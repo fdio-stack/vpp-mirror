@@ -232,6 +232,7 @@ int vnet_bind_udp4_uri (vnet_bind_uri_args_t * a)
 
   ss->session_create_callback = a->send_session_create_callback;
   ss->session_delete_callback = v4_stream_session_delete;
+  ss->session_clear_callback = a->send_session_clear_callback;
   ss->api_client_index = a->api_client_index;
   
   vec_add1 (ss->segment_indices, ca->new_segment_index);
@@ -397,12 +398,6 @@ int vnet_unbind_udp4_uri (char *uri, u32 api_client_index)
   return 0;
 }
 
-int vnet_disconnect_udp4_uri (char * uri, u32 api_client_index)
-{
-  clib_warning ("STUB");
-  return (-1);
-}
-
 u32 uri_tx_ip4_udp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b)
 {
   svm_fifo_t * f;
@@ -450,6 +445,38 @@ u32 uri_tx_ip4_udp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b)
   return URI_QUEUE_NEXT_IP4_LOOKUP;
 }
 
+int vnet_disconnect_uri_session (u32 client_index, u32 session_index,
+                                 u32 thread_index)
+{
+  stream_server_main_t * ssm = &stream_server_main;
+  stream_session_t * session;
+  stream_session_t * pool;
+  udp4_session_t * u4;
+
+  if (thread_index >= vec_len (ssm->sessions))
+    return VNET_API_ERROR_INVALID_VALUE;
+
+  pool = ssm->sessions[thread_index];
+
+  if (pool_is_free_index (pool, session_index))
+    return VNET_API_ERROR_INVALID_VALUE_2;
+
+  session = pool_elt_at_index (ssm->sessions[thread_index], 
+                               session_index);
+
+  u4 = &session->u4;
+
+  switch (u4->session_type)
+    {
+    case SESSION_TYPE_IP4_UDP:
+      v4_stream_session_delete (ssm, session);
+      break;
+      
+    default:
+      return VNET_API_ERROR_UNIMPLEMENTED;
+    }
+  return 0;
+}
 
 u32 uri_tx_ip4_tcp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b)
 {
@@ -475,6 +502,8 @@ u32 uri_tx_fifo (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b)
 u8 * format_ip4_stream_session (u8 * s, va_list * args)
 {
   stream_session_t * s0 = va_arg (*args, stream_session_t *);
+  stream_session_t * pool = va_arg (*args, stream_session_t *);
+  u32 thread_id = va_arg (*args, u32);
   int verbose = va_arg (*args, int);
   udp4_session_t *u4;
 
@@ -484,7 +513,8 @@ u8 * format_ip4_stream_session (u8 * s, va_list * args)
                   "Src", "Dst", "SrcP", "DstP", "Proto");
 
       if (verbose)
-        s = format (s, "%-20s%-20s%", "Rx fifo", "Tx fifo");
+        s = format (s, "%-20s%-20s%-8s%-8s", "Rx fifo", "Tx fifo", "Thread",
+                    "Index");
 
       return s;
     }
@@ -499,7 +529,8 @@ u8 * format_ip4_stream_session (u8 * s, va_list * args)
               u4->key.as_key.is_tcp ? "tcp" : "udp");
 
   if (verbose)
-    s = format (s, "%-20llx%-20llx", s0->server_rx_fifo, s0->server_tx_fifo);
+    s = format (s, "%-20llx%-20llx%-6d%-6d", 
+                s0->server_rx_fifo, s0->server_tx_fifo, thread_id, s0 - pool);
 
   return s;
 }
@@ -557,13 +588,14 @@ show_uri_command_fn (vlib_main_t * vm,
           if (pool_elts (pool))
             {
               vlib_cli_output (vm, "%U", format_ip4_stream_session, 
-                               0 /* header */, verbose);
+                               0, 0, 0, verbose);
 
               /* *INDENT-OFF* */
               pool_foreach (session, pool, 
               ({
                 vlib_cli_output (vm, "%U", format_ip4_stream_session, 
-                                 session, verbose);
+                                 session, pool, (u32)i /* thread-id */, 
+                                 verbose);
               }));
               /* *INDENT-OFF* */
             }
@@ -580,6 +612,57 @@ VLIB_CLI_COMMAND (show_uri_command, static) = {
     .short_help = "show uri [server|session] [verbose]",
     .function = show_uri_command_fn,
 };
+
+
+static clib_error_t *
+clear_uri_session_command_fn (vlib_main_t * vm,
+		 unformat_input_t * input,
+		 vlib_cli_command_t * cmd)
+{
+  stream_server_main_t * ssm = &stream_server_main;
+  u32 thread_index = 0;
+  u32 session_index = ~0;
+  stream_session_t * pool, * session;
+  stream_server_t * server;
+  
+  while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT) 
+    {
+      if (unformat (input, "thread %d", &thread_index))
+        ;
+      else if (unformat (input, "session %d", &session_index))
+        ;
+      else
+        return clib_error_return (0, "unknown input `%U'",
+                                  format_unformat_error, input);
+    }
+
+  if (session_index == ~0)
+    return clib_error_return (0, "session <nn> required, but not set.");
+
+  if (thread_index > vec_len(ssm->sessions))
+    return clib_error_return (0, "thread %d out of range [0-%d]",
+                              thread_index, vec_len(ssm->sessions));
+  
+  pool = ssm->sessions[thread_index];
+
+  if (pool_is_free_index (pool, session_index))
+    return clib_error_return (0, "session %d not active", session_index);
+
+  session = pool_elt_at_index (pool, session_index);
+
+  server = pool_elt_at_index (ssm->servers, session->server_index);
+
+  server->session_clear_callback (ssm, server, session);
+
+  return 0;
+}
+
+VLIB_CLI_COMMAND (clear_uri_session_command, static) = {
+    .path = "clear uri session",
+    .short_help = "clear uri session",
+    .function = clear_uri_session_command_fn,
+};
+
 
 /*
  * fd.io coding-style-patch-verification: ON
