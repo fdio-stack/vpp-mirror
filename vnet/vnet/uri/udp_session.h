@@ -17,14 +17,6 @@
 
 #include <vnet/ip/ip.h>
 
-typedef enum
-{
-  UDP_SESSION_STATE_NONE,
-  UDP_SESSION_STATE_CONNECTING,
-  UDP_SESSION_STATE_READY,
-  UDP_SESSION_STATE_DISCONNECTING,
-} udp_session_state_t;
-
 /* 16 octets */
 typedef CLIB_PACKED (struct
 {

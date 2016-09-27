@@ -26,7 +26,7 @@ stream_server_main_t stream_server_main;
 
 u8 * format_bind_table_entry (u8 * s, va_list * args)
 {
-  fifo_bind_table_entry_t * e = va_arg (*args, fifo_bind_table_entry_t *);
+  uri_bind_table_entry_t * e = va_arg (*args, uri_bind_table_entry_t *);
   int verbose = va_arg (*args, int);
 
   if (e == 0)
@@ -42,11 +42,11 @@ u8 * format_bind_table_entry (u8 * s, va_list * args)
 
   if (verbose)
     s = format (s, "%-15s%-15s%-20s%-10d%-10d",
-                e->fifo_name, e->server_name, e->segment_name,
+                e->bind_name, e->server_name, e->segment_name,
                 e->bind_client_index,
                 e->accept_cookie);
   else
-    s = format (s, "%-15s%-15s", e->fifo_name, e->server_name);
+    s = format (s, "%-15s%-15s", e->bind_name, e->server_name);
   return s;
 }
 
@@ -55,14 +55,14 @@ u8 * format_bind_table_entry (u8 * s, va_list * args)
 int vnet_bind_fifo_uri (vnet_bind_uri_args_t *a)
 {
   uri_main_t * um = &uri_main;
-  fifo_bind_table_entry_t * e;
+  uri_bind_table_entry_t * e;
   vl_api_registration_t *regp;
   uword * p;
   u8 * server_name, * segment_name;
 
   ASSERT(a->segment_name_length);
 
-  p = hash_get_mem (um->fifo_bind_table_entry_by_name, a->uri);
+  p = hash_get_mem (um->uri_bind_table_entry_by_name, a->uri);
 
   if (p)
     return VNET_API_ERROR_ADDRESS_IN_USE;
@@ -86,13 +86,13 @@ int vnet_bind_fifo_uri (vnet_bind_uri_args_t *a)
   pool_get (um->fifo_bind_table, e);
   memset (e, 0, sizeof (*e));
 
-  e->fifo_name = format (0, "%s%c", a->uri, 0);
+  e->bind_name = format (0, "%s%c", a->uri, 0);
   e->server_name = server_name;
   e->segment_name = segment_name;
   e->bind_client_index = a->api_client_index;
   e->accept_cookie = a->accept_cookie;
 
-  hash_set_mem (um->fifo_bind_table_entry_by_name, e->fifo_name, 
+  hash_set_mem (um->uri_bind_table_entry_by_name, e->bind_name, 
                 e - um->fifo_bind_table);
   return 0;
 }
@@ -100,10 +100,10 @@ int vnet_bind_fifo_uri (vnet_bind_uri_args_t *a)
 int vnet_unbind_fifo_uri (char *uri, u32 api_client_index)
 {
   uri_main_t * um = &uri_main;
-  fifo_bind_table_entry_t * e;
+  uri_bind_table_entry_t * e;
   uword * p;
 
-  p = hash_get_mem (um->fifo_bind_table_entry_by_name, uri);
+  p = hash_get_mem (um->uri_bind_table_entry_by_name, uri);
 
   if (!p)
     return VNET_API_ERROR_ADDRESS_NOT_IN_USE;
@@ -116,9 +116,9 @@ int vnet_unbind_fifo_uri (char *uri, u32 api_client_index)
 
   /* $$$ should we tear down connections? */
 
-  hash_unset_mem (um->fifo_bind_table_entry_by_name, e->fifo_name);
+  hash_unset_mem (um->uri_bind_table_entry_by_name, e->bind_name);
   
-  vec_free (e->fifo_name);
+  vec_free (e->bind_name);
   vec_free (e->server_name);
   vec_free (e->segment_name);
   pool_put (um->fifo_bind_table, e);
@@ -130,12 +130,12 @@ int vnet_connect_fifo_uri (char *uri, u32 api_client_index,
                            u32 * segment_name_length)
 {
   uri_main_t * um = &uri_main;
-  fifo_bind_table_entry_t * e;
+  uri_bind_table_entry_t * e;
   uword * p;
 
   ASSERT(segment_name_length);
 
-  p = hash_get_mem (um->fifo_bind_table_entry_by_name, uri);
+  p = hash_get_mem (um->uri_bind_table_entry_by_name, uri);
 
   if (!p)
     return VNET_API_ERROR_ADDRESS_NOT_IN_USE;
@@ -195,7 +195,7 @@ uri_init (vlib_main_t * vm)
 {
   uri_main_t * um = &uri_main;
 
-  um->fifo_bind_table_entry_by_name = hash_create_string (0, sizeof (uword));
+  um->uri_bind_table_entry_by_name = hash_create_string (0, sizeof (uword));
   um->vlib_main = vm;
   um->vnet_main = vnet_get_main();
   return 0;

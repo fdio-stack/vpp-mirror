@@ -8510,7 +8510,6 @@ vl_api_accept_session_reply_t_handler (vl_api_accept_session_reply_t * mp)
   stream_server_main_t * ssm = &stream_server_main;
   stream_server_t * ss;
   stream_session_t * s;
-  udp4_session_t * u4;
   int rv;
 
   s = pool_elt_at_index (ssm->sessions[mp->session_thread_index],
@@ -8526,20 +8525,18 @@ vl_api_accept_session_reply_t_handler (vl_api_accept_session_reply_t * mp)
       return;
     }
 
-  u4 = &s->u4;
-
-  switch (u4->session_type)
+  switch (s->session_type)
     {
     case SESSION_TYPE_IP4_UDP:
       /* set fifo states to ready */
-      u4->state = UDP_SESSION_STATE_READY;
+      s->session_state = SESSION_STATE_READY;
       break;
 
     case SESSION_TYPE_IP4_TCP:
     case SESSION_TYPE_IP6_TCP:
     case SESSION_TYPE_IP6_UDP:
     default:
-      clib_warning ("session type %d unimplemented", u4->session_type);
+      clib_warning ("session type %d unimplemented", s->session_type);
     }
 }
 

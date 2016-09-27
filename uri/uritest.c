@@ -403,7 +403,7 @@ main (int argc, char **argv)
   unformat_input_t _argv, *a = &_argv;
   u8 *chroot_prefix;
   u8 *heap;
-  char * fifo_name = "fifo:uritest";
+  char * bind_name = "fifo:uritest";
   mheap_t *h;
   int i_am_master = 0;
 
@@ -420,7 +420,7 @@ main (int argc, char **argv)
   svm_fifo_segment_init(0x200000000ULL, 20);
   unformat_init_command_line (a, argv);
 
-  utm->uri = format (0, "%s%c", fifo_name, 0);
+  utm->uri = format (0, "%s%c", bind_name, 0);
 
   while (unformat_check_input (a) != UNFORMAT_END_OF_INPUT)
     {

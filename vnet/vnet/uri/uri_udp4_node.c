@@ -236,7 +236,7 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
  
               f0 = s0->server_rx_fifo;
               
-              if (PREDICT_FALSE(s0->u4.state != UDP_SESSION_STATE_READY))
+              if (PREDICT_FALSE(s0->session_state != SESSION_STATE_READY))
                 {
                   error0 = UDP4_URI_INPUT_ERROR_NOT_READY;
                   goto trace0;

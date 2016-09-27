@@ -248,6 +248,7 @@ vl_api_disconnect_session_t_handler (vl_api_disconnect_session_t * mp)
   else
     {
       clib_warning ("couldn't find session key %llx", key);
+      rv = -11;
     }
 
   rmp = vl_msg_api_alloc (sizeof (*rmp));
@@ -418,7 +419,7 @@ main (int argc, char **argv)
   unformat_input_t _argv, *a = &_argv;
   u8 *chroot_prefix;
   u8 *heap;
-  u8 * fifo_name = (u8 *) "udp4:1234";
+  u8 * bind_name = (u8 *) "udp4:1234";
   mheap_t *h;
 
   clib_mem_init (0, 128 << 20);
@@ -445,7 +446,7 @@ main (int argc, char **argv)
 	{
 	  vl_set_memory_root_path ((char *) chroot_prefix);
 	}
-      else if (unformat (a, "uri %s", &fifo_name))
+      else if (unformat (a, "uri %s", &bind_name))
         ;
       else
 	{
@@ -454,7 +455,7 @@ main (int argc, char **argv)
 	}
     }
 
-  utm->uri = format (0, "%s%c", fifo_name, 0);
+  utm->uri = format (0, "%s%c", bind_name, 0);
 
   setup_signal_handlers();
 

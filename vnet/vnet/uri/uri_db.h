@@ -64,12 +64,13 @@ typedef enum
   SESSION_TYPE_N_TYPES,
 } stream_session_type_t;
 
+/* 
+ * Epic catalog of all session states from all session types 
+ */
 typedef enum
 {
   SESSION_STATE_CONNECTING,
   SESSION_STATE_READY,
-  SESSION_STATE_DISCONNECTING,
-  SESSION_STATE_DELETED,
 } stream_session_state_t;
 
 typedef CLIB_PACKED(struct
@@ -92,7 +93,14 @@ typedef struct
   u8 session_thread_index;
   /** To avoid n**2 "one event per frame" check */
   u8 enqueue_epoch;
-  /** vpp-side session state */
+
+  /** used during unbind processing */
+  u8 is_deleted;
+
+  /** Type */
+  u8 session_type;
+
+  /** State */
   u8 session_state;
 
   /** Session index in per_thread pool */
@@ -104,10 +112,6 @@ typedef struct
   /** svm segment index */
   u32 server_segment_index;
 
-  /*
-   * Nobody in their right mind uses a stream abstraction for udp.
-   * We start w/ udp to debug the infra...
-   */
   union 
   {
     udp4_session_t u4;

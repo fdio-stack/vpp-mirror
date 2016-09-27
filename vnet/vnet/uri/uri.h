@@ -23,21 +23,21 @@
 
 typedef struct
 {
-  u8 * fifo_name;
+  u8 * bind_name;
   u8 * server_name;
   u8 * segment_name;
   u32 segment_size;
   u32 bind_client_index;
   u32 accept_cookie;
   u32 connect_client_index;
-} fifo_bind_table_entry_t;
+} uri_bind_table_entry_t;
 
 typedef struct
 {
   /* Bind tables */
   /* Named rx/tx fifo pairs */
-  fifo_bind_table_entry_t * fifo_bind_table;
-  uword * fifo_bind_table_entry_by_name;
+  uri_bind_table_entry_t * fifo_bind_table;
+  uword * uri_bind_table_entry_by_name;
   
   /* Convenience */
   vlib_main_t * vlib_main;

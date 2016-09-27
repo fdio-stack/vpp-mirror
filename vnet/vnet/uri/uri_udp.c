@@ -70,8 +70,8 @@ v4_stream_session_create (stream_server_main_t *ssm,
   s->server_tx_fifo = server_tx_fifo;
   
   /* Initialize state machine, such as it is... */
-  s->u4.session_type = is_tcp ? SESSION_TYPE_IP4_TCP : SESSION_TYPE_IP4_UDP;
-  s->u4.state = SESSION_STATE_CONNECTING;
+  s->session_type = is_tcp ? SESSION_TYPE_IP4_TCP : SESSION_TYPE_IP4_UDP;
+  s->session_state = SESSION_STATE_CONNECTING;
   s->u4.mtu = 1024;             /* $$$$ policy */
   s->u4.key.as_u64[0] = key0->as_u64[0];
   s->u4.key.as_u64[1] = key0->as_u64[1];
@@ -138,12 +138,12 @@ int vnet_bind_udp4_uri (vnet_bind_uri_args_t * a)
   int rv;
   char * cp;
   u32 port_number_host_byte_order;
-  fifo_bind_table_entry_t * e;
+  uri_bind_table_entry_t * e;
   u16 * n;
 
   ASSERT(a->segment_name_length);
 
-  p = hash_get_mem (um->fifo_bind_table_entry_by_name, a->uri);
+  p = hash_get_mem (um->uri_bind_table_entry_by_name, a->uri);
 
   if (p)
     return VNET_API_ERROR_ADDRESS_IN_USE;
@@ -244,13 +244,13 @@ int vnet_bind_udp4_uri (vnet_bind_uri_args_t * a)
   pool_get (um->fifo_bind_table, e);
   memset (e, 0, sizeof (*e));
 
-  e->fifo_name = format (0, "%s%c", a->uri, 0);
+  e->bind_name = format (0, "%s%c", a->uri, 0);
   e->server_name = server_name;
   e->segment_name = segment_name;
   e->bind_client_index = a->api_client_index;
   e->accept_cookie = a->accept_cookie;
 
-  hash_set_mem (um->fifo_bind_table_entry_by_name, e->fifo_name, 
+  hash_set_mem (um->uri_bind_table_entry_by_name, e->bind_name, 
                 e - um->fifo_bind_table);
   return 0;
 }
@@ -271,7 +271,7 @@ int vnet_unbind_udp4_uri (char *uri, u32 api_client_index)
   u32 * deleted_sessions = 0;
   u32 * deleted_thread_indices = 0;
 
-  p = hash_get_mem (um->fifo_bind_table_entry_by_name, uri);
+  p = hash_get_mem (um->uri_bind_table_entry_by_name, uri);
 
   if (!p)
     return VNET_API_ERROR_ADDRESS_NOT_IN_USE;
@@ -353,9 +353,9 @@ int vnet_unbind_udp4_uri (char *uri, u32 api_client_index)
                                        session_index);
           
           /* Add to the deleted_sessions vector (once!) */
-          if (session->session_state != SESSION_STATE_DELETED)
+          if (!session->is_deleted)
             {
-              session->session_state = SESSION_STATE_DELETED;
+              session->is_deleted = 1;
               vec_add1 (deleted_sessions, 
                         session - ssm->sessions[thread_index]);
               vec_add1 (deleted_thread_indices, thread_index);
@@ -390,7 +390,7 @@ int vnet_unbind_udp4_uri (char *uri, u32 api_client_index)
   svm_pop_heap (oldheap);
 
   /* Clean out the uri->server name mapping */
-  hash_unset_mem (um->fifo_bind_table_entry_by_name, uri);
+  hash_unset_mem (um->uri_bind_table_entry_by_name, uri);
   pool_put_index (um->fifo_bind_table, p[0]);
 
   pool_put (ssm->servers, ss);
@@ -451,7 +451,6 @@ int vnet_disconnect_uri_session (u32 client_index, u32 session_index,
   stream_server_main_t * ssm = &stream_server_main;
   stream_session_t * session;
   stream_session_t * pool;
-  udp4_session_t * u4;
 
   if (thread_index >= vec_len (ssm->sessions))
     return VNET_API_ERROR_INVALID_VALUE;
@@ -464,9 +463,7 @@ int vnet_disconnect_uri_session (u32 client_index, u32 session_index,
   session = pool_elt_at_index (ssm->sessions[thread_index], 
                                session_index);
 
-  u4 = &session->u4;
-
-  switch (u4->session_type)
+  switch (session->session_type)
     {
     case SESSION_TYPE_IP4_UDP:
       v4_stream_session_delete (ssm, session);
@@ -543,7 +540,7 @@ show_uri_command_fn (vlib_main_t * vm,
 {
   uri_main_t *um = &uri_main;
   stream_server_main_t * ssm = &stream_server_main;
-  fifo_bind_table_entry_t * e;
+  uri_bind_table_entry_t * e;
   int do_server = 0;
   int do_session = 0;
   int verbose = 0;
@@ -556,6 +553,8 @@ show_uri_command_fn (vlib_main_t * vm,
         do_session = 1;
       else if (unformat (input, "verbose"))
         verbose = 1;
+      else 
+        break;
     }
 
   if (do_server)
