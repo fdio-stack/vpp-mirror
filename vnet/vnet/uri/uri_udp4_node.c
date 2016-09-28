@@ -26,6 +26,8 @@
 
 #include <vnet/ip/udp_packet.h>
 
+#include <vlibmemory/api.h>
+
 vlib_node_registration_t udp4_uri_input_node;
 
 typedef struct 
@@ -56,6 +58,7 @@ _(ENQUEUED, "Packets pushed into rx fifo")                              \
 _(NOT_READY, "Session not ready packets")                               \
 _(FIFO_FULL, "Packets dropped for lack of rx fifo space")               \
 _(EVENT_FIFO_FULL, "Events not sent for lack of event fifo space")      \
+_(API_QUEUE_FULL, "Sessions not created for lack of API queue space")
 
 typedef enum {
 #define _(sym,str) UDP4_URI_INPUT_ERROR_##sym,
@@ -74,6 +77,20 @@ typedef enum {
   UDP4_URI_INPUT_NEXT_DROP,
   UDP4_URI_INPUT_N_NEXT,
 } udp4_uri_input_next_t;
+
+static inline int check_api_queue_full (stream_server_t *ss)
+{
+  unix_shared_memory_queue_t * q;
+
+  q = vl_api_client_index_to_input_queue (ss->api_client_index);
+  if (!q)
+    return 1;
+  
+  if (q->cursize == q->maxsize)
+    return 1;
+  return 0;
+}
+
 
 static uword
 udp4_uri_input_node_fn (vlib_main_t * vm,
@@ -281,6 +298,13 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
                 }
               /* Note: -1 to dodge SPARSE_VEC_INVALID_INDEX */
               ss0 = pool_elt_at_index (ssm->servers, i0-1);
+
+              /* Check the API queue */
+              if (check_api_queue_full (ss0))
+                {
+                  error0 = UDP4_URI_INPUT_ERROR_API_QUEUE_FULL;
+                  goto trace0;
+                }
 
               /* Create a session */
               s0 = v4_stream_session_create (ssm, ss0, &key0, my_thread_index, 

@@ -56,6 +56,12 @@ typedef enum
 
 typedef struct
 {
+  svm_fifo_t * server_rx_fifo;
+  svm_fifo_t * server_tx_fifo;
+} session_t;
+
+typedef struct
+{
   /* vpe input queue */
   unix_shared_memory_queue_t *vl_input_queue;
 
@@ -65,6 +71,9 @@ typedef struct
   /* The URI we're playing with */
   u8 * uri;
 
+  /* Session pool */
+  session_t * sessions;
+
   /* Hash table for disconnect processing */
   uword * session_index_by_vpp_handles;
 
@@ -73,9 +82,6 @@ typedef struct
 
   /* intermediate rx buffer */
   u8 * rx_buf;
-
-  svm_fifo_t ** server_rx_fifos;
-  svm_fifo_t ** server_tx_fifos;
 
   /* Our event queue */
   unix_shared_memory_queue_t * our_event_queue;
@@ -90,6 +96,7 @@ typedef struct
   volatile connection_state_t state;
 
   volatile int time_to_stop;
+  volatile int time_to_print_stats;
 
   /* VNET_API_ERROR_FOO -> "Foo" hash table */
   uword * error_string_by_error_number;
@@ -111,10 +118,18 @@ stop_signal (int signum)
   um->time_to_stop = 1;
 }
 
+static void
+stats_signal (int signum)
+{
+  uri_udp_test_main_t *um = &uri_udp_test_main;
+
+  um->time_to_print_stats = 1;
+}
+
 static clib_error_t *
 setup_signal_handlers (void)
 {
-  signal (SIGINT, stop_signal);
+  signal (SIGINT, stats_signal);
   signal (SIGQUIT, stop_signal);
 
   return 0;
@@ -195,25 +210,29 @@ vl_api_accept_session_t_handler (vl_api_accept_session_t * mp)
   uri_udp_test_main_t *utm = &uri_udp_test_main;
   vl_api_accept_session_reply_t *rmp;
   svm_fifo_t * rx_fifo, * tx_fifo;
+  session_t * session;
   u64 key;
 
-  clib_warning ("accepting: type %d cookie 0x%x", mp->session_type,
-                mp->accept_cookie);
+  if (0)
+    clib_warning ("accepting: type %d cookie 0x%x", mp->session_type,
+                  mp->accept_cookie);
 
   utm->vpp_event_queue = (unix_shared_memory_queue_t *)
     mp->vpp_event_queue_address;
   
+  pool_get (utm->sessions, session);
+
   rx_fifo = (svm_fifo_t *)mp->server_rx_fifo;
-  rx_fifo->client_session_index = vec_len (utm->server_rx_fifos);
+  rx_fifo->client_session_index = session - utm->sessions;
   tx_fifo = (svm_fifo_t *)mp->server_tx_fifo;
-  rx_fifo->client_session_index = vec_len (utm->server_tx_fifos);
-  vec_add1 (utm->server_rx_fifos, rx_fifo);
-  vec_add1 (utm->server_tx_fifos, tx_fifo);
+  tx_fifo->client_session_index = session - utm->sessions;
+
+  session->server_rx_fifo = rx_fifo;
+  session->server_tx_fifo = tx_fifo;
 
   key = (((u64)mp->session_thread_index) << 32) | (u64)mp->session_index;
 
-  hash_set (utm->session_index_by_vpp_handles, key, 
-            vec_len (utm->server_rx_fifos)-1);
+  hash_set (utm->session_index_by_vpp_handles, key, session - utm->sessions);
 
   utm->state = STATE_READY;
 
@@ -230,6 +249,7 @@ static void
 vl_api_disconnect_session_t_handler (vl_api_disconnect_session_t * mp)
 {
   uri_udp_test_main_t *utm = &uri_udp_test_main;
+  session_t * session;
   vl_api_disconnect_session_reply_t * rmp;
   uword * p;
   int rv = 0;
@@ -241,9 +261,9 @@ vl_api_disconnect_session_t_handler (vl_api_disconnect_session_t * mp)
 
   if (p)
     {
-      utm->server_rx_fifos[p[0]] = 0;
-      utm->server_tx_fifos[p[0]] = 0;
+      session = pool_elt_at_index (utm->sessions, p[0]);
       hash_unset (utm->session_index_by_vpp_handles, key);
+      pool_put (utm->sessions, session);
     }
   else
     {
@@ -326,7 +346,7 @@ void handle_fifo_event_server_rx (uri_udp_test_main_t *utm,
   int rv;
 
   rx_fifo = e->fifo;
-  tx_fifo = utm->server_tx_fifos[rx_fifo->client_session_index];
+  tx_fifo = utm->sessions[rx_fifo->client_session_index].server_tx_fifo;
 
   do {
     nbytes = svm_fifo_dequeue_nowait2 (rx_fifo, 0, 
@@ -367,8 +387,13 @@ void handle_event_queue (uri_udp_test_main_t * utm)
           clib_warning ("unknown event type %d", e->event_type);
           break;
         }
-      if (utm->time_to_stop)
+      if (PREDICT_FALSE(utm->time_to_stop == 1))
         break;
+      if (PREDICT_FALSE(utm->time_to_print_stats == 1))
+        {
+          utm->time_to_print_stats = 0;
+          fformat(stdout, "%d connections\n", pool_elts (utm->sessions));
+        }
     }
 }
 
@@ -383,7 +408,7 @@ void uri_udp_test (uri_udp_test_main_t * utm)
   bmp->_vl_msg_id = ntohs (VL_API_BIND_URI);
   bmp->client_index = utm->my_client_index;
   bmp->context = ntohl(0xfeedface);
-  bmp->segment_size = 256<<10;
+  bmp->segment_size = 2<<30;
   memcpy (bmp->uri, utm->uri, vec_len (utm->uri));
   vl_msg_api_send_shmem (utm->vl_input_queue, (u8 *)&bmp);
 
@@ -422,7 +447,7 @@ main (int argc, char **argv)
   u8 * bind_name = (u8 *) "udp4:1234";
   mheap_t *h;
 
-  clib_mem_init (0, 128 << 20);
+  clib_mem_init (0, 256 << 20);
 
   heap = clib_mem_get_per_cpu_heap ();
   h = mheap_header (heap);

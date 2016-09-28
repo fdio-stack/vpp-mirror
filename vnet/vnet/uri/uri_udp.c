@@ -345,7 +345,7 @@ int vnet_unbind_udp4_uri (char *uri, u32 api_client_index)
           u32 session_index, thread_index;
           stream_session_t * session;
           
-          fifo = fifos[0];
+          fifo = fifos[i];
           session_index = fifo->server_session_index;
           thread_index = fifo->server_thread_index;
           
@@ -553,6 +553,8 @@ show_uri_command_fn (vlib_main_t * vm,
         do_session = 1;
       else if (unformat (input, "verbose"))
         verbose = 1;
+      else if (unformat (input, "detail"))
+        verbose = 2;
       else 
         break;
     }
@@ -586,17 +588,21 @@ show_uri_command_fn (vlib_main_t * vm,
 
           if (pool_elts (pool))
             {
-              vlib_cli_output (vm, "%U", format_ip4_stream_session, 
-                               0, 0, 0, verbose);
-
-              /* *INDENT-OFF* */
-              pool_foreach (session, pool, 
-              ({
-                vlib_cli_output (vm, "%U", format_ip4_stream_session, 
-                                 session, pool, (u32)i /* thread-id */, 
-                                 verbose);
-              }));
-              /* *INDENT-OFF* */
+              vlib_cli_output (vm, "Thread %d: %d active sessions", 
+                               i, pool_elts (pool));
+              if (verbose)
+                {
+                  vlib_cli_output (vm, "%U", format_ip4_stream_session, 
+                                   0, 0, 0, verbose);
+                  /* *INDENT-OFF* */
+                  pool_foreach (session, pool, 
+                  ({
+                    vlib_cli_output (vm, "%U", format_ip4_stream_session, 
+                                     session, pool, (u32)i /* thread-id */, 
+                                     verbose);
+                  }));
+                  /* *INDENT-OFF* */
+                }
             }
           else
             vlib_cli_output (vm, "Thread %d: no active sessions", i);

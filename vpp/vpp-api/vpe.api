@@ -5118,6 +5118,7 @@ define unbind_uri_reply {
     @param segment_name - 
 */
 define map_another_segment {
+    u32 client_index;
     u32 context;
     u8 segment_name[128];
 };
@@ -5140,7 +5141,8 @@ define map_another_segment_reply {
     @param tx_fifo_size - size of the tx fifo in bytes
 */
 define accept_session {
-  /** VPP context */
+ /* To shut up the jvpp compiler... */
+  u32 client_index;
   u32 context;
   u32 accept_cookie;
   u64 server_rx_fifo;
