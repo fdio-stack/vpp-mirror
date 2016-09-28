@@ -211,11 +211,11 @@ vl_api_accept_session_t_handler (vl_api_accept_session_t * mp)
   vl_api_accept_session_reply_t *rmp;
   svm_fifo_t * rx_fifo, * tx_fifo;
   session_t * session;
+  static f64 start_time;
   u64 key;
 
-  if (0)
-    clib_warning ("accepting: type %d cookie 0x%x", mp->session_type,
-                  mp->accept_cookie);
+  if (start_time == 0.0)
+      start_time = clib_time_now (&utm->clib_time);
 
   utm->vpp_event_queue = (unix_shared_memory_queue_t *)
     mp->vpp_event_queue_address;
@@ -235,6 +235,14 @@ vl_api_accept_session_t_handler (vl_api_accept_session_t * mp)
   hash_set (utm->session_index_by_vpp_handles, key, session - utm->sessions);
 
   utm->state = STATE_READY;
+
+  if (pool_elts (utm->sessions) && (pool_elts(utm->sessions) % 20000) == 0)
+    {
+      f64 now = clib_time_now (&utm->clib_time);
+      fformat (stdout, "%d active sessions in %.2f seconds, %.2f/sec...\n", 
+               pool_elts(utm->sessions), now - start_time, 
+               (f64)pool_elts(utm->sessions) / (now - start_time));
+    }
 
   rmp = vl_msg_api_alloc (sizeof (*rmp));
   memset (rmp, 0, sizeof (*rmp));
@@ -430,7 +438,7 @@ void uri_udp_test (uri_udp_test_main_t * utm)
   
   if (wait_for_state_change (utm, STATE_START))
     {
-      clib_warning ("timeout waiting for STATE_READY");
+      clib_warning ("timeout waiting for STATE_START");
       return;
     }
 
@@ -446,6 +454,8 @@ main (int argc, char **argv)
   u8 *heap;
   u8 * bind_name = (u8 *) "udp4:1234";
   mheap_t *h;
+  session_t * session;
+  int i;
 
   clib_mem_init (0, 256 << 20);
 
@@ -492,6 +502,15 @@ main (int argc, char **argv)
       fformat (stderr, "Couldn't connect to vpe, exiting...\n");
       exit (1);
     }
+
+  /* $$$$ hack preallocation */
+  for (i = 0; i < 200000; i++)
+    {
+      pool_get (utm->sessions, session);
+      memset (session, 0, sizeof (*session));
+    }
+  for (i = 0; i < 200000; i++)
+    pool_put_index (utm->sessions, i);
 
   uri_udp_test(utm);
 

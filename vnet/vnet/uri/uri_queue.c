@@ -139,6 +139,9 @@ uri_queue_node_fn (vlib_main_t * vm,
       vec_add2 (my_fifo_events, e, 1);
       unix_shared_memory_queue_sub_raw (q, (u8 *) e);
     }
+  /* The other side of the connection is not polling */
+  if (q->cursize < (q->maxsize / 8))
+    (void) pthread_cond_broadcast (&q->condvar);
   pthread_mutex_unlock (&q->mutex);
 
   ssm->fifo_events[my_thread_index] = my_fifo_events;

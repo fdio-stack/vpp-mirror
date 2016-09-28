@@ -209,6 +209,7 @@ stream_server_init (vlib_main_t * vm)
   u32 num_threads;
   vlib_thread_main_t *tm = &vlib_thread_main;
   stream_server_main_t * ssm = &stream_server_main;
+  int i;
 
   num_threads = 1 /* main thread */ + tm->n_eal_threads;
 
@@ -228,9 +229,20 @@ stream_server_init (vlib_main_t * vm)
   vec_validate (ssm->current_enqueue_epoch, num_threads - 1);
   vec_validate (ssm->vpp_event_queues, num_threads - 1);
 
+  /* $$$$ preallocate hack config parameter */
+  for (i = 0; i < 200000; i++)
+    {
+      stream_session_t * ss;
+      pool_get (ssm->sessions[0], ss);
+      memset (ss, 0, sizeof (*ss));
+    }
+
+  for (i = 0; i < 200000; i++)
+      pool_put_index (ssm->sessions[0], i);
+
   clib_bihash_init_16_8 (&ssm->v4_session_hash, "v4 session table",
-                         16 /* $$$$ config parameter nbuckets */,
-                         (32<<20) /*$$$ config parameter table size */);
+                         200000 /* $$$$ config parameter nbuckets */,
+                         (64<<20) /*$$$ config parameter table size */);
   
   ssm->vlib_main = vm;
   ssm->vnet_main = vnet_get_main();
