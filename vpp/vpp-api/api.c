@@ -8327,7 +8327,7 @@ int send_session_create_callback (stream_server_t * ss, stream_session_t * s,
 {
   vl_api_accept_session_t * mp;
   unix_shared_memory_queue_t * q;
-  udp4_session_t *s4;
+//  udp4_session_t *s4;
   // $$$$ udp6_session_t * s6;
   
   q = vl_api_client_index_to_input_queue (ss->api_client_index);
@@ -8339,26 +8339,15 @@ int send_session_create_callback (stream_server_t * ss, stream_session_t * s,
   mp->_vl_msg_id = clib_host_to_net_u16 (VL_API_ACCEPT_SESSION);
 
   /* Note: session_type is the first octet in all types of sessions */
-  s4 = &s->u4;
 
-  switch (s4->session_type)
-    {
-    case SESSION_TYPE_IP4_TCP:
-    case SESSION_TYPE_IP4_UDP:
-      memcpy (mp->key, &s4->key, sizeof (s4->key));
-      break;
-
-    case SESSION_TYPE_IP6_TCP:
-    case SESSION_TYPE_IP6_UDP:
-      ASSERT(0);
-    }
+  memcpy (mp->key, &s->session_key, sizeof (s->session_key));
 
   mp->accept_cookie = ss->accept_cookie;
   mp->server_rx_fifo = (u64) s->server_rx_fifo;
   mp->server_tx_fifo = (u64) s->server_tx_fifo;
   mp->session_thread_index = s->session_thread_index;
   mp->session_index = s->session_index;
-  mp->session_type = s4->session_type;
+  mp->session_type = s->session_type;
   mp->vpp_event_queue_address = (u64) vpp_event_queue;
   vl_msg_api_send_shmem (q, (u8 *) & mp);
 

@@ -698,15 +698,17 @@ nobase_include_HEADERS +=			\
 ########################################
 
 libvnet_la_SOURCES +=				\
-  vnet/uri/uri.c				\
+  vnet/uri/uri.c					\
   vnet/uri/uri_hashes.c				\
   vnet/uri/uri_queue.c				\
   vnet/uri/uri_udp4_node.c			\
-  vnet/uri/uri_udp.c
+  vnet/uri/uri_udp.c				\
+  vnet/uri/uri_tcp_node.c			\
+  vnet/uri/uri_tcp.c				
 
 nobase_include_HEADERS +=			\
-  vnet/uri/uri.h				\
-  vnet/uri/uri_db.h				\
+  vnet/uri/uri.h					\
+  vnet/uri/uri_db.h					\
   vnet/uri/udp_session.h
 
 ########################################

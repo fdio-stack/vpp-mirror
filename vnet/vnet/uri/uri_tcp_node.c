@@ -17,37 +17,33 @@
 #include <vnet/vnet.h>
 #include <vnet/pg/pg.h>
 #include <vnet/ip/ip.h>
-
-#include "uri.h"
-
 #include <vppinfra/hash.h>
 #include <vppinfra/error.h>
 #include <vppinfra/elog.h>
-
-#include <vnet/ip/udp_packet.h>
-
 #include <vlibmemory/api.h>
+#include <vnet/uri/uri.h>
+#include <vnet/tcp/tcp.h>
 
 typedef struct 
 {
   u32 session;
   u32 disposition;
   u32 thread_index;
-} udp4_uri_input_trace_t;
+} tcp4_uri_input_trace_t;
 
 /* packet trace format function */
-static u8 * format_udp4_uri_input_trace (u8 * s, va_list * args)
+static u8 * format_tcp4_uri_input_trace (u8 * s, va_list * args)
 {
   CLIB_UNUSED (vlib_main_t * vm) = va_arg (*args, vlib_main_t *);
   CLIB_UNUSED (vlib_node_t * node) = va_arg (*args, vlib_node_t *);
-  udp4_uri_input_trace_t * t = va_arg (*args, udp4_uri_input_trace_t *);
+  tcp4_uri_input_trace_t * t = va_arg (*args, tcp4_uri_input_trace_t *);
   
-  s = format (s, "UDP4_URI_INPUT: session %d, disposition %d, thread %d",
+  s = format (s, "TCP4_URI_INPUT: session %d, disposition %d, thread %d",
               t->session, t->disposition, t->thread_index);
   return s;
 }
 
-#define foreach_udp4_uri_input_error                                    \
+#define foreach_tcp4_uri_input_error                                    \
 _(NO_SESSION, "No session drops")                                       \
 _(NO_LISTENER, "No listener for dst port drops")                        \
 _(ENQUEUED, "Packets pushed into rx fifo")                              \
@@ -57,34 +53,35 @@ _(EVENT_FIFO_FULL, "Events not sent for lack of event fifo space")      \
 _(API_QUEUE_FULL, "Sessions not created for lack of API queue space")
 
 typedef enum {
-#define _(sym,str) UDP4_URI_INPUT_ERROR_##sym,
-  foreach_udp4_uri_input_error
+#define _(sym,str) TCP4_URI_INPUT_ERROR_##sym,
+  foreach_tcp4_uri_input_error
 #undef _
-  UDP4_URI_INPUT_N_ERROR,
-} udp4_uri_input_error_t;
+  TCP4_URI_INPUT_N_ERROR,
+} tcp4_uri_input_error_t;
 
-static char * udp4_uri_input_error_strings[] = {
+static char * tcp4_uri_input_error_strings[] = {
 #define _(sym,string) string,
-  foreach_udp4_uri_input_error
+  foreach_tcp4_uri_input_error
 #undef _
 };
 
 typedef enum {
-  UDP4_URI_INPUT_NEXT_DROP,
-  UDP4_URI_INPUT_N_NEXT,
-} udp4_uri_input_next_t;
+  TCP4_URI_INPUT_NEXT_DROP,
+  TCP4_URI_INPUT_N_NEXT,
+} tcp4_uri_input_next_t;
 
 static uword
-udp4_uri_input_node_fn (vlib_main_t * vm,
+tcp4_uri_input_node_fn (vlib_main_t * vm,
 		  vlib_node_runtime_t * node,
 		  vlib_frame_t * frame)
 {
   u32 n_left_from, * from, * to_next;
-  udp4_uri_input_next_t next_index;
+  tcp4_uri_input_next_t next_index;
   stream_server_main_t * ssm = &stream_server_main;
   u32 my_thread_index = vm->cpu_index;
   u8 my_enqueue_epoch;
   u32 * session_indices_to_enqueue;
+  tcp_main_t *tm = &tcp_main;
   static u32 serial_number;
   int i;
 
@@ -104,8 +101,8 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
 #if 0
       while (n_left_from >= 4 && n_left_to_next >= 2)
 	{
-          u32 next0 = UDP4_URI_INPUT_NEXT_INTERFACE_OUTPUT;
-          u32 next1 = UDP4_URI_INPUT_NEXT_INTERFACE_OUTPUT;
+          u32 next0 = TCP4_URI_INPUT_NEXT_INTERFACE_OUTPUT;
+          u32 next1 = TCP4_URI_INPUT_NEXT_INTERFACE_OUTPUT;
           u32 sw_if_index0, sw_if_index1;
           u8 tmp0[6], tmp1[6];
           ethernet_header_t *en0, *en1;
@@ -158,14 +155,14 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
             {
               if (b0->flags & VLIB_BUFFER_IS_TRACED) 
                 {
-                  udp4_uri_input_trace_t *t = 
+                  tcp4_uri_input_trace_t *t =
                     vlib_add_trace (vm, node, b0, sizeof (*t));
                   t->sw_if_index = sw_if_index0;
                   t->next_index = next0;
                 }
               if (b1->flags & VLIB_BUFFER_IS_TRACED) 
                 {
-                  udp4_uri_input_trace_t *t = 
+                  tcp4_uri_input_trace_t *t =
                     vlib_add_trace (vm, node, b1, sizeof (*t));
                   t->sw_if_index = sw_if_index1;
                   t->next_index = next1;
@@ -183,11 +180,11 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
 	{
           u32 bi0;
 	  vlib_buffer_t * b0;
-          u32 next0 = UDP4_URI_INPUT_NEXT_DROP;
-          u32 error0 = UDP4_URI_INPUT_ERROR_ENQUEUED;
+          u32 next0 = TCP4_URI_INPUT_NEXT_DROP;
+          u32 error0 = TCP4_URI_INPUT_ERROR_ENQUEUED;
           udp_header_t * udp0;
           clib_bihash_kv_16_8_t kv0;
-          udp4_session_key_t key0;
+          tcp4_session_key_t key0;
           ip4_header_t * ip0;
           stream_session_t * s0;
           svm_fifo_t * f0;
@@ -219,7 +216,7 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
           key0.dst.as_u32 = ip0->dst_address.as_u32;
           key0.src_port = udp0->src_port;
           key0.dst_port = udp0->dst_port;
-          key0.session_type = SESSION_TYPE_IP4_UDP;
+          key0.session_type = SESSION_TYPE_IP4_TCP;
 
           kv0.key[0] = key0.as_u64[0];
           kv0.key[1] = key0.as_u64[1];
@@ -237,7 +234,7 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
               
               if (PREDICT_FALSE(s0->session_state != SESSION_STATE_READY))
                 {
-                  error0 = UDP4_URI_INPUT_ERROR_NOT_READY;
+                  error0 = TCP4_URI_INPUT_ERROR_NOT_READY;
                   goto trace0;
                 }
 
@@ -245,7 +242,7 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
 
               if (PREDICT_FALSE(udp_len0 > svm_fifo_max_enqueue (f0)))
                 {
-                  error0 = UDP4_URI_INPUT_ERROR_FIFO_FULL;
+                  error0 = TCP4_URI_INPUT_ERROR_FIFO_FULL;
                   goto trace0;
                 }
 
@@ -253,7 +250,7 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
                                         udp_len0 - sizeof(*udp0), 
                                         (u8 *)(udp0+1));
 
-              b0->error = node->errors[UDP4_URI_INPUT_ERROR_ENQUEUED];
+              b0->error = node->errors[TCP4_URI_INPUT_ERROR_ENQUEUED];
 
               /* We need to send an RX event on this fifo */
               if(s0->enqueue_epoch != my_enqueue_epoch)
@@ -267,17 +264,17 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
             }
           else
             {
-              udp4_session_t *s;
+              tcp4_session_t *s;
 
-              b0->error = node->errors[UDP4_URI_INPUT_ERROR_NOT_READY];
+              b0->error = node->errors[TCP4_URI_INPUT_ERROR_NOT_READY];
               
               /* Find the server */
               i0 = sparse_vec_index (
-                  ssm->stream_server_by_dst_port[SESSION_TYPE_IP4_UDP],
+                  ssm->stream_server_by_dst_port[SESSION_TYPE_IP4_TCP],
                   udp0->dst_port);
               if (i0 == SPARSE_VEC_INVALID_INDEX)
                 {
-                  error0 = UDP4_URI_INPUT_ERROR_NO_LISTENER;
+                  error0 = TCP4_URI_INPUT_ERROR_NO_LISTENER;
                   goto trace0;
                   
                 }
@@ -287,19 +284,17 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
               /* Check the API queue */
               if (check_api_queue_full (ss0))
                 {
-                  error0 = UDP4_URI_INPUT_ERROR_API_QUEUE_FULL;
+                  error0 = TCP4_URI_INPUT_ERROR_API_QUEUE_FULL;
                   goto trace0;
                 }
 
-              pool_get (udp4_sessions[my_thread_index], s);
-              s->mtu = 1024;             /* $$$$ policy */
-              s->key.as_key = key0;
+              pool_get (tm->ip4_sessions[my_thread_index], s);
+              /* FIXME fill in session */
 
               /* Create a session */
-              s0 = v4_stream_session_create (ssm, ss0, SESSION_TYPE_IP4_UDP,
-                                             kv0,
-                                             s - udp4_sessions[my_thread_index],
-                                             my_thread_index);
+              s0 = v4_stream_session_create (
+                  ssm, ss0, SESSION_TYPE_IP4_TCP, kv0,
+                  s - tm->ip4_sessions[my_thread_index], my_thread_index);
             }
 
         trace0:
@@ -308,7 +303,7 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
           if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) 
                             && (b0->flags & VLIB_BUFFER_IS_TRACED))) 
             {
-              udp4_uri_input_trace_t *t = 
+              tcp4_uri_input_trace_t *t =
                 vlib_add_trace (vm, node, b0, sizeof (*t));
 
               t->session = ~0;
@@ -361,8 +356,8 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
                                       0 /* do wait for mutex */);
       else
         {
-          vlib_node_increment_counter (vm, udp4_uri_input_node.index,
-                                       UDP4_URI_INPUT_ERROR_FIFO_FULL, 1);
+          vlib_node_increment_counter (vm, tcp4_uri_input_node.index,
+                                       TCP4_URI_INPUT_ERROR_FIFO_FULL, 1);
         }
       if (1)
         {
@@ -386,21 +381,94 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
   return frame->n_vectors;
 }
 
-VLIB_REGISTER_NODE (udp4_uri_input_node) = {
-  .function = udp4_uri_input_node_fn,
-  .name = "udp4-uri-input",
+VLIB_REGISTER_NODE (tcp4_uri_input_node) = {
+  .function = tcp4_uri_input_node_fn,
+  .name = "tcp4-uri-input",
   .vector_size = sizeof (u32),
-  .format_trace = format_udp4_uri_input_trace,
+  .format_trace = format_tcp4_uri_input_trace,
   .type = VLIB_NODE_TYPE_INTERNAL,
   
-  .n_errors = ARRAY_LEN(udp4_uri_input_error_strings),
-  .error_strings = udp4_uri_input_error_strings,
+  .n_errors = ARRAY_LEN(tcp4_uri_input_error_strings),
+  .error_strings = tcp4_uri_input_error_strings,
 
-  .n_next_nodes = UDP4_URI_INPUT_N_NEXT,
+  .n_next_nodes = TCP4_URI_INPUT_N_NEXT,
 
   /* edit / add dispositions here */
   .next_nodes = {
-    [UDP4_URI_INPUT_NEXT_DROP] = "error-drop",
+    [TCP4_URI_INPUT_NEXT_DROP] = "error-drop",
+  },
+};
+
+typedef struct
+{
+  u32 session;
+  u32 disposition;
+  u32 thread_index;
+} tcp6_uri_input_trace_t;
+
+/* packet trace format function */
+static u8 * format_tcp6_uri_input_trace (u8 * s, va_list * args)
+{
+  CLIB_UNUSED (vlib_main_t * vm) = va_arg (*args, vlib_main_t *);
+  CLIB_UNUSED (vlib_node_t * node) = va_arg (*args, vlib_node_t *);
+  tcp6_uri_input_trace_t * t = va_arg (*args, tcp6_uri_input_trace_t *);
+
+  s = format (s, "TCP6_URI_INPUT: session %d, disposition %d, thread %d",
+              t->session, t->disposition, t->thread_index);
+  return s;
+}
+
+#define foreach_tcp6_uri_input_error                                    \
+_(NO_SESSION, "No session drops")                                       \
+_(NO_LISTENER, "No listener for dst port drops")                        \
+_(ENQUEUED, "Packets pushed into rx fifo")                              \
+_(NOT_READY, "Session not ready packets")                               \
+_(FIFO_FULL, "Packets dropped for lack of rx fifo space")               \
+_(EVENT_FIFO_FULL, "Events not sent for lack of event fifo space")      \
+_(API_QUEUE_FULL, "Sessions not created for lack of API queue space")
+
+typedef enum {
+#define _(sym,str) TCP6_URI_INPUT_ERROR_##sym,
+  foreach_tcp6_uri_input_error
+#undef _
+  TCP6_URI_INPUT_N_ERROR,
+} tcp6_uri_input_error_t;
+
+static char * tcp6_uri_input_error_strings[] = {
+#define _(sym,string) string,
+  foreach_tcp6_uri_input_error
+#undef _
+};
+
+typedef enum {
+  TCP6_URI_INPUT_NEXT_DROP,
+  TCP6_URI_INPUT_N_NEXT,
+} tcp6_uri_input_next_t;
+
+static uword
+tcp6_uri_input_node_fn (vlib_main_t * vm,
+                  vlib_node_runtime_t * node,
+                  vlib_frame_t * frame)
+{
+  clib_warning ("unimplmented");
+  return 0;
+}
+
+VLIB_REGISTER_NODE (tcp6_uri_input_node) = {
+  .function = tcp6_uri_input_node_fn,
+  .name = "tcp6-uri-input",
+  .vector_size = sizeof (u32),
+  .format_trace = format_tcp6_uri_input_trace,
+  .type = VLIB_NODE_TYPE_INTERNAL,
+
+  .n_errors = ARRAY_LEN(tcp6_uri_input_error_strings),
+  .error_strings = tcp6_uri_input_error_strings,
+
+  .n_next_nodes = TCP6_URI_INPUT_N_NEXT,
+
+  /* edit / add dispositions here */
+  .next_nodes = {
+    [TCP6_URI_INPUT_NEXT_DROP] = "error-drop",
   },
 };
 

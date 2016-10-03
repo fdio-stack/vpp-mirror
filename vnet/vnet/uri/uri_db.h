@@ -16,11 +16,11 @@
 #define __included_uri_db_h__
 
 #include <vlibmemory/unix_shared_memory_queue.h>
-#include "udp_session.h"
+#include <vnet/uri/udp_session.h>
 #include <vppinfra/sparse_vec.h>
 #include <svm_fifo_segment.h>
 #include <vppinfra/bihash_16_8.h>
-
+#include <vlibmemory/api.h>
 
 /** @file
     URI-related database
@@ -82,6 +82,8 @@ typedef CLIB_PACKED(struct
   u16 enqueue_length;
 }) fifo_event_t;
 
+typedef clib_bihash_kv_16_8_t session_key_t;
+
 typedef struct
 {
   /** fifo pointers. Once allocated, these do not move */
@@ -112,13 +114,19 @@ typedef struct
   /** svm segment index */
   u32 server_segment_index;
 
-  union 
-  {
-    udp4_session_t u4;
-    /* udp6_session_t u6 */
-    /* tcp4_session_t t4; */
-    /* tcp4_session_t t6; */
-  };
+  /** index into transport specific pool */
+  u32 transport_connection_index;
+
+  /** transport computed session key */
+  session_key_t session_key;
+
+//  union
+//  {
+//    udp4_session_t u4;
+//    /* udp6_session_t u6 */
+//    /* tcp4_session_t t4; */
+//    /* tcp4_session_t t6; */
+//  };
 } stream_session_t;
 
 struct _stream_server_main;
@@ -164,7 +172,7 @@ typedef struct _stream_server_main
   stream_server_t * servers;
 
   /** Sparse vector to map dst port to stream server  */
-  u16 * stream_server_by_dst_port;
+  u16 * stream_server_by_dst_port[SESSION_TYPE_N_TYPES];
 
   /** per-worker enqueue epoch counters */
   u8 * current_enqueue_epoch;
@@ -188,22 +196,30 @@ typedef struct _stream_server_main
 
 extern stream_server_main_t stream_server_main;
 extern vlib_node_registration_t udp4_uri_input_node;
+extern vlib_node_registration_t tcp4_uri_input_node;
+extern vlib_node_registration_t tcp6_uri_input_node;
 
-u32 uri_tx_ip4_udp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b);
-u32 uri_tx_ip4_tcp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b);
-u32 uri_tx_ip6_udp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b);
-u32 uri_tx_ip6_tcp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b);
-u32 uri_tx_fifo (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b);
+stream_session_t *
+v4_stream_session_create (stream_server_main_t *ssm, stream_server_t * ss,
+                          stream_session_type_t session_type,
+                          clib_bihash_kv_16_8_t session_key,
+                          u32 connection_index, int my_thread_index);
+void
+v4_stream_session_delete (stream_server_main_t *ssm, stream_session_t * s);
 
-int vnet_unbind_udp4_uri (char *uri, u32 api_client_index);
-int vnet_disconnect_udp4_uri (char * uri, u32 api_client_index);
+always_inline int
+check_api_queue_full (stream_server_t *ss)
+{
+  unix_shared_memory_queue_t * q;
 
-stream_session_t * v4_stream_session_create (stream_server_main_t *ssm, 
-                                             stream_server_t * ss, 
-                                             udp4_session_key_t * key0,
-                                             int my_thread_index, int is_tcp);
-format_function_t format_ip4_stream_session;
+  q = vl_api_client_index_to_input_queue (ss->api_client_index);
+  if (!q)
+    return 1;
 
+  if (q->cursize == q->maxsize)
+    return 1;
+  return 0;
+}
 /*
  * fd.io coding-style-patch-verification: ON
  *

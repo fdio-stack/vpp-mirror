@@ -15,11 +15,12 @@
 #ifndef __included_uri_h__
 #define __included_uri_h__
 
-#include "uri_db.h"
+#include <vnet/uri/uri_db.h>
 
 #include <vlib/vlib.h>
 #include <vnet/vnet.h>
 #include <svm_fifo_segment.h>
+#include <vppinfra/bihash_16_8.h>
 
 typedef struct
 {
@@ -77,7 +78,30 @@ int vnet_connect_uri (char * uri, u32 api_client_index,
 int vnet_disconnect_uri_session (u32 client_index, u32 session_index,
                                  u32 thread_index);
 
-int vnet_bind_udp4_uri (vnet_bind_uri_args_t * a);
+/** pool of udp4 sessions per worker thread FIXME move to udp main */
+udp4_session_t ** udp4_sessions;
+
+u32 vnet_bind_ip4_udp_uri (uri_main_t * um, u16 port);
+u32 vnet_bind_ip6_udp_uri (uri_main_t * um, u16 port);
+u32 vnet_bind_ip4_tcp_uri (uri_main_t * um, u16 port);
+u32 vnet_bind_ip6_tcp_uri (uri_main_t * um, u16 port);
+u32 vnet_bind_fifo_uri (uri_main_t * um, u16 port);
+u32 vnet_unbind_ip4_udp_uri (uri_main_t * um, u16 port);
+u32 vnet_unbind_ip6_udp_uri (uri_main_t * um, u16 port);
+u32 vnet_unbind_ip4_tcp_uri (uri_main_t * um, u16 port);
+u32 vnet_unbind_ip6_tcp_uri (uri_main_t * um, u16 port);
+u32 vnet_unbind_fifo_uri (uri_main_t * um, u16 port);
+u32 uri_tx_ip4_udp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b);
+u32 uri_tx_ip4_tcp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b);
+u32 uri_tx_ip6_udp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b);
+u32 uri_tx_ip6_tcp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b);
+u32 uri_tx_fifo (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b);
+
+u8* format_stream_session_ip4_tcp(u8 *s, va_list *args);
+u8* format_stream_session_ip6_tcp(u8 *s, va_list *args);
+u8* format_stream_session_ip4_udp(u8 *s, va_list *args);
+u8* format_stream_session_ip6_udp(u8 *s, va_list *args);
+u8* format_stream_session_fifo(u8 *s, va_list *args);
 
 format_function_t format_bind_table_entry;
 

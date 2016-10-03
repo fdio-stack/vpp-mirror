@@ -28,8 +28,11 @@ typedef CLIB_PACKED (struct
       ip4_address_t dst;
       u16 src_port; 
       u16 dst_port;
-      /* align by making this 4 octets even though its a 1-bit field */
-      u32 is_tcp;
+      /* align by making this 4 octets even though its a 1-bit field
+       * NOTE: avoid key overlap with other transports that use 5 tuples for
+       * session identification.
+       */
+      u32 session_type;
     };
     u64 as_u64[2];
   };
@@ -37,7 +40,7 @@ typedef CLIB_PACKED (struct
 
 typedef struct
 {
-  u8 session_type;
+//  u8 session_type;
   u8 state;
   /** ersatz MTU to limit fifo pushes to test data size */
   u32 mtu;

@@ -22,12 +22,19 @@
 
 typedef CLIB_PACKED(struct
 {
-  /* 16 octets */
-  ip4_address_t src;
-  ip4_address_t dst;
-  u16 src_port;
-  u16 dst_port;
-  u32 unused_for_now;
+  union
+  {
+    struct
+    {
+      /* 16 octets */
+      ip4_address_t src;
+      ip4_address_t dst;
+      u16 src_port;
+      u16 dst_port;
+      u32 session_type;
+    };
+    u64 as_u64[2];
+  };
 }) tcp4_session_key_t;
 
 typedef CLIB_PACKED(struct
@@ -37,7 +44,8 @@ typedef CLIB_PACKED(struct
   ip6_address_t dst;
   u16 src_port;
   u16 dst_port;
-  u8 unused_for_now [12];
+  u32 session_type;
+  u8 unused_for_now [8];
 }) tcp6_session_key_t;
 
 /* Provisionally assume 32-bit timers */
@@ -347,7 +355,7 @@ typedef struct _tcp_main
 tcp_main_t tcp_main;
 
 always_inline tcp_main_t *
-vnet_get_tcp_main()
+vnet_get_tcp_main ()
 {
   return &tcp_main;
 }
