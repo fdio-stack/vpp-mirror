@@ -39,13 +39,20 @@ typedef CLIB_PACKED(struct
 
 typedef CLIB_PACKED(struct
 {
-  /* 48 octets */
-  ip6_address_t src;
-  ip6_address_t dst;
-  u16 src_port;
-  u16 dst_port;
-  u32 session_type;
-  u8 unused_for_now [8];
+  union
+  {
+    struct
+    {
+      /* 48 octets */
+      ip6_address_t src;
+      ip6_address_t dst;
+      u16 src_port;
+      u16 dst_port;
+      u32 session_type;
+      u8 unused_for_now [8];
+    };
+    u64 as_u64[6];
+  };
 }) tcp6_session_key_t;
 
 /* Provisionally assume 32-bit timers */

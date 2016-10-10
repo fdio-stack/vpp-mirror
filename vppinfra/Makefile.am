@@ -161,6 +161,7 @@ nobase_include_HEADERS = \
   vppinfra/bihash_8_8.h \
   vppinfra/bihash_16_8.h \
   vppinfra/bihash_24_8.h \
+  vppinfra/bihash_48_8.h \
   vppinfra/bihash_template.h \
   vppinfra/bihash_template.c \
   vppinfra/bitmap.h \

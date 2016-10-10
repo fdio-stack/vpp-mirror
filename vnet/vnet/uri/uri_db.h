@@ -16,11 +16,12 @@
 #define __included_uri_db_h__
 
 #include <vlibmemory/unix_shared_memory_queue.h>
-#include <vnet/uri/udp_session.h>
+#include <vlibmemory/api.h>
+#include <vppinfra/bihash_16_8.h>
+#include <vppinfra/bihash_48_8.h>
 #include <vppinfra/sparse_vec.h>
 #include <svm_fifo_segment.h>
-#include <vppinfra/bihash_16_8.h>
-#include <vlibmemory/api.h>
+#include <vnet/uri/udp_session.h>
 
 /** @file
     URI-related database
@@ -163,7 +164,7 @@ typedef struct _stream_server_main
   /** Lookup tables */
   clib_bihash_16_8_t v4_session_hash;
 
-  // clib_bihash_48_8_t v6_session_hash;
+  clib_bihash_48_8_t v6_session_hash;
 
   /** per worker thread session pools */
   stream_session_t **sessions;
@@ -206,6 +207,12 @@ v4_stream_session_create (stream_server_main_t *ssm, stream_server_t * ss,
                           u32 connection_index, int my_thread_index);
 void
 v4_stream_session_delete (stream_server_main_t *ssm, stream_session_t * s);
+
+stream_session_t *
+v6_stream_session_create (stream_server_main_t *ssm, stream_server_t * ss,
+                          stream_session_type_t session_type,
+                          clib_bihash_kv_48_8_t session_key,
+                          u32 connection_index, int my_thread_index);
 
 always_inline int
 check_api_queue_full (stream_server_t *ss)

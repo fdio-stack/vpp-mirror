@@ -139,6 +139,19 @@ v4_stream_session_delete (stream_server_main_t *ssm, stream_session_t * s)
   pool_put (ssm->sessions[my_thread_index], s);
 }
 
+/** Create a session, ping the server by callback */
+stream_session_t *
+v6_stream_session_create (stream_server_main_t *ssm,
+                          stream_server_t * ss,
+                          stream_session_type_t session_type,
+                          clib_bihash_kv_48_8_t session_key,
+                          u32 connection_index,
+                          int my_thread_index)
+{
+  clib_warning("unimplemented");
+  return 0;
+}
+
 /* types: fifo, tcp4, udp4, tcp6, udp6 */
 
 u8 *
