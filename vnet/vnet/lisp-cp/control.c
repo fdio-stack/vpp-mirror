@@ -18,6 +18,8 @@
 #include <vnet/lisp-cp/packets.h>
 #include <vnet/lisp-cp/lisp_msg_serdes.h>
 #include <vnet/lisp-gpe/lisp_gpe.h>
+#include <vnet/lisp-gpe/lisp_gpe_fwd_entry.h>
+#include <vnet/lisp-gpe/lisp_gpe_tenant.h>
 #include <vnet/fib/fib_entry.h>
 #include <vnet/fib/fib_table.h>
 
@@ -167,8 +169,7 @@ ip_fib_get_first_egress_ip_for_dst (lisp_cp_main_t * lcm, ip_address_t * dst,
 static int
 dp_add_del_iface (lisp_cp_main_t * lcm, u32 vni, u8 is_l2, u8 is_add)
 {
-  uword *dp_table, *intf;
-  vnet_lisp_gpe_add_del_iface_args_t _ai, *ai = &_ai;
+  uword *dp_table;
 
   if (!is_l2)
     {
@@ -190,38 +191,20 @@ dp_add_del_iface (lisp_cp_main_t * lcm, u32 vni, u8 is_l2, u8 is_add)
 	}
     }
 
-  intf = hash_get (is_l2 ? lcm->l2_dp_intf_by_vni : lcm->dp_intf_by_vni, vni);
-
   /* enable/disable data-plane interface */
   if (is_add)
     {
-      /* create interface */
-      if (!intf)
-	{
-	  ai->is_add = 1;
-	  ai->vni = vni;
-	  ai->is_l2 = is_l2;
-	  ai->dp_table = dp_table[0];
-
-	  vnet_lisp_gpe_add_del_iface (ai, 0);
-
-	  /* keep track of vnis for which interfaces have been created */
-	  hash_set (lcm->dp_intf_by_vni, vni, 1);
-	}
+      if (is_l2)
+	lisp_gpe_tenant_l2_iface_add_or_lock (vni, dp_table[0]);
+      else
+	lisp_gpe_tenant_l3_iface_add_or_lock (vni, dp_table[0]);
     }
   else
     {
-      if (intf == 0)
-	{
-	  clib_warning ("interface for vni %d doesn't exist!", vni);
-	  return VNET_API_ERROR_INVALID_VALUE;
-	}
-
-      ai->is_add = 0;
-      ai->vni = vni;
-      ai->dp_table = dp_table[0];
-      vnet_lisp_gpe_add_del_iface (ai, 0);
-      hash_unset (lcm->dp_intf_by_vni, vni);
+      if (is_l2)
+	lisp_gpe_tenant_l2_iface_unlock (vni);
+      else
+	lisp_gpe_tenant_l3_iface_unlock (vni);
     }
 
   return 0;
@@ -245,8 +228,8 @@ dp_del_fwd_entry (lisp_cp_main_t * lcm, u32 src_map_index, u32 dst_map_index)
   u32 sw_if_index;
   a->is_add = 0;
   a->locator_pairs = fe->locator_pairs;
-  a->vni = gid_address_vni (&fe->deid);
-  gid_address_copy (&a->rmt_eid, &fe->deid);
+  a->vni = gid_address_vni (&fe->reid);
+  gid_address_copy (&a->rmt_eid, &fe->reid);
 
   vnet_lisp_gpe_add_del_fwd_entry (a, &sw_if_index);
 
@@ -394,7 +377,10 @@ dp_add_fwd_entry (lisp_cp_main_t * lcm, u32 src_map_index, u32 dst_map_index)
   if (feip)
     dp_del_fwd_entry (lcm, src_map_index, dst_map_index);
 
-  src_map = pool_elt_at_index (lcm->mapping_pool, src_map_index);
+  if (lcm->lisp_pitr)
+    src_map = pool_elt_at_index (lcm->mapping_pool, lcm->pitr_map_index);
+  else
+    src_map = pool_elt_at_index (lcm->mapping_pool, src_map_index);
   dst_map = pool_elt_at_index (lcm->mapping_pool, dst_map_index);
 
   /* insert data plane forwarding entry */
@@ -453,7 +439,7 @@ dp_add_fwd_entry (lisp_cp_main_t * lcm, u32 src_map_index, u32 dst_map_index)
   /* add tunnel to fwd entry table XXX check return value from DP insertion */
   pool_get (lcm->fwd_entry_pool, fe);
   fe->locator_pairs = a->locator_pairs;
-  gid_address_copy (&fe->deid, &a->rmt_eid);
+  gid_address_copy (&fe->reid, &a->rmt_eid);
   hash_set (lcm->fwd_entry_by_mapping_index, dst_map_index,
 	    fe - lcm->fwd_entry_pool);
 }
@@ -1032,7 +1018,7 @@ int
 vnet_lisp_add_del_adjacency (vnet_lisp_add_del_adjacency_args_t * a)
 {
   lisp_cp_main_t *lcm = vnet_lisp_cp_get_main ();
-  return lisp_add_del_adjacency (lcm, &a->seid, &a->deid, a->is_add);
+  return lisp_add_del_adjacency (lcm, &a->leid, &a->reid, a->is_add);
 }
 
 /**
@@ -1178,26 +1164,23 @@ lisp_add_del_adjacency_command_fn (vlib_main_t * vm, unformat_input_t * input,
   unformat_input_t _line_input, *line_input = &_line_input;
   vnet_lisp_add_del_adjacency_args_t _a, *a = &_a;
   u8 is_add = 1;
-  locator_t rloc, *rlocs = 0;
-  ip_prefix_t *deid_ippref, *seid_ippref;
-  gid_address_t seid, deid;
-  u8 *dmac = gid_address_mac (&deid);
-  u8 *smac = gid_address_mac (&seid);
-  u8 deid_set = 0, seid_set = 0;
-  u8 *s = 0;
-  u32 vni, action = ~0;
+  ip_prefix_t *reid_ippref, *leid_ippref;
+  gid_address_t leid, reid;
+  u8 *dmac = gid_address_mac (&reid);
+  u8 *smac = gid_address_mac (&leid);
+  u8 reid_set = 0, leid_set = 0;
+  u32 vni;
   int rv;
 
   /* Get a line of input. */
   if (!unformat_user (input, unformat_line_input, line_input))
     return 0;
 
-  memset (&deid, 0, sizeof (deid));
-  memset (&seid, 0, sizeof (seid));
-  memset (&rloc, 0, sizeof (rloc));
+  memset (&reid, 0, sizeof (reid));
+  memset (&leid, 0, sizeof (leid));
 
-  seid_ippref = &gid_address_ippref (&seid);
-  deid_ippref = &gid_address_ippref (&deid);
+  leid_ippref = &gid_address_ippref (&leid);
+  reid_ippref = &gid_address_ippref (&reid);
 
   while (unformat_check_input (line_input) != UNFORMAT_END_OF_INPUT)
     {
@@ -1205,32 +1188,32 @@ lisp_add_del_adjacency_command_fn (vlib_main_t * vm, unformat_input_t * input,
 	is_add = 0;
       else if (unformat (line_input, "add"))
 	;
-      else if (unformat (line_input, "deid %U",
-			 unformat_ip_prefix, deid_ippref))
+      else if (unformat (line_input, "reid %U",
+			 unformat_ip_prefix, reid_ippref))
 	{
-	  gid_address_type (&deid) = GID_ADDR_IP_PREFIX;
-	  deid_set = 1;
+	  gid_address_type (&reid) = GID_ADDR_IP_PREFIX;
+	  reid_set = 1;
 	}
-      else if (unformat (line_input, "deid %U", unformat_mac_address, dmac))
+      else if (unformat (line_input, "reid %U", unformat_mac_address, dmac))
 	{
-	  gid_address_type (&deid) = GID_ADDR_MAC;
-	  deid_set = 1;
+	  gid_address_type (&reid) = GID_ADDR_MAC;
+	  reid_set = 1;
 	}
       else if (unformat (line_input, "vni %u", &vni))
 	{
-	  gid_address_vni (&seid) = vni;
-	  gid_address_vni (&deid) = vni;
+	  gid_address_vni (&leid) = vni;
+	  gid_address_vni (&reid) = vni;
 	}
-      else if (unformat (line_input, "seid %U",
-			 unformat_ip_prefix, seid_ippref))
+      else if (unformat (line_input, "leid %U",
+			 unformat_ip_prefix, leid_ippref))
 	{
-	  gid_address_type (&seid) = GID_ADDR_IP_PREFIX;
-	  seid_set = 1;
+	  gid_address_type (&leid) = GID_ADDR_IP_PREFIX;
+	  leid_set = 1;
 	}
-      else if (unformat (line_input, "seid %U", unformat_mac_address, smac))
+      else if (unformat (line_input, "leid %U", unformat_mac_address, smac))
 	{
-	  gid_address_type (&seid) = GID_ADDR_MAC;
-	  seid_set = 1;
+	  gid_address_type (&leid) = GID_ADDR_MAC;
+	  leid_set = 1;
 	}
       else
 	{
@@ -1239,39 +1222,24 @@ lisp_add_del_adjacency_command_fn (vlib_main_t * vm, unformat_input_t * input,
 	}
     }
 
-  if (!deid_set)
+  if (!reid_set || !leid_set)
     {
-      clib_warning ("missing deid!");
+      clib_warning ("missing remote or local eid!");
       goto done;
     }
 
-  if (GID_ADDR_IP_PREFIX == gid_address_type (&deid))
+  if ((gid_address_type (&leid) != gid_address_type (&reid))
+      || (gid_address_type (&reid) == GID_ADDR_IP_PREFIX
+	  && ip_prefix_version (reid_ippref)
+	  != ip_prefix_version (leid_ippref)))
     {
-      /* if seid not set, make sure the ip version is the same as that
-       * of the deid. This ensures the seid to be configured will be
-       * either 0/0 or ::/0 */
-      if (!seid_set)
-	ip_prefix_version (seid_ippref) = ip_prefix_version (deid_ippref);
-
-      if (is_add &&
-	  (ip_prefix_version (deid_ippref)
-	   != ip_prefix_version (seid_ippref)))
-	{
-	  clib_warning ("source and destination EIDs are not"
-			" in the same IP family!");
-	  goto done;
-	}
-    }
-
-  if (is_add && (~0 == action) && 0 == vec_len (rlocs))
-    {
-      clib_warning ("no action set for negative map-reply!");
-      goto done;
+      clib_warning ("remote and local EIDs are of different types!");
+      return error;
     }
 
   memset (a, 0, sizeof (a[0]));
-  gid_address_copy (&a->seid, &deid);
-  gid_address_copy (&a->deid, &seid);
+  gid_address_copy (&a->leid, &leid);
+  gid_address_copy (&a->reid, &reid);
 
   a->is_add = is_add;
   rv = vnet_lisp_add_del_adjacency (a);
@@ -1281,17 +1249,14 @@ lisp_add_del_adjacency_command_fn (vlib_main_t * vm, unformat_input_t * input,
 
 done:
   unformat_free (line_input);
-  if (s)
-    vec_free (s);
   return error;
 }
 
 /* *INDENT-OFF* */
 VLIB_CLI_COMMAND (lisp_add_del_adjacency_command) = {
     .path = "lisp adjacency",
-    .short_help = "lisp adjacency add|del vni <vni>"
-     "deid <dest-eid> seid <src-eid> [action <no-action|natively-forward|"
-     "send-map-request|drop>] rloc <dst-locator> [rloc <dst-locator> ... ]",
+    .short_help = "lisp adjacency add|del vni <vni> reid <remote-eid> "
+      "leid <local-eid>",
     .function = lisp_add_del_adjacency_command_fn,
 };
 /* *INDENT-ON* */
@@ -2059,7 +2024,6 @@ vnet_lisp_enable_disable (u8 is_enable)
   else
     {
       /* clear interface table */
-      hash_free (lcm->dp_intf_by_vni);
       hash_free (lcm->fwd_entry_by_mapping_index);
       pool_free (lcm->fwd_entry_pool);
     }
@@ -2580,7 +2544,7 @@ lisp_add_del_mreq_itr_rlocs_command_fn (vlib_main_t * vm,
     {
       if (unformat (line_input, "del"))
 	is_add = 0;
-      else if (unformat (line_input, "add %s", &locator_set_name))
+      else if (unformat (line_input, "add %_%v%_", &locator_set_name))
 	is_add = 1;
       else
 	{
@@ -2665,8 +2629,6 @@ typedef enum
 typedef enum
 {
   LISP_CP_LOOKUP_NEXT_DROP,
-  LISP_CP_LOOKUP_NEXT_IP4_LOOKUP,
-  LISP_CP_LOOKUP_NEXT_IP6_LOOKUP,
   LISP_CP_LOOKUP_N_NEXT,
 } lisp_cp_lookup_next_t;
 
@@ -3225,6 +3187,13 @@ lisp_cp_lookup_ip6 (vlib_main_t * vm,
   return (lisp_cp_lookup_inline (vm, node, from_frame, LISP_AFI_IP6));
 }
 
+static uword
+lisp_cp_lookup_l2 (vlib_main_t * vm,
+		   vlib_node_runtime_t * node, vlib_frame_t * from_frame)
+{
+  return (lisp_cp_lookup_inline (vm, node, from_frame, LISP_AFI_MAC));
+}
+
 /* *INDENT-OFF* */
 VLIB_REGISTER_NODE (lisp_cp_lookup_ip4_node) = {
   .function = lisp_cp_lookup_ip4,
@@ -3240,8 +3209,6 @@ VLIB_REGISTER_NODE (lisp_cp_lookup_ip4_node) = {
 
   .next_nodes = {
       [LISP_CP_LOOKUP_NEXT_DROP] = "error-drop",
-      [LISP_CP_LOOKUP_NEXT_IP4_LOOKUP] = "ip4-lookup",
-      [LISP_CP_LOOKUP_NEXT_IP6_LOOKUP] = "ip6-lookup",
   },
 };
 /* *INDENT-ON* */
@@ -3261,8 +3228,25 @@ VLIB_REGISTER_NODE (lisp_cp_lookup_ip6_node) = {
 
   .next_nodes = {
       [LISP_CP_LOOKUP_NEXT_DROP] = "error-drop",
-      [LISP_CP_LOOKUP_NEXT_IP4_LOOKUP] = "ip4-lookup",
-      [LISP_CP_LOOKUP_NEXT_IP6_LOOKUP] = "ip6-lookup",
+  },
+};
+/* *INDENT-ON* */
+
+/* *INDENT-OFF* */
+VLIB_REGISTER_NODE (lisp_cp_lookup_l2_node) = {
+  .function = lisp_cp_lookup_l2,
+  .name = "lisp-cp-lookup-l2",
+  .vector_size = sizeof (u32),
+  .format_trace = format_lisp_cp_lookup_trace,
+  .type = VLIB_NODE_TYPE_INTERNAL,
+
+  .n_errors = LISP_CP_LOOKUP_N_ERROR,
+  .error_strings = lisp_cp_lookup_error_strings,
+
+  .n_next_nodes = LISP_CP_LOOKUP_N_NEXT,
+
+  .next_nodes = {
+      [LISP_CP_LOOKUP_NEXT_DROP] = "error-drop",
   },
 };
 /* *INDENT-ON* */
@@ -3578,14 +3562,17 @@ send_map_request_thread_fn (void *arg)
   map_request_args_t *a = arg;
   lisp_cp_main_t *lcm = vnet_lisp_cp_get_main ();
 
-  lisp_pending_map_request_lock (lcm);
-
   if (a->is_resend)
+    /* if resending, we already have the lock */
     resend_encapsulated_map_request (lcm, &a->seid, &a->deid, a->smr_invoked);
   else
-    send_encapsulated_map_request (lcm, &a->seid, &a->deid, a->smr_invoked);
+    {
+      /* get lock before sending map-request */
+      lisp_pending_map_request_lock (lcm);
+      send_encapsulated_map_request (lcm, &a->seid, &a->deid, a->smr_invoked);
+      lisp_pending_map_request_unlock (lcm);
+    }
 
-  lisp_pending_map_request_unlock (lcm);
 
   return 0;
 }

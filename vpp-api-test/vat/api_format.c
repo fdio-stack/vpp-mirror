@@ -2,7 +2,7 @@
  *------------------------------------------------------------------
  * api_format.c
  *
- * Copyright (c) 2014 Cisco and/or its affiliates.
+ * Copyright (c) 2014-2016 Cisco and/or its affiliates.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at:
@@ -35,6 +35,7 @@
 #include <vnet/l2/l2_vtr.h>
 #include <vnet/classify/input_acl.h>
 #include <vnet/classify/policer_classify.h>
+#include <vnet/classify/flow_classify.h>
 #include <vnet/mpls/mpls.h>
 #if DPDK > 0
 #include <vnet/ipsec/ipsec.h>
@@ -456,7 +457,7 @@ unformat_policer_action_type (unformat_input_t * input, va_list * va)
 }
 
 uword
-unformat_classify_table_type (unformat_input_t * input, va_list * va)
+unformat_policer_classify_table_type (unformat_input_t * input, va_list * va)
 {
   u32 *r = va_arg (*va, u32 *);
   u32 tid;
@@ -467,6 +468,23 @@ unformat_classify_table_type (unformat_input_t * input, va_list * va)
     tid = POLICER_CLASSIFY_TABLE_IP6;
   else if (unformat (input, "l2"))
     tid = POLICER_CLASSIFY_TABLE_L2;
+  else
+    return 0;
+
+  *r = tid;
+  return 1;
+}
+
+uword
+unformat_flow_classify_table_type (unformat_input_t * input, va_list * va)
+{
+  u32 *r = va_arg (*va, u32 *);
+  u32 tid;
+
+  if (unformat (input, "ip4"))
+    tid = FLOW_CLASSIFY_TABLE_IP4;
+  else if (unformat (input, "ip6"))
+    tid = FLOW_CLASSIFY_TABLE_IP6;
   else
     return 0;
 
@@ -3370,6 +3388,35 @@ static void vl_api_ipsec_gre_add_del_tunnel_reply_t_handler_json
   vam->result_ready = 1;
 }
 
+static void vl_api_flow_classify_details_t_handler
+  (vl_api_flow_classify_details_t * mp)
+{
+  vat_main_t *vam = &vat_main;
+
+  fformat (vam->ofp, "%10d%20d\n", ntohl (mp->sw_if_index),
+	   ntohl (mp->table_index));
+}
+
+static void vl_api_flow_classify_details_t_handler_json
+  (vl_api_flow_classify_details_t * mp)
+{
+  vat_main_t *vam = &vat_main;
+  vat_json_node_t *node;
+
+  if (VAT_JSON_ARRAY != vam->json_tree.type)
+    {
+      ASSERT (VAT_JSON_NONE == vam->json_tree.type);
+      vat_json_init_array (&vam->json_tree);
+    }
+  node = vat_json_array_add (&vam->json_tree);
+
+  vat_json_init_object (node);
+  vat_json_object_add_uint (node, "sw_if_index", ntohl (mp->sw_if_index));
+  vat_json_object_add_uint (node, "table_index", ntohl (mp->table_index));
+}
+
+
+
 #define vl_api_vnet_ip4_fib_counters_t_endian vl_noop_handler
 #define vl_api_vnet_ip4_fib_counters_t_print vl_noop_handler
 #define vl_api_vnet_ip6_fib_counters_t_endian vl_noop_handler
@@ -3477,11 +3524,14 @@ _(netmap_delete_reply)                                  \
 _(set_ipfix_exporter_reply)                             \
 _(set_ipfix_classify_stream_reply)                      \
 _(ipfix_classify_table_add_del_reply)                   \
+_(flow_classify_set_interface_reply)                    \
 _(pg_capture_reply)                                     \
 _(pg_enable_disable_reply)                              \
 _(ip_source_and_port_range_check_add_del_reply)         \
 _(ip_source_and_port_range_check_interface_add_del_reply)\
-_(delete_subif_reply)
+_(delete_subif_reply)                                   \
+_(l2_interface_pbb_tag_rewrite_reply)                   \
+_(punt_reply)
 
 #define _(n)                                    \
     static void vl_api_##n##_t_handler          \
@@ -3704,6 +3754,8 @@ _(SET_IPFIX_CLASSIFY_STREAM_REPLY, set_ipfix_classify_stream_reply)     \
 _(IPFIX_CLASSIFY_STREAM_DETAILS, ipfix_classify_stream_details)         \
 _(IPFIX_CLASSIFY_TABLE_ADD_DEL_REPLY, ipfix_classify_table_add_del_reply) \
 _(IPFIX_CLASSIFY_TABLE_DETAILS, ipfix_classify_table_details)           \
+_(FLOW_CLASSIFY_SET_INTERFACE_REPLY, flow_classify_set_interface_reply) \
+_(FLOW_CLASSIFY_DETAILS, flow_classify_details)                         \
 _(GET_NEXT_INDEX_REPLY, get_next_index_reply)                           \
 _(PG_CREATE_INTERFACE_REPLY, pg_create_interface_reply)                 \
 _(PG_CAPTURE_REPLY, pg_capture_reply)                                   \
@@ -3714,7 +3766,9 @@ _(IP_SOURCE_AND_PORT_RANGE_CHECK_INTERFACE_ADD_DEL_REPLY,               \
  ip_source_and_port_range_check_interface_add_del_reply)                \
 _(IPSEC_GRE_ADD_DEL_TUNNEL_REPLY, ipsec_gre_add_del_tunnel_reply)       \
 _(IPSEC_GRE_TUNNEL_DETAILS, ipsec_gre_tunnel_details)                   \
-_(DELETE_SUBIF_REPLY, delete_subif_reply)
+_(DELETE_SUBIF_REPLY, delete_subif_reply)                               \
+_(L2_INTERFACE_PBB_TAG_REWRITE_REPLY, l2_interface_pbb_tag_rewrite_reply) \
+_(PUNT_REPLY, punt_reply)
 
 /* M: construct, but don't yet send a message */
 
@@ -4371,6 +4425,11 @@ api_sw_interface_dump (vat_main_t * vam)
   strncpy ((char *) mp->name_filter, "lo", sizeof (mp->name_filter) - 1);
   S;
 
+  /* and packet-generator interfaces */
+  M (SW_INTERFACE_DUMP, sw_interface_dump);
+  mp->name_filter_valid = 1;
+  strncpy ((char *) mp->name_filter, "pg", sizeof (mp->name_filter) - 1);
+  S;
 
   /* and vxlan-gpe tunnel interfaces */
   M (SW_INTERFACE_DUMP, sw_interface_dump);
@@ -5633,7 +5692,7 @@ api_ip_add_del_route (vat_main_t * vam)
   u32 random_seed = 0xdeaddabe;
   u32 classify_table_index = ~0;
   u8 is_classify = 0;
-  u8 resolve_host, resolve_attached;
+  u8 resolve_host = 0, resolve_attached = 0;
 
   /* Parse args required to build the message */
   while (unformat_check_input (i) != UNFORMAT_END_OF_INPUT)
@@ -5820,6 +5879,9 @@ api_ip_add_del_route (vat_main_t * vam)
 	}
       /* send it... */
       S;
+      /* If we receive SIGTERM, stop now... */
+      if (vam->do_exit)
+	break;
     }
 
   /* When testing multiple add/del ops, use a control-ping to sync */
@@ -5851,6 +5913,10 @@ api_ip_add_del_route (vat_main_t * vam)
 	}
       vam->async_errors = 0;
       after = vat_time_now (vam);
+
+      /* slim chance, but we might have eaten SIGTERM on the first iteration */
+      if (j > 0)
+	count = j;
 
       fformat (vam->ofp, "%d routes in %.6f secs, %.2f routes/sec\n",
 	       count, after - before, count / (after - before));
@@ -7770,15 +7836,146 @@ api_sr_multicast_map_add_del (vat_main_t * vam)
 }
 
 
+#define foreach_tcp_proto_field                 \
+_(src_port)                                     \
+_(dst_port)
+
+#define foreach_udp_proto_field                 \
+_(src_port)                                     \
+_(dst_port)
+
 #define foreach_ip4_proto_field                 \
 _(src_address)                                  \
 _(dst_address)                                  \
 _(tos)                                          \
-_(length)					\
+_(length)                                       \
 _(fragment_id)                                  \
 _(ttl)                                          \
 _(protocol)                                     \
 _(checksum)
+
+uword
+unformat_tcp_mask (unformat_input_t * input, va_list * args)
+{
+  u8 **maskp = va_arg (*args, u8 **);
+  u8 *mask = 0;
+  u8 found_something = 0;
+  tcp_header_t *tcp;
+
+#define _(a) u8 a=0;
+  foreach_tcp_proto_field;
+#undef _
+
+  while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
+    {
+      if (0);
+#define _(a) else if (unformat (input, #a)) a=1;
+      foreach_tcp_proto_field
+#undef _
+	else
+	break;
+    }
+
+#define _(a) found_something += a;
+  foreach_tcp_proto_field;
+#undef _
+
+  if (found_something == 0)
+    return 0;
+
+  vec_validate (mask, sizeof (*tcp) - 1);
+
+  tcp = (tcp_header_t *) mask;
+
+#define _(a) if (a) memset (&tcp->a, 0xff, sizeof (tcp->a));
+  foreach_tcp_proto_field;
+#undef _
+
+  *maskp = mask;
+  return 1;
+}
+
+uword
+unformat_udp_mask (unformat_input_t * input, va_list * args)
+{
+  u8 **maskp = va_arg (*args, u8 **);
+  u8 *mask = 0;
+  u8 found_something = 0;
+  udp_header_t *udp;
+
+#define _(a) u8 a=0;
+  foreach_udp_proto_field;
+#undef _
+
+  while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
+    {
+      if (0);
+#define _(a) else if (unformat (input, #a)) a=1;
+      foreach_udp_proto_field
+#undef _
+	else
+	break;
+    }
+
+#define _(a) found_something += a;
+  foreach_udp_proto_field;
+#undef _
+
+  if (found_something == 0)
+    return 0;
+
+  vec_validate (mask, sizeof (*udp) - 1);
+
+  udp = (udp_header_t *) mask;
+
+#define _(a) if (a) memset (&udp->a, 0xff, sizeof (udp->a));
+  foreach_udp_proto_field;
+#undef _
+
+  *maskp = mask;
+  return 1;
+}
+
+typedef struct
+{
+  u16 src_port, dst_port;
+} tcpudp_header_t;
+
+uword
+unformat_l4_mask (unformat_input_t * input, va_list * args)
+{
+  u8 **maskp = va_arg (*args, u8 **);
+  u16 src_port = 0, dst_port = 0;
+  tcpudp_header_t *tcpudp;
+
+  while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
+    {
+      if (unformat (input, "tcp %U", unformat_tcp_mask, maskp))
+	return 1;
+      else if (unformat (input, "udp %U", unformat_udp_mask, maskp))
+	return 1;
+      else if (unformat (input, "src_port"))
+	src_port = 0xFFFF;
+      else if (unformat (input, "dst_port"))
+	dst_port = 0xFFFF;
+      else
+	return 0;
+    }
+
+  if (!src_port && !dst_port)
+    return 0;
+
+  u8 *mask = 0;
+  vec_validate (mask, sizeof (tcpudp_header_t) - 1);
+
+  tcpudp = (tcpudp_header_t *) mask;
+  tcpudp->src_port = src_port;
+  tcpudp->dst_port = dst_port;
+
+  *maskp = mask;
+
+  return 1;
+}
 
 uword
 unformat_ip4_mask (unformat_input_t * input, va_list * args)
@@ -8057,6 +8254,7 @@ unformat_classify_mask (unformat_input_t * input, va_list * args)
   u8 *mask = 0;
   u8 *l2 = 0;
   u8 *l3 = 0;
+  u8 *l4 = 0;
   int i;
 
   while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
@@ -8067,13 +8265,23 @@ unformat_classify_mask (unformat_input_t * input, va_list * args)
 	;
       else if (unformat (input, "l3 %U", unformat_l3_mask, &l3))
 	;
+      else if (unformat (input, "l4 %U", unformat_l4_mask, &l4))
+	;
       else
 	break;
     }
 
-  if (mask || l2 || l3)
+  if (l4 && !l3)
     {
-      if (l2 || l3)
+      vec_free (mask);
+      vec_free (l2);
+      vec_free (l4);
+      return 0;
+    }
+
+  if (mask || l2 || l3 || l4)
+    {
+      if (l2 || l3 || l4)
 	{
 	  /* "With a free Ethernet header in every package" */
 	  if (l2 == 0)
@@ -8083,6 +8291,11 @@ unformat_classify_mask (unformat_input_t * input, va_list * args)
 	    {
 	      vec_append (mask, l3);
 	      vec_free (l3);
+	    }
+	  if (vec_len (l4))
+	    {
+	      vec_append (mask, l4);
+	      vec_free (l4);
 	    }
 	}
 
@@ -8324,6 +8537,37 @@ api_classify_add_del_table (vat_main_t * vam)
 }
 
 uword
+unformat_l4_match (unformat_input_t * input, va_list * args)
+{
+  u8 **matchp = va_arg (*args, u8 **);
+
+  u8 *proto_header = 0;
+  int src_port = 0;
+  int dst_port = 0;
+
+  tcpudp_header_t h;
+
+  while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
+    {
+      if (unformat (input, "src_port %d", &src_port))
+	;
+      else if (unformat (input, "dst_port %d", &dst_port))
+	;
+      else
+	return 0;
+    }
+
+  h.src_port = clib_host_to_net_u16 (src_port);
+  h.dst_port = clib_host_to_net_u16 (dst_port);
+  vec_validate (proto_header, sizeof (h) - 1);
+  memcpy (proto_header, &h, sizeof (h));
+
+  *matchp = proto_header;
+
+  return 1;
+}
+
+uword
 unformat_ip4_match (unformat_input_t * input, va_list * args)
 {
   u8 **matchp = va_arg (*args, u8 **);
@@ -8407,13 +8651,13 @@ unformat_ip4_match (unformat_input_t * input, va_list * args)
     ip->tos = tos_val;
 
   if (length)
-    ip->length = length_val;
+    ip->length = clib_host_to_net_u16 (length_val);
 
   if (ttl)
     ip->ttl = ttl_val;
 
   if (checksum)
-    ip->checksum = checksum_val;
+    ip->checksum = clib_host_to_net_u16 (checksum_val);
 
   *matchp = match;
   return 1;
@@ -8668,6 +8912,7 @@ unformat_classify_match (unformat_input_t * input, va_list * args)
   u8 *match = 0;
   u8 *l2 = 0;
   u8 *l3 = 0;
+  u8 *l4 = 0;
 
   while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
     {
@@ -8677,13 +8922,23 @@ unformat_classify_match (unformat_input_t * input, va_list * args)
 	;
       else if (unformat (input, "l3 %U", unformat_l3_match, &l3))
 	;
+      else if (unformat (input, "l4 %U", unformat_l4_match, &l4))
+	;
       else
 	break;
     }
 
-  if (match || l2 || l3)
+  if (l4 && !l3)
     {
-      if (l2 || l3)
+      vec_free (match);
+      vec_free (l2);
+      vec_free (l4);
+      return 0;
+    }
+
+  if (match || l2 || l3 || l4)
+    {
+      if (l2 || l3 || l4)
 	{
 	  /* "Win a free Ethernet header in every packet" */
 	  if (l2 == 0)
@@ -8693,6 +8948,11 @@ unformat_classify_match (unformat_input_t * input, va_list * args)
 	    {
 	      vec_append_aligned (match, l3, sizeof (u32x4));
 	      vec_free (l3);
+	    }
+	  if (vec_len (l4))
+	    {
+	      vec_append_aligned (match, l4, sizeof (u32x4));
+	      vec_free (l4);
 	    }
 	}
 
@@ -13021,15 +13281,15 @@ api_lisp_add_del_adjacency (vat_main_t * vam)
   vl_api_lisp_add_del_adjacency_t *mp;
   f64 timeout = ~0;
   u32 vni = 0;
-  ip4_address_t seid4, deid4;
-  ip6_address_t seid6, deid6;
-  u8 deid_mac[6] = { 0 };
-  u8 seid_mac[6] = { 0 };
-  u8 deid_type, seid_type;
-  u32 seid_len = 0, deid_len = 0, len;
+  ip4_address_t leid4, reid4;
+  ip6_address_t leid6, reid6;
+  u8 reid_mac[6] = { 0 };
+  u8 leid_mac[6] = { 0 };
+  u8 reid_type, leid_type;
+  u32 leid_len = 0, reid_len = 0, len;
   u8 is_add = 1;
 
-  seid_type = deid_type = (u8) ~ 0;
+  leid_type = reid_type = (u8) ~ 0;
 
   /* Parse args required to build the message */
   while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
@@ -13042,39 +13302,39 @@ api_lisp_add_del_adjacency (vat_main_t * vam)
 	{
 	  is_add = 1;
 	}
-      else if (unformat (input, "deid %U/%d", unformat_ip4_address,
-			 &deid4, &len))
+      else if (unformat (input, "reid %U/%d", unformat_ip4_address,
+			 &reid4, &len))
 	{
-	  deid_type = 0;	/* ipv4 */
-	  deid_len = len;
+	  reid_type = 0;	/* ipv4 */
+	  reid_len = len;
 	}
-      else if (unformat (input, "deid %U/%d", unformat_ip6_address,
-			 &deid6, &len))
+      else if (unformat (input, "reid %U/%d", unformat_ip6_address,
+			 &reid6, &len))
 	{
-	  deid_type = 1;	/* ipv6 */
-	  deid_len = len;
+	  reid_type = 1;	/* ipv6 */
+	  reid_len = len;
 	}
-      else if (unformat (input, "deid %U", unformat_ethernet_address,
-			 deid_mac))
+      else if (unformat (input, "reid %U", unformat_ethernet_address,
+			 reid_mac))
 	{
-	  deid_type = 2;	/* mac */
+	  reid_type = 2;	/* mac */
 	}
-      else if (unformat (input, "seid %U/%d", unformat_ip4_address,
-			 &seid4, &len))
+      else if (unformat (input, "leid %U/%d", unformat_ip4_address,
+			 &leid4, &len))
 	{
-	  seid_type = 0;	/* ipv4 */
-	  seid_len = len;
+	  leid_type = 0;	/* ipv4 */
+	  leid_len = len;
 	}
-      else if (unformat (input, "seid %U/%d", unformat_ip6_address,
-			 &seid6, &len))
+      else if (unformat (input, "leid %U/%d", unformat_ip6_address,
+			 &leid6, &len))
 	{
-	  seid_type = 1;	/* ipv6 */
-	  seid_len = len;
+	  leid_type = 1;	/* ipv6 */
+	  leid_len = len;
 	}
-      else if (unformat (input, "seid %U", unformat_ethernet_address,
-			 seid_mac))
+      else if (unformat (input, "leid %U", unformat_ethernet_address,
+			 leid_mac))
 	{
-	  seid_type = 2;	/* mac */
+	  leid_type = 2;	/* mac */
 	}
       else if (unformat (input, "vni %d", &vni))
 	{
@@ -13087,38 +13347,38 @@ api_lisp_add_del_adjacency (vat_main_t * vam)
 	}
     }
 
-  if ((u8) ~ 0 == deid_type)
+  if ((u8) ~ 0 == reid_type)
     {
       errmsg ("missing params!");
       return -99;
     }
 
-  if (seid_type != deid_type)
+  if (leid_type != reid_type)
     {
-      errmsg ("source and destination EIDs are of different types!");
+      errmsg ("remote and local EIDs are of different types!");
       return -99;
     }
 
   M (LISP_ADD_DEL_ADJACENCY, lisp_add_del_adjacency);
   mp->is_add = is_add;
   mp->vni = htonl (vni);
-  mp->seid_len = seid_len;
-  mp->deid_len = deid_len;
-  mp->eid_type = deid_type;
+  mp->leid_len = leid_len;
+  mp->reid_len = reid_len;
+  mp->eid_type = reid_type;
 
   switch (mp->eid_type)
     {
     case 0:
-      clib_memcpy (mp->seid, &seid4, sizeof (seid4));
-      clib_memcpy (mp->deid, &deid4, sizeof (deid4));
+      clib_memcpy (mp->leid, &leid4, sizeof (leid4));
+      clib_memcpy (mp->reid, &reid4, sizeof (reid4));
       break;
     case 1:
-      clib_memcpy (mp->seid, &seid6, sizeof (seid6));
-      clib_memcpy (mp->deid, &deid6, sizeof (deid6));
+      clib_memcpy (mp->leid, &leid6, sizeof (leid6));
+      clib_memcpy (mp->reid, &reid6, sizeof (reid6));
       break;
     case 2:
-      clib_memcpy (mp->seid, seid_mac, 6);
-      clib_memcpy (mp->deid, deid_mac, 6);
+      clib_memcpy (mp->leid, leid_mac, 6);
+      clib_memcpy (mp->reid, reid_mac, 6);
       break;
     default:
       errmsg ("unknown EID type %d!", mp->eid_type);
@@ -13983,7 +14243,7 @@ api_policer_classify_dump (vat_main_t * vam)
   f64 timeout = ~0;
   u8 type = POLICER_CLASSIFY_N_TABLES;
 
-  if (unformat (i, "type %U", unformat_classify_table_type, &type))
+  if (unformat (i, "type %U", unformat_policer_classify_table_type, &type))
     ;
   else
     {
@@ -15099,6 +15359,47 @@ api_ipsec_gre_add_del_tunnel (vat_main_t * vam)
   return 0;
 }
 
+static int
+api_punt (vat_main_t * vam)
+{
+  unformat_input_t *i = vam->input;
+  vl_api_punt_t *mp;
+  f64 timeout;
+  u32 ipv = ~0;
+  u32 protocol = ~0;
+  u32 port = ~0;
+  int is_add = 1;
+
+  while (unformat_check_input (i) != UNFORMAT_END_OF_INPUT)
+    {
+      if (unformat (i, "ip %d", &ipv))
+	;
+      else if (unformat (i, "protocol %d", &protocol))
+	;
+      else if (unformat (i, "port %d", &port))
+	;
+      else if (unformat (i, "del"))
+	is_add = 0;
+      else
+	{
+	  clib_warning ("parse error '%U'", format_unformat_error, i);
+	  return -99;
+	}
+    }
+
+  M (PUNT, punt);
+
+  mp->is_add = (u8) is_add;
+  mp->ipv = (u8) ipv;
+  mp->l4_protocol = (u8) protocol;
+  mp->l4_port = htons ((u16) port);
+
+  S;
+  W;
+  /* NOTREACHED */
+  return 0;
+}
+
 static void vl_api_ipsec_gre_tunnel_details_t_handler
   (vl_api_ipsec_gre_tunnel_details_t * mp)
 {
@@ -15209,6 +15510,182 @@ api_delete_subif (vat_main_t * vam)
 
   S;
   W;
+}
+
+#define foreach_pbb_vtr_op      \
+_("disable",  L2_VTR_DISABLED)  \
+_("pop",  L2_VTR_POP_2)         \
+_("push",  L2_VTR_PUSH_2)
+
+static int
+api_l2_interface_pbb_tag_rewrite (vat_main_t * vam)
+{
+  unformat_input_t *i = vam->input;
+  vl_api_l2_interface_pbb_tag_rewrite_t *mp;
+  f64 timeout;
+  u32 sw_if_index = ~0, vtr_op = ~0;
+  u16 outer_tag = ~0;
+  u8 dmac[6], smac[6];
+  u8 dmac_set = 0, smac_set = 0;
+  u16 vlanid = 0;
+  u32 sid = ~0;
+  u32 tmp;
+
+  while (unformat_check_input (i) != UNFORMAT_END_OF_INPUT)
+    {
+      if (unformat (i, "%U", unformat_sw_if_index, vam, &sw_if_index))
+	;
+      else if (unformat (i, "sw_if_index %d", &sw_if_index))
+	;
+      else if (unformat (i, "vtr_op %d", &vtr_op))
+	;
+#define _(n,v) else if (unformat(i, n)) {vtr_op = v;}
+      foreach_pbb_vtr_op
+#undef _
+	else if (unformat (i, "translate_pbb_stag"))
+	{
+	  if (unformat (i, "%d", &tmp))
+	    {
+	      vtr_op = L2_VTR_TRANSLATE_2_1;
+	      outer_tag = tmp;
+	    }
+	  else
+	    {
+	      errmsg
+		("translate_pbb_stag operation requires outer tag definition\n");
+	      return -99;
+	    }
+	}
+      else if (unformat (i, "dmac %U", unformat_ethernet_address, dmac))
+	dmac_set++;
+      else if (unformat (i, "smac %U", unformat_ethernet_address, smac))
+	smac_set++;
+      else if (unformat (i, "sid %d", &sid))
+	;
+      else if (unformat (i, "vlanid %d", &tmp))
+	vlanid = tmp;
+      else
+	{
+	  clib_warning ("parse error '%U'", format_unformat_error, i);
+	  return -99;
+	}
+    }
+
+  if ((sw_if_index == ~0) || (vtr_op == ~0))
+    {
+      errmsg ("missing sw_if_index or vtr operation\n");
+      return -99;
+    }
+  if (((vtr_op == L2_VTR_PUSH_2) || (vtr_op == L2_VTR_TRANSLATE_2_2))
+      && ((dmac_set == 0) || (smac_set == 0) || (sid == ~0)))
+    {
+      errmsg
+	("push and translate_qinq operations require dmac, smac, sid and optionally vlanid\n");
+      return -99;
+    }
+
+  M (L2_INTERFACE_PBB_TAG_REWRITE, l2_interface_pbb_tag_rewrite);
+  mp->sw_if_index = ntohl (sw_if_index);
+  mp->vtr_op = ntohl (vtr_op);
+  mp->outer_tag = ntohs (outer_tag);
+  clib_memcpy (mp->b_dmac, dmac, sizeof (dmac));
+  clib_memcpy (mp->b_smac, smac, sizeof (smac));
+  mp->b_vlanid = ntohs (vlanid);
+  mp->i_sid = ntohl (sid);
+
+  S;
+  W;
+  /* NOTREACHED */
+  return 0;
+}
+
+static int
+api_flow_classify_set_interface (vat_main_t * vam)
+{
+  unformat_input_t *i = vam->input;
+  vl_api_flow_classify_set_interface_t *mp;
+  f64 timeout;
+  u32 sw_if_index;
+  int sw_if_index_set;
+  u32 ip4_table_index = ~0;
+  u32 ip6_table_index = ~0;
+  u8 is_add = 1;
+
+  while (unformat_check_input (i) != UNFORMAT_END_OF_INPUT)
+    {
+      if (unformat (i, "%U", unformat_sw_if_index, vam, &sw_if_index))
+	sw_if_index_set = 1;
+      else if (unformat (i, "sw_if_index %d", &sw_if_index))
+	sw_if_index_set = 1;
+      else if (unformat (i, "del"))
+	is_add = 0;
+      else if (unformat (i, "ip4-table %d", &ip4_table_index))
+	;
+      else if (unformat (i, "ip6-table %d", &ip6_table_index))
+	;
+      else
+	{
+	  clib_warning ("parse error '%U'", format_unformat_error, i);
+	  return -99;
+	}
+    }
+
+  if (sw_if_index_set == 0)
+    {
+      errmsg ("missing interface name or sw_if_index\n");
+      return -99;
+    }
+
+  M (FLOW_CLASSIFY_SET_INTERFACE, flow_classify_set_interface);
+
+  mp->sw_if_index = ntohl (sw_if_index);
+  mp->ip4_table_index = ntohl (ip4_table_index);
+  mp->ip6_table_index = ntohl (ip6_table_index);
+  mp->is_add = is_add;
+
+  S;
+  W;
+  /* NOTREACHED */
+  return 0;
+}
+
+static int
+api_flow_classify_dump (vat_main_t * vam)
+{
+  unformat_input_t *i = vam->input;
+  vl_api_flow_classify_dump_t *mp;
+  f64 timeout = ~0;
+  u8 type = FLOW_CLASSIFY_N_TABLES;
+
+  if (unformat (i, "type %U", unformat_flow_classify_table_type, &type))
+    ;
+  else
+    {
+      errmsg ("classify table type must be specified\n");
+      return -99;
+    }
+
+  if (!vam->json_output)
+    {
+      fformat (vam->ofp, "%10s%20s\n", "Intfc idx", "Classify table");
+    }
+
+  M (FLOW_CLASSIFY_DUMP, flow_classify_dump);
+  mp->type = type;
+  /* send it... */
+  S;
+
+  /* Use a control ping for synchronization */
+  {
+    vl_api_control_ping_t *mp;
+    M (CONTROL_PING, control_ping);
+    S;
+  }
+  /* Wait for a reply... */
+  W;
+
+  /* NOTREACHED */
+  return 0;
 }
 
 static int
@@ -15746,9 +16223,8 @@ _(lisp_add_del_remote_mapping, "add|del vni <vni> eid <dest-eid> "      \
                                "rloc <locator> p <prio> "               \
                                "w <weight> [rloc <loc> ... ] "          \
                                "action <action> [del-all]")             \
-_(lisp_add_del_adjacency, "add|del vni <vni> deid <dest-eid> seid "     \
-                          "<src-eid> rloc <locator> p <prio> w <weight>"\
-                          "[rloc <loc> ... ] action <action>")          \
+_(lisp_add_del_adjacency, "add|del vni <vni> reid <remote-eid> leid "   \
+                          "<local-eid>")                                \
 _(lisp_pitr_set_locator_set, "locator-set <loc-set-name> | del")        \
 _(lisp_map_request_mode, "src-dst|dst-only")                            \
 _(lisp_add_del_map_request_itr_rlocs, "<loc-set-name> [del]")           \
@@ -15804,7 +16280,15 @@ _(ip_source_and_port_range_check_interface_add_del,                     \
 _(ipsec_gre_add_del_tunnel,                                             \
   "src <addr> dst <addr> local_sa <sa-id> remote_sa <sa-id> [del]")     \
 _(ipsec_gre_tunnel_dump, "[sw_if_index <nn>]")                          \
-_(delete_subif,"sub_sw_if_index <nn> sub_if_id <nn>")
+_(delete_subif,"sub_sw_if_index <nn> sub_if_id <nn>")                   \
+_(l2_interface_pbb_tag_rewrite,                                         \
+  "<intfc> | sw_if_index <nn> \n"                                       \
+  "[disable | push | pop | translate_pbb_stag <outer_tag>] \n"          \
+  "dmac <mac> smac <mac> sid <nn> [vlanid <nn>]")                       \
+_(punt, "protocol <l4-protocol> [ip <ver>] [port <l4-port>] [del]")     \
+_(flow_classify_set_interface,                                          \
+  "<intfc> | sw_if_index <nn> [ip4-table <nn>] [ip6-table <nn>] [del]") \
+_(flow_classify_dump, "type [ip4|ip6]")
 
 /* List of command functions, CLI names map directly to functions */
 #define foreach_cli_function                                    \

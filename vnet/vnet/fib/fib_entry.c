@@ -90,7 +90,8 @@ fib_entry_chain_type_fixup (const fib_entry_t *entry,
 	     * then use the payload-protocol field, that we stashed there
 	     * for just this purpose
 	     */
-	    return (fib_proto_to_forw_chain_type(entry->fe_prefix.fp_payload_proto));
+	    return (fib_forw_chain_type_from_dpo_proto(
+			entry->fe_prefix.fp_payload_proto));
 	}
 	/*
 	 * else give them what this entry would be by default. i.e. if it's a v6
@@ -120,7 +121,8 @@ fib_entry_get_default_chain_type (const fib_entry_t *fib_entry)
 	     * then use the payload-protocol field, that we stashed there
 	     * for just this purpose
 	     */
-	    return (fib_proto_to_forw_chain_type(fib_entry->fe_prefix.fp_payload_proto));
+	    return (fib_forw_chain_type_from_dpo_proto(
+			fib_entry->fe_prefix.fp_payload_proto));
 	else
 	    return (FIB_FORW_CHAIN_TYPE_MPLS_NON_EOS);
     }
@@ -209,7 +211,7 @@ format_fib_entry (u8 * s, va_list * args)
         if (level >= FIB_ENTRY_FORMAT_DETAIL2)
         {
 
-            FOR_EACH_FIB_FORW_CHAIN(fct)
+            FOR_EACH_FIB_FORW_MPLS_CHAIN(fct)
             {
                 s = format(s, "  %U-chain\n  %U",
                            format_fib_forw_chain_type, fct,
@@ -318,7 +320,7 @@ fib_entry_last_lock_gone (fib_node_t *node)
 
     fib_entry = fib_entry_from_fib_node(node);
 
-    FOR_EACH_FIB_FORW_CHAIN(fct)
+    FOR_EACH_FIB_FORW_MPLS_CHAIN(fct)
     {
 	dpo_reset(&fib_entry->fe_lb[fct]);
     }
@@ -433,6 +435,34 @@ fib_entry_back_walk_notify (fib_node_t *node,
     return (FIB_NODE_BACK_WALK_CONTINUE);
 }
 
+static void
+fib_entry_show_memory (void)
+{
+    u32 n_srcs = 0, n_exts = 0;
+    fib_entry_src_t *esrc;
+    fib_entry_t *entry;
+
+    fib_show_memory_usage("Entry",
+			  pool_elts(fib_entry_pool),
+			  pool_len(fib_entry_pool),
+			  sizeof(fib_entry_t));
+
+    pool_foreach(entry, fib_entry_pool,
+    ({
+	n_srcs += vec_len(entry->fe_srcs);
+	vec_foreach(esrc, entry->fe_srcs)
+	{
+	    n_exts += vec_len(esrc->fes_path_exts);
+	}
+    }));
+
+    fib_show_memory_usage("Entry Source",
+			  n_srcs, n_srcs, sizeof(fib_entry_src_t));
+    fib_show_memory_usage("Entry Path-Extensions",
+			  n_exts, n_exts,
+			  sizeof(fib_path_ext_t));
+}
+
 /*
  * The FIB path-list's graph node virtual function table
  */
@@ -440,7 +470,23 @@ static const fib_node_vft_t fib_entry_vft = {
     .fnv_get = fib_entry_get_node,
     .fnv_last_lock = fib_entry_last_lock_gone,
     .fnv_back_walk = fib_entry_back_walk_notify,
+    .fnv_mem_show = fib_entry_show_memory,
 };
+
+/**
+ * @brief Contribute the set of Adjacencies that this entry forwards with
+ * to build the uRPF list of its children
+ */
+void
+fib_entry_contribute_urpf (fib_node_index_t entry_index,
+			   index_t urpf)
+{
+    fib_entry_t *fib_entry;
+
+    fib_entry = fib_entry_get(entry_index);
+
+    return (fib_path_list_contribute_urpf(fib_entry->fe_parent, urpf));
+}
 
 /*
  * fib_entry_contribute_forwarding
@@ -515,14 +561,6 @@ fib_entry_get_path_list (fib_node_index_t fib_entry_index)
 }
 
 u32
-fib_entry_get_fib_table_id(fib_node_index_t fib_entry_index)
-{
-    
-
-    return (0);
-}
-
-u32
 fib_entry_child_add (fib_node_index_t fib_entry_index,
 		     fib_node_type_t child_type,
 		     fib_node_index_t child_index)
@@ -567,7 +605,7 @@ fib_entry_alloc (u32 fib_index,
     fib_entry->fe_export = FIB_NODE_INDEX_INVALID;
     fib_entry->fe_import = FIB_NODE_INDEX_INVALID;
     fib_entry->fe_covered = FIB_NODE_INDEX_INVALID;
-    FOR_EACH_FIB_FORW_CHAIN(fct)
+    FOR_EACH_FIB_FORW_MPLS_CHAIN(fct)
     {
 	dpo_reset(&fib_entry->fe_lb[fct]);
     }
@@ -1271,7 +1309,7 @@ fib_entry_recursive_loop_detect (fib_node_index_t entry_index,
 	     * re-evaluate all the entry's forwarding
 	     * NOTE: this is an inplace modify
 	     */
-	    FOR_EACH_FIB_FORW_CHAIN(fct)
+	    FOR_EACH_FIB_FORW_MPLS_CHAIN(fct)
 	    {
 		if (dpo_id_is_valid(&fib_entry->fe_lb[fct]))
 		{
@@ -1299,7 +1337,7 @@ fib_entry_recursive_loop_detect (fib_node_index_t entry_index,
 u32
 fib_entry_get_resolving_interface (fib_node_index_t entry_index)
 {
-   fib_entry_t *fib_entry;
+    fib_entry_t *fib_entry;
 
     fib_entry = fib_entry_get(entry_index);
 

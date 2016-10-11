@@ -292,12 +292,10 @@ lookup_dpo_ip4_inline (vlib_main_t * vm,
 
         vlib_get_next_frame(vm, node, next_index, to_next, n_left_to_next);
 
-        /* while (n_left_from >= 4 && n_left_to_next >= 2) */
-        /*   } */
-
         while (n_left_from > 0 && n_left_to_next > 0)
         {
-            u32 bi0, lkdi0, lbi0, fib_index0,  next0;
+	    u32 bi0, lkdi0, lbi0, fib_index0, next0, hash_c0;
+	    flow_hash_config_t flow_hash_config0;
             const ip4_address_t *input_addr;
             const load_balance_t *lb0;
             const lookup_dpo_t * lkd0;
@@ -349,7 +347,20 @@ lookup_dpo_ip4_inline (vlib_main_t * vm,
             /* do lookup */
             ip4_src_fib_lookup_one (fib_index0, input_addr, &lbi0);
             lb0 = load_balance_get(lbi0);
-            dpo0 = load_balance_get_bucket_i(lb0, 0);
+
+	    /* Use flow hash to compute multipath adjacency. */
+	    hash_c0 = vnet_buffer (b0)->ip.flow_hash = 0;
+
+	    if (PREDICT_FALSE (lb0->lb_n_buckets > 1))
+            {
+		flow_hash_config0 = lb0->lb_hash_config;
+		hash_c0 = vnet_buffer (b0)->ip.flow_hash =
+		    ip4_compute_flow_hash (ip0, flow_hash_config0);
+            }
+
+	    dpo0 = load_balance_get_bucket_i(lb0,
+					     (hash_c0 &
+					      (lb0->lb_n_buckets_minus_1)));
 
             next0 = dpo0->dpoi_next_node;
             vnet_buffer(b0)->ip.adj_index[VLIB_TX] = dpo0->dpoi_index;
@@ -462,13 +473,10 @@ lookup_dpo_ip6_inline (vlib_main_t * vm,
 
         vlib_get_next_frame(vm, node, next_index, to_next, n_left_to_next);
 
-        /* while (n_left_from >= 4 && n_left_to_next >= 2) */
-        /*   { */
-        /*   } */
-
         while (n_left_from > 0 && n_left_to_next > 0)
         {
-            u32 bi0, lkdi0, lbi0, fib_index0, next0;
+            u32 bi0, lkdi0, lbi0, fib_index0, next0, hash_c0;
+	    flow_hash_config_t flow_hash_config0;
             const ip6_address_t *input_addr0;
             const load_balance_t *lb0;
             const lookup_dpo_t * lkd0;
@@ -508,7 +516,20 @@ lookup_dpo_ip6_inline (vlib_main_t * vm,
                                                fib_index0,
                                                input_addr0);
             lb0 = load_balance_get(lbi0);
-            dpo0 = load_balance_get_bucket_i(lb0, 0);
+
+	    /* Use flow hash to compute multipath adjacency. */
+	    hash_c0 = vnet_buffer (b0)->ip.flow_hash = 0;
+
+	    if (PREDICT_FALSE (lb0->lb_n_buckets > 1))
+            {
+		flow_hash_config0 = lb0->lb_hash_config;
+		hash_c0 = vnet_buffer (b0)->ip.flow_hash =
+		    ip6_compute_flow_hash (ip0, flow_hash_config0);
+            }
+
+	    dpo0 = load_balance_get_bucket_i(lb0,
+					     (hash_c0 &
+					      (lb0->lb_n_buckets_minus_1)));
 
             next0 = dpo0->dpoi_next_node;
             vnet_buffer(b0)->ip.adj_index[VLIB_TX] = dpo0->dpoi_index;
@@ -713,10 +734,25 @@ VLIB_REGISTER_NODE (lookup_mpls_dst_itf_node) = {
 };
 VLIB_NODE_FUNCTION_MULTIARCH (lookup_mpls_dst_itf_node, lookup_mpls_dst_itf)
 
+static void
+lookup_dpo_mem_show (void)
+{
+    fib_show_memory_usage("Lookup",
+			  pool_elts(lookup_dpo_pool),
+			  pool_len(lookup_dpo_pool),
+			  sizeof(lookup_dpo_t));
+}
+
 const static dpo_vft_t lkd_vft = {
     .dv_lock = lookup_dpo_lock,
     .dv_unlock = lookup_dpo_unlock,
     .dv_format = format_lookup_dpo,
+};
+const static dpo_vft_t lkd_vft_w_mem_show = {
+    .dv_lock = lookup_dpo_lock,
+    .dv_unlock = lookup_dpo_unlock,
+    .dv_format = format_lookup_dpo,
+    .dv_mem_show = lookup_dpo_mem_show,
 };
 
 const static char* const lookup_src_ip4_nodes[] =
@@ -784,7 +820,7 @@ const static char* const * const lookup_dst_from_interface_nodes[DPO_PROTO_NUM] 
 void
 lookup_dpo_module_init (void)
 {
-    dpo_register(DPO_LOOKUP, &lkd_vft, NULL);
+    dpo_register(DPO_LOOKUP, &lkd_vft_w_mem_show, NULL);
 
     /*
      * There are various sorts of lookup; src or dst addr v4 /v6 etc.

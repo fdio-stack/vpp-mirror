@@ -249,12 +249,15 @@ libvnet_la_SOURCES +=				\
   vnet/classify/ip_classify.c			\
   vnet/classify/input_acl.c			\
   vnet/classify/policer_classify.c		\
+  vnet/classify/flow_classify.c                 \
+  vnet/classify/flow_classify_node.c            \
   vnet/classify/vnet_classify.h
 
 nobase_include_HEADERS +=			\
   vnet/classify/vnet_classify.h	                \
   vnet/classify/input_acl.h                     \
-  vnet/classify/policer_classify.h
+  vnet/classify/policer_classify.h              \
+  vnet/classify/flow_classify.h
 
 ########################################
 # Layer 3 protocols go here
@@ -290,6 +293,7 @@ libvnet_la_SOURCES +=				\
  vnet/ip/udp_format.c				\
  vnet/ip/udp_init.c				\
  vnet/ip/udp_local.c				\
+ vnet/ip/punt.c					\
  vnet/ip/udp_pg.c                               \
  vnet/ip/ip_input_acl.c                         \
  vnet/ip/ip_frag.c
@@ -318,7 +322,9 @@ nobase_include_HEADERS +=			\
  vnet/ip/protocols.def				\
  vnet/ip/udp.h					\
  vnet/ip/udp_error.def				\
- vnet/ip/udp_packet.h
+ vnet/ip/udp_packet.h				\
+ vnet/ip/punt_error.def				\
+ vnet/ip/punt.h
 
 ########################################
 # Layer 3 protocol: IPSec
@@ -531,12 +537,15 @@ libvnet_la_SOURCES +=				\
  vnet/lisp-gpe/lisp_gpe_sub_interface.c         \
  vnet/lisp-gpe/lisp_gpe_adjacency.c             \
  vnet/lisp-gpe/lisp_gpe_tunnel.c                \
+ vnet/lisp-gpe/lisp_gpe_fwd_entry.c		\
+ vnet/lisp-gpe/lisp_gpe_tenant.c		\
  vnet/lisp-gpe/interface.c			\
- vnet/lisp-gpe/ip_forward.c			\
  vnet/lisp-gpe/decap.c				
 
 nobase_include_HEADERS +=			\
  vnet/lisp-gpe/lisp_gpe.h			\
+ vnet/lisp-gpe/lisp_gpe_fwd_entry.h		\
+ vnet/lisp-gpe/lisp_gpe_tenant.h		\
  vnet/lisp-gpe/lisp_gpe_packet.h		\
  vnet/lisp-gpe/lisp_gpe_error.def		
 
@@ -785,6 +794,7 @@ libvnet_la_SOURCES +=				\
   vnet/fib/fib_path_list.c                      \
   vnet/fib/fib_path.c				\
   vnet/fib/fib_path_ext.c			\
+  vnet/fib/fib_urpf_list.c			\
   vnet/fib/fib_attached_export.c
 
 nobase_include_HEADERS +=			\
@@ -802,11 +812,11 @@ nobase_include_HEADERS +=			\
 ########################################
 
 libvnet_la_SOURCES +=				\
-  vnet/adj/adj_alloc.c				\
   vnet/adj/adj_nbr.c				\
   vnet/adj/adj_rewrite.c			\
   vnet/adj/adj_glean.c   			\
   vnet/adj/adj_midchain.c   			\
+  vnet/adj/adj_l2.c      			\
   vnet/adj/adj.c                            
 
 nobase_include_HEADERS +=			\

@@ -457,6 +457,28 @@ ip6_sw_interface_enable_disable (u32 sw_if_index,
     }
 }
 
+/* get first interface address */
+ip6_address_t *
+ip6_interface_first_address (ip6_main_t * im,
+			     u32 sw_if_index,
+                             ip_interface_address_t ** result_ia)
+{
+  ip_lookup_main_t * lm = &im->lookup_main;
+  ip_interface_address_t * ia = 0;
+  ip6_address_t * result = 0;
+
+  foreach_ip_interface_address (lm, ia, sw_if_index,
+                                1 /* honor unnumbered */,
+  ({
+    ip6_address_t * a = ip_interface_address_get_address (lm, ia);
+    result = a;
+    break;
+  }));
+  if (result_ia)
+    *result_ia = result ? ia : 0;
+  return result;
+}
+
 clib_error_t *
 ip6_add_del_interface_address (vlib_main_t * vm,
 			       u32 sw_if_index,
@@ -554,6 +576,12 @@ ip6_sw_interface_admin_up_down (vnet_main_t * vnm,
 VNET_SW_INTERFACE_ADMIN_UP_DOWN_FUNCTION (ip6_sw_interface_admin_up_down);
 
 /* Built-in ip6 unicast rx feature path definition */
+VNET_IP6_UNICAST_FEATURE_INIT (ip6_flow_classify, static) = {
+  .node_name = "ip6-flow-classify",
+  .runs_before = ORDER_CONSTRAINTS {"ip6-inacl", 0},
+  .feature_index = &ip6_main.ip6_unicast_rx_feature_flow_classify,
+};
+
 VNET_IP6_UNICAST_FEATURE_INIT (ip6_inacl, static) = {
   .node_name = "ip6-inacl", 
   .runs_before = ORDER_CONSTRAINTS {"ip6-policer-classify", 0},
@@ -619,7 +647,10 @@ static char * rx_feature_start_nodes[] =
   {"ip6-input"};
 
 static char * tx_feature_start_nodes[] = 
-  {"ip6-rewrite"};
+{
+  "ip6-rewrite",
+  "ip6-midchain",
+};
 
 /* Built-in ip4 tx feature path definition */
 VNET_IP6_TX_FEATURE_INIT (interface_output, static) = {
@@ -658,8 +689,8 @@ ip6_feature_init (vlib_main_t * vm, ip6_main_t * im)
       if ((error = ip_feature_init_cast (vm, cm, vcm, 
                                          feature_start_nodes,
                                          feature_start_len,
-                                         cast,
-                                         VNET_L3_PACKET_TYPE_IP6)))
+					 im->next_feature[cast],
+					 &im->feature_nodes[cast])))
         return error;
     }
   return 0;
@@ -1775,7 +1806,8 @@ always_inline uword
 ip6_rewrite_inline (vlib_main_t * vm,
 		    vlib_node_runtime_t * node,
 		    vlib_frame_t * frame,
-		    int rewrite_for_locally_received_packets)
+		    int rewrite_for_locally_received_packets,
+		    int is_midchain)
 {
   ip_lookup_main_t * lm = &ip6_main.lookup_main;
   u32 * from = vlib_frame_vector_args (frame);
@@ -1958,6 +1990,12 @@ ip6_rewrite_inline (vlib_main_t * vm,
 				    ip0, ip1,
 				    sizeof (ethernet_header_t));
       
+	  if (is_midchain)
+	  {
+	      adj0->sub_type.midchain.fixup_func(vm, adj0, p0);
+	      adj1->sub_type.midchain.fixup_func(vm, adj1, p1);
+	  }
+
 	  vlib_validate_buffer_enqueue_x2 (vm, node, next_index,
 					   to_next, n_left_to_next,
 					   pi0, pi1, next0, next1);
@@ -2057,6 +2095,11 @@ ip6_rewrite_inline (vlib_main_t * vm,
                   }
             }
 
+	  if (is_midchain)
+	  {
+	      adj0->sub_type.midchain.fixup_func(vm, adj0, p0);
+	  }
+
 	  p0->error = error_node->errors[error0];
 
 	  from += 1;
@@ -2085,7 +2128,8 @@ ip6_rewrite_transit (vlib_main_t * vm,
 		     vlib_frame_t * frame)
 {
   return ip6_rewrite_inline (vm, node, frame,
-			     /* rewrite_for_locally_received_packets */ 0);
+			     /* rewrite_for_locally_received_packets */ 0,
+			     /* midchain */ 0);
 }
 
 static uword
@@ -2094,7 +2138,8 @@ ip6_rewrite_local (vlib_main_t * vm,
 		   vlib_frame_t * frame)
 {
   return ip6_rewrite_inline (vm, node, frame,
-			     /* rewrite_for_locally_received_packets */ 1);
+			     /* rewrite_for_locally_received_packets */ 1,
+			     /* midchain */ 0);
 }
 
 static uword
@@ -2103,7 +2148,8 @@ ip6_midchain (vlib_main_t * vm,
 	      vlib_frame_t * frame)
 {
   return ip6_rewrite_inline (vm, node, frame,
-			     /* rewrite_for_locally_received_packets */ 0);
+			     /* rewrite_for_locally_received_packets */ 0,
+			     /* midchain */ 1);
 }
 
 VLIB_REGISTER_NODE (ip6_midchain_node) = {
@@ -2112,6 +2158,8 @@ VLIB_REGISTER_NODE (ip6_midchain_node) = {
   .vector_size = sizeof (u32),
 
   .format_trace = format_ip6_forward_next_trace,
+
+  .sibling_of = "ip6-rewrite",
 
   .next_nodes = {
     [IP6_REWRITE_NEXT_DROP] = "error-drop",
@@ -2866,6 +2914,7 @@ int vnet_set_ip6_classify_intfc (vlib_main_t * vm, u32 sw_if_index,
   ip6_main_t * ipm = &ip6_main;
   ip_lookup_main_t * lm = &ipm->lookup_main;
   vnet_classify_main_t * cm = &vnet_classify_main;
+  ip6_address_t *if_addr;
 
   if (pool_is_free_index (im->sw_interfaces, sw_if_index))
     return VNET_API_ERROR_NO_MATCHING_INTERFACE;
@@ -2875,6 +2924,46 @@ int vnet_set_ip6_classify_intfc (vlib_main_t * vm, u32 sw_if_index,
 
   vec_validate (lm->classify_table_index_by_sw_if_index, sw_if_index);
   lm->classify_table_index_by_sw_if_index [sw_if_index] = table_index;
+
+  if_addr = ip6_interface_first_address (ipm, sw_if_index, NULL);
+
+  if (NULL != if_addr)
+  {
+      fib_prefix_t pfx = {
+	  .fp_len = 128,
+	  .fp_proto = FIB_PROTOCOL_IP6,
+	  .fp_addr.ip6 = *if_addr,
+      };
+      u32 fib_index;
+
+      fib_index = fib_table_get_index_for_sw_if_index(FIB_PROTOCOL_IP4,
+						      sw_if_index);
+
+
+      if (table_index != (u32) ~0)
+      {
+          dpo_id_t dpo = DPO_NULL;
+
+          dpo_set(&dpo,
+                  DPO_CLASSIFY,
+                  DPO_PROTO_IP4,
+                  classify_dpo_create(FIB_PROTOCOL_IP4,
+                                      table_index));
+
+	  fib_table_entry_special_dpo_add(fib_index,
+					  &pfx,
+					  FIB_SOURCE_CLASSIFY,
+					  FIB_ENTRY_FLAG_NONE,
+					  &dpo);
+          dpo_reset(&dpo);
+      }
+      else
+      {
+	  fib_table_entry_special_remove(fib_index,
+					 &pfx,
+					 FIB_SOURCE_CLASSIFY);
+      }
+  }
 
   return 0;
 }

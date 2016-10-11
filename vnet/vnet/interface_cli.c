@@ -834,11 +834,15 @@ set_unnumbered (vlib_main_t * vm,
     {
       si->flags &= ~(VNET_SW_INTERFACE_FLAG_UNNUMBERED);
       si->unnumbered_sw_if_index = (u32) ~ 0;
+      ip4_sw_interface_enable_disable (unnumbered_sw_if_index, 0);
+      ip6_sw_interface_enable_disable (unnumbered_sw_if_index, 0);
     }
   else if (is_set)
     {
       si->flags |= VNET_SW_INTERFACE_FLAG_UNNUMBERED;
       si->unnumbered_sw_if_index = inherit_from_sw_if_index;
+      ip4_sw_interface_enable_disable (unnumbered_sw_if_index, 1);
+      ip6_sw_interface_enable_disable (unnumbered_sw_if_index, 1);
     }
 
   return 0;
@@ -1024,6 +1028,54 @@ VLIB_CLI_COMMAND (set_interface_mtu_cmd, static) = {
   .path = "set interface mtu",
   .short_help = "set interface mtu <value> <intfc>",
   .function = mtu_cmd,
+};
+/* *INDENT-ON* */
+
+static clib_error_t *
+set_interface_mac_address (vlib_main_t * vm, unformat_input_t * input,
+			   vlib_cli_command_t * cmd)
+{
+  vnet_main_t *vnm = vnet_get_main ();
+  clib_error_t *error = 0;
+  u32 sw_if_index = ~0;
+  u64 mac = 0;
+
+  if (!unformat_user (input, unformat_vnet_sw_interface, vnm, &sw_if_index))
+    {
+      error = clib_error_return (0, "unknown interface `%U'",
+				 format_unformat_error, input);
+      goto done;
+    }
+  if (!unformat_user (input, unformat_ethernet_address, &mac))
+    {
+      error = clib_error_return (0, "expected mac address `%U'",
+				 format_unformat_error, input);
+      goto done;
+    }
+  error = vnet_hw_interface_change_mac_address (vnm, sw_if_index, mac);
+done:
+  return error;
+}
+
+/*?
+ * The '<em>set interface mac address </em>' command allows to set MAC address of given interface.
+ * In case of NIC interfaces the one has to support MAC address change. A side effect of MAC address
+ * change are changes of MAC addresses in FIB tables (ipv4 and ipv6).
+ *
+ * @cliexpar
+ * @parblock
+ * Example of how to change MAC Address of interface:
+ * @cliexcmd{set interface mac address GigabitEthernet0/8/0 aa:bb:cc:dd:ee:01}
+ * @cliexcmd{set interface mac address host-vpp0 aa:bb:cc:dd:ee:02}
+ * @cliexcmd{set interface mac address tap-0 aa:bb:cc:dd:ee:03}
+ * @cliexcmd{set interface mac address pg0 aa:bb:cc:dd:ee:04}
+ * @endparblock
+?*/
+/* *INDENT-OFF* */
+VLIB_CLI_COMMAND (set_interface_mac_address_cmd, static) = {
+  .path = "set interface mac address",
+  .short_help = "set interface mac address <intfc> <mac-address>",
+  .function = set_interface_mac_address,
 };
 /* *INDENT-ON* */
 

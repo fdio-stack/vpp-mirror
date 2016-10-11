@@ -24,12 +24,13 @@
 
 #include <vnet/adj/adj.h>
 
-#include "fib_path.h"
-#include "fib_node.h"
-#include "fib_table.h"
-#include "fib_entry.h"
-#include "fib_path_list.h"
-#include "fib_internal.h"
+#include <vnet/fib/fib_path.h>
+#include <vnet/fib/fib_node.h>
+#include <vnet/fib/fib_table.h>
+#include <vnet/fib/fib_entry.h>
+#include <vnet/fib/fib_path_list.h>
+#include <vnet/fib/fib_internal.h>
+#include <vnet/fib/fib_urpf_list.h>
 
 /**
  * Enurmeration of path types
@@ -848,6 +849,15 @@ FIXME comment
     return (FIB_NODE_BACK_WALK_CONTINUE);
 }
 
+static void
+fib_path_memory_show (void)
+{
+    fib_show_memory_usage("Path",
+			  pool_elts(fib_path_pool),
+			  pool_len(fib_path_pool),
+			  sizeof(fib_path_t));
+}
+
 /*
  * The FIB path's graph node virtual function table
  */
@@ -855,6 +865,7 @@ static const fib_node_vft_t fib_path_vft = {
     .fnv_get = fib_path_get_node,
     .fnv_last_lock = fib_path_last_lock_gone,
     .fnv_back_walk = fib_path_back_walk_notify,
+    .fnv_mem_show = fib_path_memory_show,
 };
 
 static fib_path_cfg_flags_t
@@ -1541,6 +1552,62 @@ fib_path_get_weight (fib_node_index_t path_index)
     return (path->fp_weight);
 }
 
+/**
+ * @brief Contribute the path's adjacency to the list passed.
+ * By calling this function over all paths, recursively, a child
+ * can construct its full set of forwarding adjacencies, and hence its
+ * uRPF list.
+ */
+void
+fib_path_contribute_urpf (fib_node_index_t path_index,
+			  index_t urpf)
+{
+    fib_path_t *path;
+
+    if (!fib_path_is_resolved(path_index))
+	return;
+
+    path = fib_path_get(path_index);
+
+    switch (path->fp_type)
+    {
+    case FIB_PATH_TYPE_ATTACHED_NEXT_HOP:
+	fib_urpf_list_append(urpf, path->attached_next_hop.fp_interface);
+	break;
+
+    case FIB_PATH_TYPE_ATTACHED:
+	fib_urpf_list_append(urpf, path->attached.fp_interface);
+	break;
+
+    case FIB_PATH_TYPE_RECURSIVE:
+	fib_entry_contribute_urpf(path->fp_via_fib, urpf);
+	break;
+
+    case FIB_PATH_TYPE_EXCLUSIVE:
+    case FIB_PATH_TYPE_SPECIAL:
+	/*
+	 * these path types may link to an adj, if that's what
+	 * the clinet gave
+	 */
+	if (dpo_is_adj(&path->fp_dpo))
+	{
+	    ip_adjacency_t *adj;
+
+	    adj = adj_get(path->fp_dpo.dpoi_index);
+
+	    fib_urpf_list_append(urpf, adj->rewrite_header.sw_if_index);
+	}
+	break;
+
+    case FIB_PATH_TYPE_DEAG:
+    case FIB_PATH_TYPE_RECEIVE:
+	/*
+	 * these path types don't link to an adj
+	 */
+	break;
+    }
+}
+
 void
 fib_path_contribute_forwarding (fib_node_index_t path_index,
 				fib_forward_chain_type_t fct,
@@ -1564,7 +1631,8 @@ fib_path_contribute_forwarding (fib_node_index_t path_index,
     {
 	dpo_copy(dpo, &path->fp_dpo);
     }
-    else {
+    else
+    {
 	switch (path->fp_type)
 	{
 	case FIB_PATH_TYPE_ATTACHED_NEXT_HOP:
@@ -1574,6 +1642,7 @@ fib_path_contribute_forwarding (fib_node_index_t path_index,
 	    case FIB_FORW_CHAIN_TYPE_UNICAST_IP6:
 	    case FIB_FORW_CHAIN_TYPE_MPLS_EOS:
 	    case FIB_FORW_CHAIN_TYPE_MPLS_NON_EOS:
+	    case FIB_FORW_CHAIN_TYPE_ETHERNET:
 	    {
 		adj_index_t ai;
 
@@ -1606,6 +1675,9 @@ fib_path_contribute_forwarding (fib_node_index_t path_index,
 	    case FIB_FORW_CHAIN_TYPE_MPLS_NON_EOS:
 		fib_path_recursive_adj_update(path, fct, dpo);
 		break;
+	    case FIB_FORW_CHAIN_TYPE_ETHERNET:
+		ASSERT(0);
+		break;
 	    }
 	    break;
 	case FIB_PATH_TYPE_DEAG:
@@ -1623,6 +1695,9 @@ fib_path_contribute_forwarding (fib_node_index_t path_index,
 	    case FIB_FORW_CHAIN_TYPE_MPLS_EOS:
 		dpo_copy(dpo, &path->fp_dpo);
 		break;		
+	    case FIB_FORW_CHAIN_TYPE_ETHERNET:
+		ASSERT(0);
+		break;
             }
             break;
 	case FIB_PATH_TYPE_EXCLUSIVE:
@@ -1656,7 +1731,7 @@ fib_path_append_nh_for_multipath_hash (fib_node_index_t path_index,
 
 	mnh->path_weight = path->fp_weight;
 	mnh->path_index = path_index;
-	dpo_copy(&mnh->path_dpo, &path->fp_dpo);
+	fib_path_contribute_forwarding(path_index, fct, &mnh->path_dpo);
     }
 
     return (hash_key);
@@ -1726,13 +1801,36 @@ show_fib_path_command (vlib_main_t * vm,
 			unformat_input_t * input,
 			vlib_cli_command_t * cmd)
 {
+    fib_node_index_t pi;
     fib_path_t *path;
 
-    vlib_cli_output (vm, "FIB Path Lists");
-    pool_foreach(path, fib_path_pool,
-    ({
-	vlib_cli_output (vm, "%U", format_fib_path, path);
-    }));
+    if (unformat (input, "%d", &pi))
+    {
+	/*
+	 * show one in detail
+	 */
+	if (!pool_is_free_index(fib_path_pool, pi))
+	{
+	    path = fib_path_get(pi);
+	    u8 *s = fib_path_format(pi, NULL);
+	    s = format(s, "children:");
+	    s = fib_node_children_format(path->fp_node.fn_children, s);
+	    vlib_cli_output (vm, "%s", s);
+	    vec_free(s);
+	}
+	else
+	{
+	    vlib_cli_output (vm, "path %d invalid", pi);
+	}
+    }
+    else
+    {
+	vlib_cli_output (vm, "FIB Paths");
+	pool_foreach(path, fib_path_pool,
+	({
+	    vlib_cli_output (vm, "%U", format_fib_path, path);
+	}));
+    }
 
     return (NULL);
 }

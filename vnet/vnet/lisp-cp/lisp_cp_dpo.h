@@ -17,7 +17,6 @@
 #define __LISP_CP_DPO_H__
 
 #include <vnet/vnet.h>
-#include <vnet/fib/fib_types.h>
 #include <vnet/dpo/dpo.h>
 
 /**
@@ -25,14 +24,22 @@
  */
 typedef struct lisp_cp_dpo_t
 {
-    /**
-     * The transport payload type.
-     */
-    fib_protocol_t lcd_proto;
+  /**
+   * The transport payload type.
+   */
+  dpo_proto_t lcd_proto;
 } lisp_cp_dpo_t;
 
-extern index_t lisp_cp_dpo_get(fib_protocol_t proto);
+extern const dpo_id_t *lisp_cp_dpo_get (dpo_proto_t proto);
 
-extern void lisp_cp_dpo_module_init(void);
+extern void lisp_cp_dpo_module_init (void);
 
 #endif
+
+/*
+ * fd.io coding-style-patch-verification: ON
+ *
+ * Local Variables:
+ * eval: (c-set-style "gnu")
+ * End:
+ */

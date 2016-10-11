@@ -459,6 +459,16 @@ vnet_arp_set_ip4_over_ethernet_internal (vnet_main_t * vnm,
 	e->adj_index[link] = ADJ_INDEX_INVALID;
       }
     }
+  else
+    {
+      /*
+       * prevent a DoS attack from the data-plane that
+       * spams us with no-op updates to the MAC address
+       */
+      if (0 == memcmp (e->ethernet_address,
+		       a->ethernet, sizeof (e->ethernet_address)))
+	return -1;
+    }
 
   /* Update time stamp and ethernet address. */
   clib_memcpy (e->ethernet_address, a->ethernet,
@@ -923,9 +933,12 @@ arp_input (vlib_main_t * vm, vlib_node_runtime_t * node, vlib_frame_t * frame)
 	  dst_fei = ip4_fib_table_lookup (ip4_fib_get (fib_index0),
 					  &arp0->ip4_over_ethernet[1].ip4,
 					  32);
-	  dst_flags = fib_entry_get_flags (dst_fei);
+	  dst_flags = fib_entry_get_flags_for_source (dst_fei,
+						      FIB_SOURCE_INTERFACE);
 
-	  conn_sw_if_index0 = fib_entry_get_resolving_interface (dst_fei);
+	  conn_sw_if_index0 =
+	    fib_entry_get_resolving_interface_for_source (dst_fei,
+							  FIB_SOURCE_INTERFACE);
 
 	  if (!(FIB_ENTRY_FLAG_CONNECTED & dst_flags))
 	    {
@@ -2266,9 +2279,6 @@ arp_term_l2bd (vlib_main_t * vm,
 	  iph0 = (ip6_header_t *) l3h0;
 	  if (PREDICT_FALSE (ethertype0 == ETHERNET_TYPE_IP6 &&
 			     iph0->protocol == IP_PROTOCOL_ICMP6 &&
-			     !ip6_address_is_link_local_unicast
-			     (&iph0->src_address)
-			     &&
 			     !ip6_address_is_unspecified
 			     (&iph0->src_address)))
 	    {
@@ -2342,6 +2352,43 @@ arp_term_init (vlib_main_t * vm)
 }
 
 VLIB_INIT_FUNCTION (arp_term_init);
+
+void
+change_arp_mac (u32 sw_if_index, ethernet_arp_ip4_entry_t * e)
+{
+  if (e->sw_if_index == sw_if_index)
+    {
+
+      if (ADJ_INDEX_INVALID != e->adj_index[FIB_LINK_IP4])
+	{
+	  // the update rewrite function takes the dst mac (which is not changing)
+	  // the new source mac will be retrieved from the interface
+	  // when the full rewrite is constructed.
+	  adj_nbr_update_rewrite (e->adj_index[FIB_LINK_IP4],
+				  e->ethernet_address);
+	}
+      if (ADJ_INDEX_INVALID != e->adj_index[FIB_LINK_MPLS])
+	{
+	  adj_nbr_update_rewrite (e->adj_index[FIB_LINK_MPLS],
+				  e->ethernet_address);
+	}
+
+    }
+}
+
+void
+ethernet_arp_change_mac (vnet_main_t * vnm, u32 sw_if_index)
+{
+  ethernet_arp_main_t *am = &ethernet_arp_main;
+  ethernet_arp_ip4_entry_t *e;
+
+  /* *INDENT-OFF* */
+  pool_foreach (e, am->ip4_entry_pool,
+    ({
+      change_arp_mac (sw_if_index, e);
+    }));
+  /* *INDENT-ON* */
+}
 
 /*
  * fd.io coding-style-patch-verification: ON

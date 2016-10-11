@@ -37,8 +37,8 @@ typedef struct
 
 typedef struct
 {
-  gid_address_t seid;
-  gid_address_t deid;
+  gid_address_t leid;
+  gid_address_t reid;
   locator_pair_t *locator_pairs;
 } fwd_entry_t;
 
@@ -136,7 +136,6 @@ typedef struct
   uword *vni_by_bd_id;
 
   /* track l2 and l3 interfaces that have been created for vni */
-  uword *dp_intf_by_vni;
   uword *l2_dp_intf_by_vni;
 
   /* Proxy ETR map index */
@@ -217,8 +216,8 @@ vnet_lisp_add_del_mapping (gid_address_t * deid, locator_t * dlocs, u8 action,
 
 typedef struct
 {
-  gid_address_t deid;
-  gid_address_t seid;
+  gid_address_t reid;
+  gid_address_t leid;
   u8 is_add;
 } vnet_lisp_add_del_adjacency_args_t;
 

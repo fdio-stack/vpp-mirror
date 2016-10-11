@@ -131,6 +131,7 @@ setup_signal_handlers (void)
 {
   signal (SIGINT, stats_signal);
   signal (SIGQUIT, stop_signal);
+  signal (SIGTERM, stop_signal);
 
   return 0;
 }

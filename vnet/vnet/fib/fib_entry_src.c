@@ -18,9 +18,10 @@
 #include <vnet/dpo/mpls_label_dpo.h>
 #include <vnet/dpo/drop_dpo.h>
 
-#include "fib_entry_src.h"
-#include "fib_table.h"
-#include "fib_path_ext.h"
+#include <vnet/fib/fib_entry_src.h>
+#include <vnet/fib/fib_table.h>
+#include <vnet/fib/fib_path_ext.h>
+#include <vnet/fib/fib_urpf_list.h>
 
 /*
  * per-source type vft
@@ -298,6 +299,7 @@ fib_entry_src_collect_forwarding (fib_node_index_t pl_index,
 	    }
             break;
         case FIB_FORW_CHAIN_TYPE_MPLS_EOS:
+        case FIB_FORW_CHAIN_TYPE_ETHERNET:
 	    ASSERT(0);
 	    break;
         }
@@ -367,6 +369,34 @@ fib_entry_src_mk_lb (fib_entry_t *fib_entry,
     load_balance_multipath_update(dpo_lb,
                                   ctx.next_hops,
                                   fib_entry_calc_lb_flags(&ctx));
+    vec_free(ctx.next_hops);
+
+    /*
+     * if this entry is sourced by the uRPF-exempt source then we
+     * append the always present local0 interface (index 0) to the
+     * uRPF list so it is not empty. that way packets pass the loose check.
+     */
+    index_t ui = fib_path_list_get_urpf(esrc->fes_pl);
+
+    if (fib_entry_is_sourced(fib_entry_get_index(fib_entry),
+			     FIB_SOURCE_URPF_EXEMPT) &&
+	(0 == fib_urpf_check_size(ui)))
+    {
+	/*
+	 * The uRPF list we get from the path-list is shared by all
+	 * other users of the list, but the uRPF exemption applies
+	 * only to this prefix. So we need our own list.
+	 */
+	ui = fib_urpf_list_alloc_and_lock();
+	fib_urpf_list_append(ui, 0);
+	fib_urpf_list_bake(ui);
+	load_balance_set_urpf(dpo_lb->dpoi_index, ui);
+	fib_urpf_list_unlock(ui);
+    }
+    else
+    {
+	load_balance_set_urpf(dpo_lb->dpoi_index, ui);
+    }
 }
 
 void
@@ -379,21 +409,33 @@ fib_entry_src_action_install (fib_entry_t *fib_entry,
      */
     fib_forward_chain_type_t fct;
     fib_entry_src_t *esrc;
+    int insert;
 
     fct = fib_entry_get_default_chain_type(fib_entry);
     esrc = fib_entry_src_find(fib_entry, source, NULL);
 
+    /*
+     * Every entry has its own load-balance object. All changes to the entry's
+     * forwarding result in an inplace modify of the load-balance. This means
+     * the load-balance object only needs to be added to the forwarding
+     * DB once, when it is created.
+     */
+    insert = !dpo_id_is_valid(&fib_entry->fe_lb[fct]);
+
     fib_entry_src_mk_lb(fib_entry, esrc, fct, &fib_entry->fe_lb[fct]);
 
-    FIB_ENTRY_DBG(fib_entry, "install: %d",
-		  fib_entry->fe_lb[fct]);
+    ASSERT(dpo_id_is_valid(&fib_entry->fe_lb[fct]));
+    FIB_ENTRY_DBG(fib_entry, "install: %d", fib_entry->fe_lb[fct]);
 
     /*
      * insert the adj into the data-plane forwarding trie
      */
-    fib_table_fwding_dpo_update(fib_entry->fe_fib_index,
-				&fib_entry->fe_prefix,
-				&fib_entry->fe_lb[fct]);
+    if (insert)
+    {
+       fib_table_fwding_dpo_update(fib_entry->fe_fib_index,
+                                   &fib_entry->fe_prefix,
+                                   &fib_entry->fe_lb[fct]);
+    }
 
     if (FIB_FORW_CHAIN_TYPE_UNICAST_IP4 == fct ||
 	FIB_FORW_CHAIN_TYPE_UNICAST_IP6 == fct)
@@ -424,17 +466,13 @@ fib_entry_src_action_uninstall (fib_entry_t *fib_entry)
 
     fct = fib_entry_get_default_chain_type(fib_entry);
     /*
-     * uninstall the forwarding chain for the given source from the
-     * forwarding tables
+     * uninstall the forwarding chain from the forwarding tables
      */
     FIB_ENTRY_DBG(fib_entry, "uninstall: %d",
 		  fib_entry->fe_adj_index);
 
     if (dpo_id_is_valid(&fib_entry->fe_lb[fct]))
     {
-	/* fib_forward_chain_type_t fct; */
-	/* fib_path_ext_t *path_ext; */
-
 	fib_table_fwding_dpo_remove(
 	    fib_entry->fe_fib_index,
 	    &fib_entry->fe_prefix,
@@ -1038,8 +1076,8 @@ fib_entry_src_action_path_swap (fib_entry_t *fib_entry,
 
     ASSERT(NULL != fib_entry_src_vft[source].fesv_path_swap);
 
-    pl_flags = fib_entry_src_flags_2_path_list_flags(
-	           fib_entry_get_flags_i(fib_entry));
+    pl_flags = fib_entry_src_flags_2_path_list_flags(flags);
+
     vec_foreach(rpath, rpaths)
     {
 	fib_entry_flags_update(fib_entry, rpath, &pl_flags, esrc);
@@ -1203,6 +1241,46 @@ fib_entry_get_dpo_for_source (fib_node_index_t fib_entry_index,
 	}
     }
     return (0);
+}
+
+u32
+fib_entry_get_resolving_interface_for_source (fib_node_index_t entry_index,
+					      fib_source_t source)
+{
+    fib_entry_t *fib_entry;
+    fib_entry_src_t *esrc;
+
+    fib_entry = fib_entry_get(entry_index);
+
+    esrc = fib_entry_src_find(fib_entry, source, NULL);
+
+    if (NULL != esrc)
+    {
+	if (FIB_NODE_INDEX_INVALID != esrc->fes_pl)
+	{
+	    return (fib_path_list_get_resolving_interface(esrc->fes_pl));
+	}
+    }
+    return (~0);
+}
+
+fib_entry_flag_t
+fib_entry_get_flags_for_source (fib_node_index_t entry_index,
+				fib_source_t source)
+{
+    fib_entry_t *fib_entry;
+    fib_entry_src_t *esrc;
+
+    fib_entry = fib_entry_get(entry_index);
+
+    esrc = fib_entry_src_find(fib_entry, source, NULL);
+
+    if (NULL != esrc)
+    {
+	return (esrc->fes_entry_flags);
+    }
+
+    return (FIB_ENTRY_FLAG_NONE);
 }
 
 fib_entry_flag_t

@@ -22,7 +22,7 @@ Summary: Vector Packet Processing
 License: MIT
 Version: %{_version}
 Release: %{_release}
-Requires: vpp-lib = %{_version}-%{_release}, net-tools, pciutils
+Requires: vpp-lib = %{_version}-%{_release}, net-tools, pciutils, python
 
 %description
 This package provides VPP executables: vpp, vpp_api_test, vpp_json_test
@@ -70,7 +70,7 @@ This package contains VPP plugins
 %package python-api
 Summary: VPP api python bindings
 Group: Development/Libraries
-Requires: vpp = %{_version}-%{_release}, vpp-lib = %{_version}-%{_release}, vpp-devel = %{_version}-%{_release}
+Requires: vpp = %{_version}-%{_release}, vpp-lib = %{_version}-%{_release}
 
 %description python-api
 This package contains the python bindings for the vpp api

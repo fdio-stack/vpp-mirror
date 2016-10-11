@@ -99,9 +99,14 @@ typedef enum fib_source_t_ {
     FIB_SOURCE_AE,
     /**
      * Recursive resolution source.
-     * Used to install an entry that is thre resolution traget of another.
+     * Used to install an entry that is the resolution traget of another.
      */
     FIB_SOURCE_RR,
+    /**
+     * uRPF bypass/exemption.
+     * Used to install an entry that is exempt from the loose uRPF check
+     */
+    FIB_SOURCE_URPF_EXEMPT,
     /**
      * The default route source.
      * The default route is always added to the FIB table (like the
@@ -138,6 +143,7 @@ _Static_assert (sizeof(fib_source_t) == 1,
     [FIB_SOURCE_RR] = "recursive-resolution",	        \
     [FIB_SOURCE_AE] = "attached_export",	        \
     [FIB_SOURCE_MPLS] = "mpls",           	        \
+    [FIB_SOURCE_URPF_EXEMPT] = "urpf-exempt",	        \
     [FIB_SOURCE_DEFAULT_ROUTE] = "default-route",	\
 }
 
@@ -262,6 +268,11 @@ _Static_assert (sizeof(fib_entry_src_flag_t) <= 2,
  */
 typedef struct fib_entry_src_t_ {
     /**
+     * A vector of path extensions
+     */
+    struct fib_path_ext_t_ *fes_path_exts;
+
+    /**
      * The path-list created by the source
      */
     fib_node_index_t fes_pl;
@@ -273,10 +284,6 @@ typedef struct fib_entry_src_t_ {
      * Flags on the source
      */
     fib_entry_src_flag_t fes_flags;
-    /**
-     * Flags the source contributes to the entry
-     */
-    fib_entry_flag_t fes_entry_flags;
 
     /**
      * 1 bytes ref count. This is not the number of users of the Entry
@@ -286,9 +293,9 @@ typedef struct fib_entry_src_t_ {
     u8 fes_ref_count;
 
     /**
-     * A vector of path extensions
+     * Flags the source contributes to the entry
      */
-    struct fib_path_ext_t_ *fes_path_exts;
+    fib_entry_flag_t fes_entry_flags;
     
     /**
      * Source specific info
@@ -375,7 +382,7 @@ typedef struct fib_entry_t_ {
      *     paint the header straight on without the need to check the packet
      *     type to derive the EOS bit value.
      */
-    dpo_id_t fe_lb[FIB_FORW_CHAIN_NUM];
+    dpo_id_t fe_lb[FIB_FORW_CHAIN_MPLS_NUM];
     /**
      * Vector of source infos.
      * Most entries will only have 1 source. So we optimise for memory usage,
@@ -448,6 +455,8 @@ extern fib_entry_src_flag_t fib_entry_path_remove(fib_node_index_t fib_entry_ind
 extern fib_entry_src_flag_t fib_entry_delete(fib_node_index_t fib_entry_index,
 					     fib_source_t source);
 
+extern void fib_entry_contribute_urpf(fib_node_index_t path_index,
+				      index_t urpf);
 extern void fib_entry_contribute_forwarding(
     fib_node_index_t fib_entry_index,
     fib_forward_chain_type_t type,
@@ -480,6 +489,9 @@ extern u32 fib_entry_child_add(fib_node_index_t fib_entry_index,
 extern void fib_entry_child_remove(fib_node_index_t fib_entry_index,
 				   u32 sibling_index);
 extern u32 fib_entry_get_resolving_interface(fib_node_index_t fib_entry_index);
+extern u32 fib_entry_get_resolving_interface_for_source(
+    fib_node_index_t fib_entry_index,
+    fib_source_t source);
 
 extern void fib_entry_get_prefix(fib_node_index_t fib_entry_index,
 				 fib_prefix_t *pfx);
@@ -491,12 +503,14 @@ extern const void* fib_entry_get_source_data(fib_node_index_t fib_entry_index,
                                              fib_source_t source);
 
 extern fib_entry_flag_t fib_entry_get_flags(fib_node_index_t fib_entry_index);
+extern fib_entry_flag_t fib_entry_get_flags_for_source(
+    fib_node_index_t fib_entry_index,
+    fib_source_t source);
 extern fib_source_t fib_entry_get_best_source(fib_node_index_t fib_entry_index);
 extern int fib_entry_is_sourced(fib_node_index_t fib_entry_index,
                                 fib_source_t source);
 
 extern fib_node_index_t fib_entry_get_path_list(fib_node_index_t fib_entry_index);
-extern u32 fib_entry_get_fib_table_id(fib_node_index_t fib_entry_index);
 
 extern void fib_entry_module_init(void);
 

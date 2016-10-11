@@ -2,7 +2,7 @@
  *------------------------------------------------------------------
  * api.c - message handler registration
  *
- * Copyright (c) 2010 Cisco and/or its affiliates.
+ * Copyright (c) 2010-2016 Cisco and/or its affiliates.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at:
@@ -68,12 +68,15 @@
 #include <vnet/classify/vnet_classify.h>
 #include <vnet/classify/input_acl.h>
 #include <vnet/classify/policer_classify.h>
+#include <vnet/classify/flow_classify.h>
 #include <vnet/l2/l2_classify.h>
 #include <vnet/vxlan/vxlan.h>
 #include <vnet/gre/gre.h>
 #include <vnet/l2/l2_vtr.h>
 #include <vnet/vxlan-gpe/vxlan_gpe.h>
 #include <vnet/lisp-gpe/lisp_gpe.h>
+#include <vnet/lisp-gpe/lisp_gpe_fwd_entry.h>
+#include <vnet/lisp-gpe/lisp_gpe_tenant.h>
 #include <vnet/lisp-cp/control.h>
 #include <vnet/map/map.h>
 #include <vnet/cop/cop.h>
@@ -87,6 +90,7 @@
 #include <vnet/flow/flow_report_classify.h>
 #include <vnet/uri/uri.h>
 #include <vnet/uri/uri_db.h>
+#include <vnet/ip/punt.h>
 
 #undef BIHASH_TYPE
 #undef __included_bihash_template_h__
@@ -429,8 +433,12 @@ _(CONNECT_URI, connect_uri)						\
 _(MAP_ANOTHER_SEGMENT_REPLY, map_another_segment_reply)                 \
 _(ACCEPT_SESSION_REPLY, accept_session_reply) 				\
 _(DISCONNECT_SESSION, disconnect_session)                               \
-_(DISCONNECT_SESSION_REPLY, disconnect_session_reply)
-  
+_(DISCONNECT_SESSION_REPLY, disconnect_session_reply)			\
+_(L2_INTERFACE_PBB_TAG_REWRITE, l2_interface_pbb_tag_rewrite)           \
+_(PUNT, punt)                                                           \
+_(FLOW_CLASSIFY_SET_INTERFACE, flow_classify_set_interface)             \
+_(FLOW_CLASSIFY_DUMP, flow_classify_dump)
+
 #define QUOTE_(x) #x
 #define QUOTE(x) QUOTE_(x)
 
@@ -3404,15 +3412,15 @@ static void vl_api_sw_interface_set_unnumbered_t_handler
     {
       si->flags |= VNET_SW_INTERFACE_FLAG_UNNUMBERED;
       si->unnumbered_sw_if_index = sw_if_index;
-      ip4_sw_interface_enable_disable (sw_if_index, 1);
-      ip6_sw_interface_enable_disable (sw_if_index, 1);
+      ip4_sw_interface_enable_disable (unnumbered_sw_if_index, 1);
+      ip6_sw_interface_enable_disable (unnumbered_sw_if_index, 1);
     }
   else
     {
       si->flags &= ~(VNET_SW_INTERFACE_FLAG_UNNUMBERED);
       si->unnumbered_sw_if_index = (u32) ~ 0;
-      ip4_sw_interface_enable_disable (sw_if_index, 0);
-      ip6_sw_interface_enable_disable (sw_if_index, 0);
+      ip4_sw_interface_enable_disable (unnumbered_sw_if_index, 0);
+      ip6_sw_interface_enable_disable (unnumbered_sw_if_index, 0);
     }
 
 done:
@@ -5379,13 +5387,29 @@ vl_api_lisp_gpe_add_del_iface_t_handler (vl_api_lisp_gpe_add_del_iface_t * mp)
 {
   vl_api_lisp_gpe_add_del_iface_reply_t *rmp;
   int rv = 0;
-  vnet_lisp_gpe_add_del_iface_args_t _a, *a = &_a;
 
-  a->is_add = mp->is_add;
-  a->dp_table = mp->dp_table;
-  a->vni = mp->vni;
-  a->is_l2 = mp->is_l2;
-  rv = vnet_lisp_gpe_add_del_iface (a, 0);
+  if (mp->is_l2)
+    {
+      if (mp->is_add)
+	{
+	  if (~0 ==
+	      lisp_gpe_tenant_l2_iface_add_or_lock (mp->vni, mp->dp_table))
+	    rv = 1;
+	}
+      else
+	lisp_gpe_tenant_l2_iface_unlock (mp->vni);
+    }
+  else
+    {
+      if (mp->is_add)
+	{
+	  if (~0 ==
+	      lisp_gpe_tenant_l3_iface_add_or_lock (mp->vni, mp->dp_table))
+	    rv = 1;
+	}
+      else
+	lisp_gpe_tenant_l3_iface_unlock (mp->vni);
+    }
 
   REPLY_MACRO (VL_API_LISP_GPE_ADD_DEL_IFACE_REPLY);
 }
@@ -5474,7 +5498,7 @@ static void
   if (!mp->is_add)
     {
       vnet_lisp_add_del_adjacency_args_t _a, *a = &_a;
-      gid_address_copy (&a->deid, eid);
+      gid_address_copy (&a->reid, eid);
       a->is_add = 0;
       rv = vnet_lisp_add_del_adjacency (a);
       if (rv)
@@ -5506,10 +5530,10 @@ vl_api_lisp_add_del_adjacency_t_handler (vl_api_lisp_add_del_adjacency_t * mp)
   int rv = 0;
   memset (a, 0, sizeof (a[0]));
 
-  rv = unformat_lisp_eid_api (&a->seid, clib_net_to_host_u32 (mp->vni),
-			      mp->eid_type, mp->seid, mp->seid_len);
-  rv |= unformat_lisp_eid_api (&a->deid, clib_net_to_host_u32 (mp->vni),
-			       mp->eid_type, mp->deid, mp->deid_len);
+  rv = unformat_lisp_eid_api (&a->leid, clib_net_to_host_u32 (mp->vni),
+			      mp->eid_type, mp->leid, mp->leid_len);
+  rv |= unformat_lisp_eid_api (&a->reid, clib_net_to_host_u32 (mp->vni),
+			       mp->eid_type, mp->reid, mp->reid_len);
 
   if (rv)
     goto send_reply;
@@ -5834,8 +5858,8 @@ vl_api_lisp_eid_table_dump_t_handler (vl_api_lisp_eid_table_dump_t * mp)
 }
 
 static void
-send_lisp_gpe_tunnel_details (lisp_gpe_tunnel_t * tunnel,
-			      unix_shared_memory_queue_t * q, u32 context)
+send_lisp_gpe_fwd_entry_details (lisp_gpe_fwd_entry_t * lfe,
+				 unix_shared_memory_queue_t * q, u32 context)
 {
   vl_api_lisp_gpe_tunnel_details_t *rmp;
   lisp_gpe_main_t *lgm = &lisp_gpe_main;
@@ -5844,21 +5868,17 @@ send_lisp_gpe_tunnel_details (lisp_gpe_tunnel_t * tunnel,
   memset (rmp, 0, sizeof (*rmp));
   rmp->_vl_msg_id = ntohs (VL_API_LISP_GPE_TUNNEL_DETAILS);
 
-  rmp->tunnels = tunnel - lgm->tunnels;
+  rmp->tunnels = lfe - lgm->lisp_fwd_entry_pool;
 
-  rmp->is_ipv6 = ip_addr_version (&tunnel->src) == IP6 ? 1 : 0;
-  ip_address_copy_addr (rmp->source_ip, &tunnel->src);
-  ip_address_copy_addr (rmp->destination_ip, &tunnel->dst);
+  rmp->is_ipv6 = ip_prefix_version (&(lfe->key->rmt.ippref)) == IP6 ? 1 : 0;
+  ip_address_copy_addr (rmp->source_ip,
+			&ip_prefix_addr (&(lfe->key->rmt.ippref)));
+  ip_address_copy_addr (rmp->destination_ip,
+			&ip_prefix_addr (&(lfe->key->rmt.ippref)));
 
-  rmp->encap_fib_id = htonl (tunnel->encap_fib_index);
-  rmp->decap_fib_id = htonl (tunnel->decap_fib_index);
-  rmp->dcap_next = htonl (tunnel->decap_next_index);
-  rmp->lisp_ver = tunnel->ver_res;
-  rmp->next_protocol = tunnel->next_protocol;
-  rmp->flags = tunnel->flags;
-  rmp->ver_res = tunnel->ver_res;
-  rmp->res = tunnel->res;
-  rmp->iid = htonl (tunnel->vni);
+  rmp->encap_fib_id = htonl (0);
+  rmp->decap_fib_id = htonl (lfe->eid_fib_index);
+  rmp->iid = htonl (lfe->key->vni);
   rmp->context = context;
 
   vl_msg_api_send_shmem (q, (u8 *) & rmp);
@@ -5869,9 +5889,9 @@ vl_api_lisp_gpe_tunnel_dump_t_handler (vl_api_lisp_gpe_tunnel_dump_t * mp)
 {
   unix_shared_memory_queue_t *q = NULL;
   lisp_gpe_main_t *lgm = &lisp_gpe_main;
-  lisp_gpe_tunnel_t *tunnel = NULL;
+  lisp_gpe_fwd_entry_t *lfe = NULL;
 
-  if (pool_elts (lgm->tunnels) == 0)
+  if (pool_elts (lgm->lisp_fwd_entry_pool) == 0)
     {
       return;
     }
@@ -5883,9 +5903,9 @@ vl_api_lisp_gpe_tunnel_dump_t_handler (vl_api_lisp_gpe_tunnel_dump_t * mp)
     }
 
   /* *INDENT-OFF* */
-  pool_foreach(tunnel, lgm->tunnels,
+  pool_foreach(lfe, lgm->lisp_fwd_entry_pool,
   ({
-    send_lisp_gpe_tunnel_details(tunnel, q, mp->context);
+    send_lisp_gpe_fwd_entry_details(lfe, q, mp->context);
   }));
   /* *INDENT-ON* */
 }
@@ -8138,12 +8158,13 @@ vl_api_pg_create_interface_t_handler (vl_api_pg_create_interface_t * mp)
   int rv = 0;
 
   pg_main_t *pg = &pg_main;
-  u32 sw_if_index = pg_interface_add_or_get (pg, ntohl (mp->interface_id));
+  u32 pg_if_id = pg_interface_add_or_get (pg, ntohl (mp->interface_id));
+  pg_interface_t *pi = pool_elt_at_index (pg->interfaces, pg_if_id);
 
   /* *INDENT-OFF* */
   REPLY_MACRO2(VL_API_PG_CREATE_INTERFACE_REPLY,
   ({
-    rmp->sw_if_index = ntohl(sw_if_index);
+    rmp->sw_if_index = ntohl(pi->sw_if_index);
   }));
   /* *INDENT-ON* */
 }
@@ -8666,6 +8687,129 @@ vl_api_accept_session_reply_t_handler (vl_api_accept_session_reply_t * mp)
     case SESSION_TYPE_IP6_UDP:
     default:
       clib_warning ("session type %d unimplemented", s->session_type);
+      break;
+    }
+}
+
+static void
+  vl_api_l2_interface_pbb_tag_rewrite_t_handler
+  (vl_api_l2_interface_pbb_tag_rewrite_t * mp)
+{
+  vl_api_l2_interface_pbb_tag_rewrite_reply_t *rmp;
+  vnet_main_t *vnm = vnet_get_main ();
+  vlib_main_t *vm = vlib_get_main ();
+  u32 vtr_op;
+  int rv = 0;
+
+  VALIDATE_SW_IF_INDEX (mp);
+
+  vtr_op = ntohl (mp->vtr_op);
+
+  switch (vtr_op)
+    {
+    case L2_VTR_DISABLED:
+    case L2_VTR_PUSH_2:
+    case L2_VTR_POP_2:
+    case L2_VTR_TRANSLATE_2_1:
+      break;
+
+    default:
+      rv = VNET_API_ERROR_INVALID_VALUE;
+      goto bad_sw_if_index;
+    }
+
+  rv = l2pbb_configure (vm, vnm, ntohl (mp->sw_if_index), vtr_op,
+			mp->b_dmac, mp->b_smac, ntohs (mp->b_vlanid),
+			ntohl (mp->i_sid), ntohs (mp->outer_tag));
+
+  BAD_SW_IF_INDEX_LABEL;
+
+  REPLY_MACRO (VL_API_L2_INTERFACE_PBB_TAG_REWRITE_REPLY);
+}
+
+static void
+vl_api_punt_t_handler (vl_api_punt_t * mp)
+{
+  vl_api_punt_reply_t *rmp;
+  vlib_main_t *vm = vlib_get_main ();
+  int rv = 0;
+  clib_error_t *error;
+
+  error = vnet_punt_add_del (vm, mp->ipv, mp->l4_protocol,
+			     ntohs (mp->l4_port), mp->is_add);
+  if (error)
+    {
+      rv = -1;
+      clib_error_report (error);
+    }
+
+  REPLY_MACRO (VL_API_PUNT_REPLY);
+}
+
+static void
+  vl_api_flow_classify_set_interface_t_handler
+  (vl_api_flow_classify_set_interface_t * mp)
+{
+  vlib_main_t *vm = vlib_get_main ();
+  vl_api_flow_classify_set_interface_reply_t *rmp;
+  int rv;
+  u32 sw_if_index, ip4_table_index, ip6_table_index;
+
+  ip4_table_index = ntohl (mp->ip4_table_index);
+  ip6_table_index = ntohl (mp->ip6_table_index);
+  sw_if_index = ntohl (mp->sw_if_index);
+
+  VALIDATE_SW_IF_INDEX (mp);
+
+  rv = vnet_set_flow_classify_intfc (vm, sw_if_index, ip4_table_index,
+				     ip6_table_index, mp->is_add);
+
+  BAD_SW_IF_INDEX_LABEL;
+
+  REPLY_MACRO (VL_API_FLOW_CLASSIFY_SET_INTERFACE_REPLY);
+}
+
+static void
+send_flow_classify_details (u32 sw_if_index,
+			    u32 table_index,
+			    unix_shared_memory_queue_t * q, u32 context)
+{
+  vl_api_flow_classify_details_t *mp;
+
+  mp = vl_msg_api_alloc (sizeof (*mp));
+  memset (mp, 0, sizeof (*mp));
+  mp->_vl_msg_id = ntohs (VL_API_FLOW_CLASSIFY_DETAILS);
+  mp->context = context;
+  mp->sw_if_index = htonl (sw_if_index);
+  mp->table_index = htonl (table_index);
+
+  vl_msg_api_send_shmem (q, (u8 *) & mp);
+}
+
+static void
+vl_api_flow_classify_dump_t_handler (vl_api_flow_classify_dump_t * mp)
+{
+  unix_shared_memory_queue_t *q;
+  flow_classify_main_t *pcm = &flow_classify_main;
+  u32 *vec_tbl;
+  int i;
+
+  q = vl_api_client_index_to_input_queue (mp->client_index);
+  if (q == 0)
+    return;
+
+  vec_tbl = pcm->classify_table_index_by_sw_if_index[mp->type];
+
+  if (vec_len (vec_tbl))
+    {
+      for (i = 0; i < vec_len (vec_tbl); i++)
+	{
+	  if (vec_elt (vec_tbl, i) == ~0)
+	    continue;
+
+	  send_flow_classify_details (i, vec_elt (vec_tbl, i), q,
+				      mp->context);
+	}
     }
 }
 

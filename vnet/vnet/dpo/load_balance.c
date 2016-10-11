@@ -19,8 +19,8 @@
 #include <vnet/dpo/drop_dpo.h>
 #include <vppinfra/math.h>              /* for fabs */
 #include <vnet/adj/adj.h>
-#include <vnet/adj/adj_alloc.h>
 #include <vnet/adj/adj_internal.h>
+#include <vnet/fib/fib_urpf_list.h>
 
 /*
  * distribution error tolerance for load-balancing
@@ -88,6 +88,7 @@ load_balance_alloc_i (void)
     memset(lb, 0, sizeof(*lb));
 
     lb->lb_map = INDEX_INVALID;
+    lb->lb_urpf = INDEX_INVALID;
     vlib_validate_combined_counter(&(load_balance_main.lbm_to_counters),
                                    load_balance_get_index(lb));
     vlib_validate_combined_counter(&(load_balance_main.lbm_via_counters),
@@ -118,7 +119,7 @@ load_balance_format (index_t lbi,
 
     s = format(s, "%U: ", format_dpo_type, DPO_LOAD_BALANCE);
     s = format(s, "[index:%d buckets:%d ", lbi, lb->lb_n_buckets);
-    s = format(s, "locks:%d ", lb->lb_locks);
+    s = format(s, "uRPF:%d ", lb->lb_urpf);
     s = format(s, "to:[%Ld:%Ld]", to.packets, to.bytes);
     if (0 != via.packets)
     {
@@ -235,6 +236,35 @@ load_balance_is_drop (const dpo_id_t *dpo)
         return (dpo_is_drop(load_balance_get_bucket_i(lb, 0)));
     }
     return (0);
+}
+
+void
+load_balance_set_urpf (index_t lbi,
+		       index_t urpf)
+{
+    load_balance_t *lb;
+    index_t old;
+
+    lb = load_balance_get(lbi);
+
+    /*
+     * packets in flight we see this change. but it's atomic, so :P
+     */
+    old = lb->lb_urpf;
+    lb->lb_urpf = urpf;
+
+    fib_urpf_list_unlock(old);
+    fib_urpf_list_lock(urpf);
+}
+
+index_t
+load_balance_get_urpf (index_t lbi)
+{
+    load_balance_t *lb;
+
+    lb = load_balance_get(lbi);
+
+    return (lb->lb_urpf);
 }
 
 const dpo_id_t *
@@ -620,6 +650,7 @@ load_balance_multipath_update (const dpo_id_t *dpo,
     {
         dpo_reset(&nh->path_dpo);
     }
+    vec_free(nhs);
 
     load_balance_map_unlock(old_lbmi);
 }
@@ -653,6 +684,9 @@ load_balance_destroy (load_balance_t *lb)
         vec_free(lb->lb_buckets);
     }
 
+    fib_urpf_list_unlock(lb->lb_urpf);
+    load_balance_map_unlock(lb->lb_map);
+
     pool_put(load_balance_pool, lb);
 }
 
@@ -671,10 +705,21 @@ load_balance_unlock (dpo_id_t *dpo)
     }
 }
 
+static void
+load_balance_mem_show (void)
+{
+    fib_show_memory_usage("load-balance",
+			  pool_elts(load_balance_pool),
+			  pool_len(load_balance_pool),
+			  sizeof(load_balance_t));
+    load_balance_map_show_mem();
+}
+
 const static dpo_vft_t lb_vft = {
     .dv_lock = load_balance_lock,
     .dv_unlock = load_balance_unlock,
     .dv_format = format_load_balance_dpo,
+    .dv_mem_show = load_balance_mem_show,
 };
 
 /**
@@ -703,11 +748,17 @@ const static char* const load_balance_mpls_nodes[] =
     "mpls-load-balance",
     NULL,
 };
+const static char* const load_balance_l2_nodes[] =
+{
+    "l2-load-balance",
+    NULL,
+};
 const static char* const * const load_balance_nodes[DPO_PROTO_NUM] =
 {
     [DPO_PROTO_IP4]  = load_balance_ip4_nodes,
     [DPO_PROTO_IP6]  = load_balance_ip6_nodes,
     [DPO_PROTO_MPLS] = load_balance_mpls_nodes,
+    [DPO_PROTO_ETHERNET] = load_balance_l2_nodes,
 };
 
 void
@@ -757,4 +808,143 @@ VLIB_CLI_COMMAND (load_balance_show_command, static) = {
     .path = "show load-balance",
     .short_help = "show load-balance [<index>]",
     .function = load_balance_show,
+};
+
+
+always_inline u32
+ip_flow_hash (void *data)
+{
+  ip4_header_t *iph = (ip4_header_t *) data;
+
+  if ((iph->ip_version_and_header_length & 0xF0) == 0x40)
+    return ip4_compute_flow_hash (iph, IP_FLOW_HASH_DEFAULT);
+  else
+    return ip6_compute_flow_hash ((ip6_header_t *) iph, IP_FLOW_HASH_DEFAULT);
+}
+
+always_inline u64
+mac_to_u64 (u8 * m)
+{
+  return (*((u64 *) m) & 0xffffffffffff);
+}
+
+always_inline u32
+l2_flow_hash (vlib_buffer_t * b0)
+{
+  ethernet_header_t *eh;
+  u64 a, b, c;
+  uword is_ip, eh_size;
+  u16 eh_type;
+
+  eh = vlib_buffer_get_current (b0);
+  eh_type = clib_net_to_host_u16 (eh->type);
+  eh_size = ethernet_buffer_header_size (b0);
+
+  is_ip = (eh_type == ETHERNET_TYPE_IP4 || eh_type == ETHERNET_TYPE_IP6);
+
+  /* since we have 2 cache lines, use them */
+  if (is_ip)
+    a = ip_flow_hash ((u8 *) vlib_buffer_get_current (b0) + eh_size);
+  else
+    a = eh->type;
+
+  b = mac_to_u64 ((u8 *) eh->dst_address);
+  c = mac_to_u64 ((u8 *) eh->src_address);
+  hash_mix64 (a, b, c);
+
+  return (u32) c;
+}
+
+typedef struct load_balance_trace_t_
+{
+    index_t lb_index;
+} load_balance_trace_t;
+
+static uword
+l2_load_balance (vlib_main_t * vm,
+		 vlib_node_runtime_t * node,
+		 vlib_frame_t * frame)
+{
+  u32 n_left_from, next_index, *from, *to_next;
+
+  from = vlib_frame_vector_args (frame);
+  n_left_from = frame->n_vectors;
+
+  next_index = node->cached_next_index;
+
+  while (n_left_from > 0)
+    {
+      u32 n_left_to_next;
+
+      vlib_get_next_frame (vm, node, next_index, to_next, n_left_to_next);
+
+      while (n_left_from > 0 && n_left_to_next > 0)
+	{
+	  vlib_buffer_t *b0;
+	  u32 bi0, lbi0, next0;
+	  const dpo_id_t *dpo0;
+	  const load_balance_t *lb0;
+
+	  bi0 = from[0];
+	  to_next[0] = bi0;
+	  from += 1;
+	  to_next += 1;
+	  n_left_from -= 1;
+	  n_left_to_next -= 1;
+
+	  b0 = vlib_get_buffer (vm, bi0);
+
+	  /* lookup dst + src mac */
+	  lbi0 =  vnet_buffer (b0)->ip.adj_index[VLIB_TX];
+	  lb0 = load_balance_get(lbi0);
+
+	  vnet_buffer(b0)->ip.flow_hash = l2_flow_hash(b0);
+
+	  dpo0 = load_balance_get_bucket_i(lb0, 
+					   vnet_buffer(b0)->ip.flow_hash &
+					   (lb0->lb_n_buckets_minus_1));
+
+	  next0 = dpo0->dpoi_next_node;
+	  vnet_buffer (b0)->ip.adj_index[VLIB_TX] = dpo0->dpoi_index;
+
+	  if (PREDICT_FALSE (b0->flags & VLIB_BUFFER_IS_TRACED))
+	    {
+	      load_balance_trace_t *tr = vlib_add_trace (vm, node, b0,
+							 sizeof (*tr));
+	      tr->lb_index = lbi0;
+	    }
+	  vlib_validate_buffer_enqueue_x1 (vm, node, next_index, to_next,
+					   n_left_to_next, bi0, next0);
+	}
+
+      vlib_put_next_frame (vm, node, next_index, n_left_to_next);
+    }
+
+  return frame->n_vectors;
+}
+
+static u8 *
+format_load_balance_trace (u8 * s, va_list * args)
+{
+  CLIB_UNUSED (vlib_main_t * vm) = va_arg (*args, vlib_main_t *);
+  CLIB_UNUSED (vlib_node_t * node) = va_arg (*args, vlib_node_t *);
+  load_balance_trace_t *t = va_arg (*args, load_balance_trace_t *);
+
+  s = format (s, "L2-load-balance: index %d", t->lb_index);
+  return s;
+}
+
+/**
+ * @brief
+ */
+VLIB_REGISTER_NODE (l2_load_balance_node) = {
+  .function = l2_load_balance,
+  .name = "l2-load-balance",
+  .vector_size = sizeof (u32),
+
+  .format_trace = format_load_balance_trace,
+  .n_next_nodes = 1,
+  .next_nodes = {
+      [0] = "error-drop",
+  },
 };

@@ -2,7 +2,7 @@
  *------------------------------------------------------------------
  * custom_dump.c - pretty-print API messages for replay
  *
- * Copyright (c) 2014 Cisco and/or its affiliates.
+ * Copyright (c) 2014-2016 Cisco and/or its affiliates.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at:
@@ -30,6 +30,7 @@
 #include <vnet/classify/policer_classify.h>
 #include <vnet/policer/xlate.h>
 #include <vnet/policer/policer.h>
+#include <vnet/classify/flow_classify.h>
 #include <vlib/vlib.h>
 #include <vlib/unix/unix.h>
 #include <vlibapi/api.h>
@@ -2467,9 +2468,9 @@ static void *vl_api_lisp_add_del_adjacency_t_print
 
   s = format (s, "%s ", mp->is_add ? "add" : "del");
   s = format (s, "vni %d ", clib_net_to_host_u32 (mp->vni));
-  s = format (s, "deid %U seid %U ",
-	      format_lisp_flat_eid, mp->eid_type, mp->deid, mp->deid_len,
-	      format_lisp_flat_eid, mp->eid_type, mp->seid, mp->seid_len);
+  s = format (s, "reid %U leid %U ",
+	      format_lisp_flat_eid, mp->eid_type, mp->reid, mp->reid_len,
+	      format_lisp_flat_eid, mp->eid_type, mp->leid, mp->leid_len);
 
   FINISH;
 }
@@ -2748,6 +2749,88 @@ static void *vl_api_ipsec_gre_tunnel_dump_t_print
   FINISH;
 }
 
+static void *vl_api_l2_interface_pbb_tag_rewrite_t_print
+  (vl_api_l2_interface_pbb_tag_rewrite_t * mp, void *handle)
+{
+  u8 *s;
+  u32 vtr_op = ntohl (mp->vtr_op);
+
+  s = format (0, "SCRIPT: l2_interface_pbb_tag_rewrite ");
+
+  s = format (s, "sw_if_index %d ", ntohl (mp->sw_if_index));
+  s = format (s, "vtr_op %d ", vtr_op);
+  if (vtr_op != L2_VTR_DISABLED && vtr_op != L2_VTR_POP_2)
+    {
+      if (vtr_op == L2_VTR_TRANSLATE_2_2)
+	s = format (s, "%d ", ntohs (mp->outer_tag));
+      s = format (s, "dmac %U ", format_ethernet_address, &mp->b_dmac);
+      s = format (s, "smac %U ", format_ethernet_address, &mp->b_smac);
+      s = format (s, "sid %d ", ntohl (mp->i_sid));
+      s = format (s, "vlanid %d ", ntohs (mp->b_vlanid));
+    }
+
+  FINISH;
+}
+
+static void *vl_api_flow_classify_set_interface_t_print
+  (vl_api_flow_classify_set_interface_t * mp, void *handle)
+{
+  u8 *s;
+
+  s = format (0, "SCRIPT: flow_classify_set_interface ");
+  s = format (s, "sw_if_index %d ", ntohl (mp->sw_if_index));
+  if (mp->ip4_table_index != ~0)
+    s = format (s, "ip4-table %d ", ntohl (mp->ip4_table_index));
+  if (mp->ip6_table_index != ~0)
+    s = format (s, "ip6-table %d ", ntohl (mp->ip6_table_index));
+  if (mp->is_add == 0)
+    s = format (s, "del ");
+
+  FINISH;
+}
+
+static void *
+vl_api_punt_t_print (vl_api_punt_t * mp, void *handle)
+{
+  u8 *s;
+
+  s = format (0, "SCRIPT: punt ");
+
+  if (mp->ipv != (u8) ~ 0)
+    s = format (s, "ip %d ", mp->ipv);
+
+  s = format (s, "protocol %d ", mp->l4_protocol);
+
+  if (mp->l4_port != (u16) ~ 0)
+    s = format (s, "port %d ", ntohs (mp->l4_port));
+
+  if (!mp->is_add)
+    s = format (s, "del ");
+
+  FINISH;
+}
+
+static void *vl_api_flow_classify_dump_t_print
+  (vl_api_flow_classify_dump_t * mp, void *handle)
+{
+  u8 *s;
+
+  s = format (0, "SCRIPT: flow_classify_dump ");
+  switch (mp->type)
+    {
+    case FLOW_CLASSIFY_TABLE_IP4:
+      s = format (s, "type ip4 ");
+      break;
+    case FLOW_CLASSIFY_TABLE_IP6:
+      s = format (s, "type ip6 ");
+      break;
+    default:
+      break;
+    }
+
+  FINISH;
+}
+
 #define foreach_custom_print_no_arg_function                            \
 _(lisp_eid_table_vni_dump)                                              \
 _(lisp_map_resolver_dump)                                               \
@@ -2908,7 +2991,11 @@ _(LISP_LOCATOR_SET_DUMP, lisp_locator_set_dump)                         \
 _(LISP_LOCATOR_DUMP, lisp_locator_dump)                                 \
 _(IPSEC_GRE_ADD_DEL_TUNNEL, ipsec_gre_add_del_tunnel)                   \
 _(IPSEC_GRE_TUNNEL_DUMP, ipsec_gre_tunnel_dump)                         \
-_(DELETE_SUBIF, delete_subif)
+_(DELETE_SUBIF, delete_subif)                                           \
+_(L2_INTERFACE_PBB_TAG_REWRITE, l2_interface_pbb_tag_rewrite)           \
+_(PUNT, punt)                                                           \
+_(FLOW_CLASSIFY_SET_INTERFACE, flow_classify_set_interface)             \
+_(FLOW_CLASSIFY_DUMP, flow_classify_dump)
   void
 vl_msg_api_custom_dump_configure (api_main_t * am)
 {

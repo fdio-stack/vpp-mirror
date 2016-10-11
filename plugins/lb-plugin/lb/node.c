@@ -36,27 +36,10 @@ static char *lb_error_strings[] = {
 #undef _
 };
 
-typedef enum {
-  LB_NEXT_LOOKUP,
-  LB_NEXT_REWRITE,
-  LB_NEXT_DROP,
-  LB_N_NEXT,
-} lb_next_t;
-
 typedef struct {
   u32 vip_index;
   u32 as_index;
 } lb_trace_t;
-
-/* u8 *lb_format_adjacency(u8 * s, va_list * va) */
-/* { */
-/*   lb_main_t *lbm = &lb_main; */
-/*   __attribute((unused)) ip_lookup_main_t *lm = va_arg (*va, ip_lookup_main_t *); */
-/*   ip_adjacency_t *adj = va_arg (*va, ip_adjacency_t *); */
-/*   lb_adj_data_t *ad = (lb_adj_data_t *) &adj->opaque; */
-/*   __attribute__((unused)) lb_vip_t *vip = pool_elt_at_index (lbm->vips, ad->vip_index); */
-/*   return format(s, "vip idx:%d", ad->vip_index); */
-/* } */
 
 u8 *
 format_lb_trace (u8 * s, va_list * args)
@@ -65,8 +48,16 @@ format_lb_trace (u8 * s, va_list * args)
   CLIB_UNUSED (vlib_main_t * vm) = va_arg (*args, vlib_main_t *);
   CLIB_UNUSED (vlib_node_t * node) = va_arg (*args, vlib_node_t *);
   lb_trace_t *t = va_arg (*args, lb_trace_t *);
-  s = format(s, "lb vip[%d]: %U\n", t->vip_index, format_lb_vip, &lbm->vips[t->vip_index]);
-  s = format(s, "lb as[%d]: %U\n", t->as_index, format_lb_as, &lbm->ass[t->as_index]);
+  if (pool_is_free_index(lbm->vips, t->vip_index)) {
+      s = format(s, "lb vip[%d]: This VIP was freed since capture\n");
+  } else {
+      s = format(s, "lb vip[%d]: %U\n", t->vip_index, format_lb_vip, &lbm->vips[t->vip_index]);
+  }
+  if (pool_is_free_index(lbm->ass, t->as_index)) {
+      s = format(s, "lb as[%d]: This AS was freed since capture\n");
+  } else {
+      s = format(s, "lb as[%d]: %U\n", t->as_index, format_lb_as, &lbm->ass[t->as_index]);
+  }
   return s;
 }
 
@@ -108,7 +99,6 @@ lb_node_fn (vlib_main_t * vm,
          u8 is_input_v4, //Compile-time parameter stating that is input is v4 (or v6)
          u8 is_encap_v4) //Compile-time parameter stating that is GRE encap is v4 (or v6)
 {
-  ip_lookup_main_t *lm = (is_input_v4)?&ip4_main.lookup_main:&ip6_main.lookup_main;
   lb_main_t *lbm = &lb_main;
   vlib_node_runtime_t *error_node = node;
   u32 n_left_from, *from, next_index, *to_next, n_left_to_next;
@@ -127,8 +117,6 @@ lb_node_fn (vlib_main_t * vm,
     {
       u32 pi0;
       vlib_buffer_t *p0;
-      ip_adjacency_t *adj0;
-      lb_adj_data_t *ad0;
       lb_vip_t *vip0;
       lb_as_t *as0;
       gre_header_t *gre0;
@@ -136,7 +124,6 @@ lb_node_fn (vlib_main_t * vm,
       u32 value0, available_index0, hash0;
       u64 key0[5];
       lb_error_t error0 = LB_ERROR_NONE;
-      lb_next_t next0 = LB_NEXT_LOOKUP;
 
       if (PREDICT_TRUE(n_left_from > 1))
       {
@@ -154,9 +141,8 @@ lb_node_fn (vlib_main_t * vm,
       n_left_to_next -= 1;
 
       p0 = vlib_get_buffer (vm, pi0);
-      adj0 = ip_get_adjacency (lm, vnet_buffer (p0)->ip.adj_index[VLIB_TX]);
-      ad0 = (lb_adj_data_t *) &adj0->opaque;
-      vip0 = pool_elt_at_index (lbm->vips, ad0->vip_index);
+      vip0 = pool_elt_at_index (lbm->vips,
+				vnet_buffer (p0)->ip.adj_index[VLIB_TX]);
 
       if (is_input_v4) {
         ip4_header_t *ip40;
@@ -197,7 +183,6 @@ lb_node_fn (vlib_main_t * vm,
         as0 = &lbm->ass[vip0->new_flow_table[hash0 & vip0->new_flow_table_mask].as_index];
         if (PREDICT_FALSE(as0 == lbm->ass)) { //Special first element
           error0 = LB_ERROR_NO_SERVER;
-          next0 = LB_NEXT_DROP;
         } else {
           vlib_increment_simple_counter(&lbm->vip_counters[LB_VIP_COUNTER_TRACKED_SESSION],
                                         cpu_index, vip0 - lbm->vips, 1);
@@ -252,19 +237,19 @@ lb_node_fn (vlib_main_t * vm,
           clib_host_to_net_u16(0x0800):
           clib_host_to_net_u16(0x86DD);
 
-      vnet_buffer(p0)->ip.adj_index[VLIB_TX] = as0->adj_index;
-      next0 = (as0->adj_index != ~0)?LB_NEXT_REWRITE:next0;
+      vnet_buffer (p0)->ip.adj_index[VLIB_TX] = as0->dpo.dpoi_index;
 
       if (PREDICT_FALSE (p0->flags & VLIB_BUFFER_IS_TRACED))
       {
         lb_trace_t *tr = vlib_add_trace (vm, node, p0, sizeof (*tr));
         tr->as_index = as0 - lbm->ass;
-        tr->vip_index = ad0->vip_index;
+        tr->vip_index = vip0 - lbm->vips;
       }
 
       p0->error = error_node->errors[error0];
       vlib_validate_buffer_enqueue_x1 (vm, node, next_index, to_next,
-                                       n_left_to_next, pi0, next0);
+                                       n_left_to_next, pi0,
+				       as0->dpo.dpoi_next_node);
     }
     vlib_put_next_frame (vm, node, next_index, n_left_to_next);
   }
@@ -313,17 +298,9 @@ VLIB_REGISTER_NODE (lb6_gre6_node) =
   .n_next_nodes = LB_N_NEXT,
   .next_nodes =
   {
-      [LB_NEXT_LOOKUP] = "ip6-lookup",
-      [LB_NEXT_REWRITE] = "ip6-rewrite",
       [LB_NEXT_DROP] = "error-drop"
   },
 };
-
-/* VNET_IP6_REGISTER_ADJACENCY(lb6_gre6) = { */
-/*   .node_name = "lb6-gre6", */
-/*   .fn = lb_format_adjacency, */
-/*   .next_index = &lb_main.ip_lookup_next_index[LB_VIP_TYPE_IP6_GRE6] */
-/* }; */
 
 VLIB_REGISTER_NODE (lb6_gre4_node) =
 {
@@ -338,17 +315,9 @@ VLIB_REGISTER_NODE (lb6_gre4_node) =
   .n_next_nodes = LB_N_NEXT,
   .next_nodes =
   {
-      [LB_NEXT_LOOKUP] = "ip4-lookup",
-      [LB_NEXT_REWRITE]= "ip4-rewrite-transit",
       [LB_NEXT_DROP] = "error-drop"
   },
 };
-
-/* VNET_IP6_REGISTER_ADJACENCY(lb6_gre4) = { */
-/*   .node_name = "lb6-gre4", */
-/*   .fn = lb_format_adjacency, */
-/*   .next_index = &lb_main.ip_lookup_next_index[LB_VIP_TYPE_IP6_GRE4] */
-/* }; */
 
 VLIB_REGISTER_NODE (lb4_gre6_node) =
 {
@@ -363,17 +332,9 @@ VLIB_REGISTER_NODE (lb4_gre6_node) =
   .n_next_nodes = LB_N_NEXT,
   .next_nodes =
   {
-      [LB_NEXT_LOOKUP] = "ip6-lookup",
-      [LB_NEXT_REWRITE] = "ip6-rewrite",
       [LB_NEXT_DROP] = "error-drop"
   },
 };
-
-/* VNET_IP4_REGISTER_ADJACENCY(lb4_gre6) = { */
-/*   .node_name = "lb4-gre6", */
-/*   .fn = lb_format_adjacency, */
-/*   .next_index = &lb_main.ip_lookup_next_index[LB_VIP_TYPE_IP4_GRE6] */
-/* }; */
 
 VLIB_REGISTER_NODE (lb4_gre4_node) =
 {
@@ -388,14 +349,7 @@ VLIB_REGISTER_NODE (lb4_gre4_node) =
   .n_next_nodes = LB_N_NEXT,
   .next_nodes =
   {
-      [LB_NEXT_LOOKUP] = "ip4-lookup",
-      [LB_NEXT_REWRITE]= "ip4-rewrite-transit",
       [LB_NEXT_DROP] = "error-drop"
   },
 };
 
-/* VNET_IP4_REGISTER_ADJACENCY(lb4_gre4) = { */
-/*   .node_name = "lb4-gre4", */
-/*   .fn = lb_format_adjacency, */
-/*   .next_index = &lb_main.ip_lookup_next_index[LB_VIP_TYPE_IP4_GRE4] */
-/* }; */

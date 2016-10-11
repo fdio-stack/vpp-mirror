@@ -427,6 +427,17 @@ vnet_set_ip6_ethernet_neighbor (vlib_main_t * vm,
     n->key = k;
     n->adj_index = ADJ_INDEX_INVALID;
   }
+  else
+  {
+    /*
+     * prevent a DoS attack from the data-plane that
+     * spams us with no-op updates to the MAC address
+     */
+    if (0 == memcmp(n->link_layer_address,
+		    link_layer_address,
+		    n_bytes_link_layer_address))
+      return -1;
+  }
 
   /* Update time stamp and ethernet address. */
   clib_memcpy (n->link_layer_address,
@@ -812,7 +823,8 @@ icmp6_neighbor_solicitation_or_advertisement (vlib_main_t * vm,
 							 128);
 
 		  if (FIB_NODE_INDEX_INVALID == fei || 
-		      !(FIB_ENTRY_FLAG_LOCAL & fib_entry_get_flags(fei)))
+		      !(FIB_ENTRY_FLAG_LOCAL &
+			fib_entry_get_flags_for_source(fei, FIB_SOURCE_INTERFACE)))
 		    {
 		      error0 = ICMP6_ERROR_NEIGHBOR_SOLICITATION_SOURCE_UNKNOWN;
 		    }
@@ -3405,8 +3417,9 @@ int vnet_ip6_nd_term (vlib_main_t * vm,
 
   /* Check if anyone want ND events for L2 BDs */
   p = mhash_get (&nm->mac_changes_by_address, &ip6a_zero);
-  if (p && shg == 0)
-    { /* Only SHG 0 interface which is more likely local */
+  if (p && shg == 0 && /* Only SHG 0 interface which is more likely local */ 
+      !ip6_address_is_link_local_unicast (&ip->src_address))
+    { 
       u32 next_index = p[0];
       while (next_index != (u32)~0)
         {
@@ -3471,4 +3484,24 @@ int vnet_ip6_nd_term (vlib_main_t * vm,
 
   return 0;
 
+}
+
+void
+ethernet_ndp_change_mac (vlib_main_t * vm, u32 sw_if_index)
+{
+  ip6_neighbor_main_t * nm = &ip6_neighbor_main;
+  ip6_neighbor_t * n;
+
+  /* *INDENT-OFF* */
+  pool_foreach (n, nm->neighbor_pool, ({
+    if (n->key.sw_if_index == sw_if_index)
+    {
+      if (ADJ_INDEX_INVALID != n->adj_index)
+        {
+          adj_nbr_update_rewrite(n->adj_index,
+               n->link_layer_address);
+        }
+    }
+  }));
+  /* *INDENT-ON* */
 }
