@@ -30,20 +30,20 @@
 #define AF_PACKET_DEBUG_SOCKET		0
 
 #define AF_PACKET_TX_FRAMES_PER_BLOCK	1024
-#define AF_PACKET_TX_FRAME_SIZE	 	(2048 * 5)
+#define AF_PACKET_TX_FRAME_SIZE         (2048 * 5)
 #define AF_PACKET_TX_BLOCK_NR		1
 #define AF_PACKET_TX_FRAME_NR		(AF_PACKET_TX_BLOCK_NR * \
-					 AF_PACKET_TX_FRAMES_PER_BLOCK)
-#define AF_PACKET_TX_BLOCK_SIZE	 	(AF_PACKET_TX_FRAME_SIZE * \
-					 AF_PACKET_TX_FRAMES_PER_BLOCK)
+                                         AF_PACKET_TX_FRAMES_PER_BLOCK)
+#define AF_PACKET_TX_BLOCK_SIZE         (AF_PACKET_TX_FRAME_SIZE * \
+                                         AF_PACKET_TX_FRAMES_PER_BLOCK)
 
 #define AF_PACKET_RX_FRAMES_PER_BLOCK	1024
-#define AF_PACKET_RX_FRAME_SIZE	 	(2048 * 5)
+#define AF_PACKET_RX_FRAME_SIZE         (2048 * 5)
 #define AF_PACKET_RX_BLOCK_NR		1
 #define AF_PACKET_RX_FRAME_NR		(AF_PACKET_RX_BLOCK_NR * \
-					 AF_PACKET_RX_FRAMES_PER_BLOCK)
+                                         AF_PACKET_RX_FRAMES_PER_BLOCK)
 #define AF_PACKET_RX_BLOCK_SIZE		(AF_PACKET_RX_FRAME_SIZE * \
-					 AF_PACKET_RX_FRAMES_PER_BLOCK)
+                                         AF_PACKET_RX_FRAMES_PER_BLOCK)
 
 #if AF_PACKET_DEBUG_SOCKET == 1
 #define DBG_SOCK(args...) clib_warning(args);
@@ -58,7 +58,7 @@ typedef struct tpacket_req tpacket_req_t;
 
 static u32
 af_packet_eth_flag_change (vnet_main_t * vnm, vnet_hw_interface_t * hi,
-			   u32 flags)
+                           u32 flags)
 {
   /* nothing for now */
   return 0;
@@ -82,7 +82,7 @@ af_packet_fd_read_ready (unix_file_t * uf)
 
 static int
 create_packet_v2_sock (u8 * name, tpacket_req_t * rx_req,
-		       tpacket_req_t * tx_req, int *fd, u8 ** ring)
+                       tpacket_req_t * tx_req, int *fd, u8 ** ring)
 {
   int ret, err;
   struct sockaddr_ll sll;
@@ -141,9 +141,18 @@ create_packet_v2_sock (u8 * name, tpacket_req_t * rx_req,
       goto error;
     }
 
+  int one = 1;
+  if ((err =
+       setsockopt(*fd, SOL_PACKET, PACKET_QDISC_BYPASS, &one, sizeof(one))) < 0)
+    {
+      DBG_SOCK ("Failed to set qdisc bypass option");
+      ret = VNET_API_ERROR_SYSCALL_ERROR_1;
+      goto error;
+    }
+
   *ring =
     mmap (NULL, ring_sz, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_LOCKED, *fd,
-	  0);
+          0);
   if (*ring == MAP_FAILED)
     {
       DBG_SOCK ("mmap failure");
@@ -173,7 +182,7 @@ error:
 
 int
 af_packet_create_if (vlib_main_t * vm, u8 * host_if_name, u8 * hw_addr_set,
-		     u32 * sw_if_index)
+                     u32 * sw_if_index)
 {
   af_packet_main_t *apm = &af_packet_main;
   int ret, fd = -1;
@@ -251,8 +260,8 @@ af_packet_create_if (vlib_main_t * vm, u8 * host_if_name, u8 * hw_addr_set,
     }
 
   error = ethernet_register_interface (vnm, af_packet_device_class.index,
-				       if_index, hw_addr, &apif->hw_if_index,
-				       af_packet_eth_flag_change);
+                                       if_index, hw_addr, &apif->hw_if_index,
+                                       af_packet_eth_flag_change);
 
   if (error)
     {
@@ -267,10 +276,10 @@ af_packet_create_if (vlib_main_t * vm, u8 * host_if_name, u8 * hw_addr_set,
   apif->sw_if_index = sw->sw_if_index;
 
   vnet_hw_interface_set_flags (vnm, apif->hw_if_index,
-			       VNET_HW_INTERFACE_FLAG_LINK_UP);
+                               VNET_HW_INTERFACE_FLAG_LINK_UP);
 
   mhash_set_mem (&apm->if_index_by_host_if_name, host_if_name_dup, &if_index,
-		 0);
+                 0);
   if (sw_if_index)
     *sw_if_index = apif->sw_if_index;
   return 0;
@@ -317,7 +326,7 @@ af_packet_delete_if (vlib_main_t * vm, u8 * host_if_name)
     apif->tx_req->tp_block_size * apif->tx_req->tp_block_nr;
   if (munmap (apif->rx_ring, ring_sz))
     clib_warning ("Host interface %s could not free rx/tx ring",
-		  host_if_name);
+                  host_if_name);
   apif->rx_ring = NULL;
   apif->tx_ring = NULL;
   apif->fd = -1;
@@ -350,7 +359,7 @@ af_packet_init (vlib_main_t * vm)
   mhash_init_vec_string (&apm->if_index_by_host_if_name, sizeof (uword));
 
   vec_validate_aligned (apm->rx_buffers, tm->n_vlib_mains - 1,
-			CLIB_CACHE_LINE_BYTES);
+                        CLIB_CACHE_LINE_BYTES);
 
   return 0;
 }
