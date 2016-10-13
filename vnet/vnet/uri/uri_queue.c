@@ -28,13 +28,13 @@
 #include <vnet/ip/udp_packet.h>
 
 
-static u32 (*event_queue_tx_fns[SESSION_TYPE_N_TYPES]) 
-(vlib_main_t *, stream_session_t *, vlib_buffer_t *) = 
-{
-#define _(A,a) uri_tx_##a,
-  foreach_uri_session_type
-#undef _
-};
+//static u32 (*event_queue_tx_fns[SESSION_TYPE_N_TYPES])
+//(vlib_main_t *, stream_session_t *, vlib_buffer_t *) =
+//{
+//#define _(A,a) uri_tx_##a,
+//  foreach_uri_session_type
+//#undef _
+//};
 
 vlib_node_registration_t uri_queue_node;
 
@@ -161,6 +161,7 @@ uri_queue_node_fn (vlib_main_t * vm,
       stream_session_t * s0;
       u32 server_session_index0, server_thread_index0;
       fifo_event_t * e0;
+      transport_proto_vft_t *vft;
 
       e0 = &my_fifo_events[i];
       f0 = e0->fifo;
@@ -215,7 +216,8 @@ uri_queue_node_fn (vlib_main_t * vm,
               ed->data[1] = e0->enqueue_length;
             }
           
-          next0 = event_queue_tx_fns [e0->event_type] (vm, s0, b0);
+          vft = uri_get_transport (s0->session_type);
+          next0 = vft->send (vm, s0, b0);
           n_tx_packets++;
           break;
 

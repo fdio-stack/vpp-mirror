@@ -74,6 +74,19 @@ typedef enum {
   UDP4_URI_INPUT_N_NEXT,
 } udp4_uri_input_next_t;
 
+void
+uri_udp_session_delete (transport_session_t *s)
+{
+  udp4_session_t * us;
+  us = (udp4_session_t *) s;
+  clib_mem_free(us);
+}
+
+static transport_session_vft_t udp4_session_vft = {
+    .create = 0,
+    .delete = uri_udp_session_delete
+};
+
 static uword
 udp4_uri_input_node_fn (vlib_main_t * vm,
 		  vlib_node_runtime_t * node,
@@ -186,15 +199,12 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
           u32 next0 = UDP4_URI_INPUT_NEXT_DROP;
           u32 error0 = UDP4_URI_INPUT_ERROR_ENQUEUED;
           udp_header_t * udp0;
-          clib_bihash_kv_16_8_t kv0;
-          udp4_session_key_t key0;
           ip4_header_t * ip0;
           stream_session_t * s0;
           svm_fifo_t * f0;
-          stream_server_t *ss0;
           u16 udp_len0;
-          u16 i0;
           u8 * data0;
+          u64 value;
           
           /* speculatively enqueue b0 to the current next frame */
 	  bi0 = from[0];
@@ -215,24 +225,17 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
           ip0 = (ip4_header_t *) (((u8 *)udp0) - sizeof (*ip0));
           s0 = 0;
 
-          key0.src.as_u32 = ip0->src_address.as_u32;
-          key0.dst.as_u32 = ip0->dst_address.as_u32;
-          key0.src_port = udp0->src_port;
-          key0.dst_port = udp0->dst_port;
-          key0.session_type = SESSION_TYPE_IP4_UDP;
+          /* look session */
+          value = stream_session_lookup4 (&ip0->dst_address, &ip0->src_address,
+                                          udp0->dst_port, udp0->src_port,
+                                          SESSION_TYPE_IP4_UDP);
 
-          kv0.key[0] = key0.as_u64[0];
-          kv0.key[1] = key0.as_u64[1];
-          kv0.value = ~0ULL;
-
-          /* look for session */
-          clib_bihash_search_inline_16_8 (&ssm->v4_session_hash, &kv0);
-
-          if (PREDICT_TRUE (kv0.value != ~0ULL))
+          if (PREDICT_TRUE (value != ~0ULL))
             {
               s0 = pool_elt_at_index (ssm->sessions[my_thread_index],
-                                      kv0.value & 0xFFFFFFFFULL);
+                                      value & 0xFFFFFFFFULL);
  
+              ASSERT ((u32)(value >> 32) == my_thread_index);
               f0 = s0->server_rx_fifo;
               
               if (PREDICT_FALSE(s0->session_state != SESSION_STATE_READY))
@@ -267,39 +270,33 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
             }
           else
             {
-              udp4_session_t *s;
+              udp4_session_t *ts;
+              int rv;
 
-              b0->error = node->errors[UDP4_URI_INPUT_ERROR_NOT_READY];
-              
-              /* Find the server */
-              i0 = sparse_vec_index (
-                  ssm->stream_server_by_dst_port[SESSION_TYPE_IP4_UDP],
-                  udp0->dst_port);
-              if (i0 == SPARSE_VEC_INVALID_INDEX)
-                {
-                  error0 = UDP4_URI_INPUT_ERROR_NO_LISTENER;
-                  goto trace0;
-                  
-                }
-              /* Note: -1 to dodge SPARSE_VEC_INVALID_INDEX */
-              ss0 = pool_elt_at_index (ssm->servers, i0-1);
+              error0 = UDP4_URI_INPUT_ERROR_NOT_READY;
 
-              /* Check the API queue */
-              if (check_api_queue_full (ss0))
-                {
-                  error0 = UDP4_URI_INPUT_ERROR_API_QUEUE_FULL;
-                  goto trace0;
-                }
+              /*
+               * create udp transport session
+               */
+              ts = clib_mem_alloc(sizeof(*ts));
 
-              pool_get (udp4_sessions[my_thread_index], s);
-              s->mtu = 1024;             /* $$$$ policy */
-              s->key.as_key = key0;
+              ts->mtu = 1024; /* $$$$ policy */
 
-              /* Create a session */
-              s0 = v4_stream_session_create (ssm, ss0, SESSION_TYPE_IP4_UDP,
-                                             kv0,
-                                             s - udp4_sessions[my_thread_index],
-                                             my_thread_index);
+              ts->s_lcl_ip4.as_u32 = ip0->dst_address.as_u32;
+              ts->s_rmt_ip4.as_u32 = ip0->src_address.as_u32;
+              ts->s_lcl_port = udp0->dst_port;
+              ts->s_rmt_port = udp0->src_port;
+              ts->s_proto = SESSION_TYPE_IP4_UDP;
+              ts->s_vft = &udp4_session_vft;
+
+              /*
+               * create stream session and attach the udp session to it
+               */
+              rv = stream_session_create (&ts->session, my_thread_index,
+                                              SESSION_TYPE_IP4_UDP);
+              if (rv)
+                error0 = rv;
+
             }
 
         trace0:

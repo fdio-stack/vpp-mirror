@@ -680,18 +680,12 @@ clib_error_t *
 tcp_lookup_init (vlib_main_t * vm)
 {
   clib_error_t * error = 0;
-  u32 num_threads;
-  vlib_thread_main_t *thm = &vlib_thread_main;
-  tcp_main_t * tm = vnet_get_tcp_main ();
 
   if ((error = vlib_call_init_function (vm, ip4_lookup_init)))
     return error;
   if ((error = vlib_call_init_function (vm, ip6_lookup_init)))
     return error;
 
-  num_threads = 1 /* main thread */ + thm->n_eal_threads;
-  vec_validate (tm->ip4_sessions, num_threads - 1);
-  vec_validate (tm->ip6_sessions, num_threads - 1);
 
   return error;
 }

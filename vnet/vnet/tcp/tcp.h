@@ -19,6 +19,7 @@
 #include <vnet/vnet.h>
 #include <vnet/ip/ip.h>
 #include <vnet/tcp/tcp_packet.h>
+#include <vnet/uri/transport.h>
 
 typedef CLIB_PACKED(struct
 {
@@ -94,8 +95,10 @@ typedef struct
   f64 count;
 } tcp_rtt_stats_t;
 
-typedef CLIB_PACKED(struct 
+typedef CLIB_PACKED(struct _tcp_session
 {
+  transport_session_t session;          /** must be first */
+
   tcp_sequence_pair_t sequence_numbers;
 
   /* our timer is in the dense parallel vector */
@@ -142,9 +145,9 @@ typedef CLIB_PACKED(struct
    */
   u32 rewrite_template_index;
 
-  u16 src_port;
-  u16 dst_port;
-}) tcp46_session_t;
+//  u16 src_port;
+//  u16 dst_port;
+}) tcp_session_t;
 
 typedef enum {
   TCP_IP4,
@@ -154,72 +157,72 @@ typedef enum {
 
 typedef CLIB_PACKED(struct
 {
-  tcp46_session_t s;
+  tcp_session_t s;
   ip4_address_t src_address;
   ip4_address_t dst_address;
 }) tcp4_session_t;
 
 typedef CLIB_PACKED(struct
 {
-  tcp46_session_t s;
+  tcp_session_t s;
   ip6_address_t src_address;
   ip6_address_t dst_address;
 }) tcp6_session_t;
 
-typedef enum _tcp_wq_entry_type
-{
-  TCP_WQ_TIMER_EXPIRED,
-  TCP_WQ_TX_FIFO_DATA_ADDED,
-  TCP_WQ_TX_FIFO_DATA_REMOVED,
-  TCP_WQ_RX_FIFO_DATA_ADDED,
-  TCP_WQ_RX_FIFO_DATA_REMOVED,
-} tcp_wq_entry_type_t;
+//typedef enum _tcp_wq_entry_type
+//{
+//  TCP_WQ_TIMER_EXPIRED,
+//  TCP_WQ_TX_FIFO_DATA_ADDED,
+//  TCP_WQ_TX_FIFO_DATA_REMOVED,
+//  TCP_WQ_RX_FIFO_DATA_ADDED,
+//  TCP_WQ_RX_FIFO_DATA_REMOVED,
+//} tcp_wq_entry_type_t;
 
-/* 
- * These things are sent bidirectionally. 
- */
-typedef struct _tcp_work_queue_entry
-{
-  union 
-  {
-    struct 
-    {
-      u32 session_index;
-      tcp_wq_entry_type_t type;
-    };
-    u64 as_u64;
-    struct _tcp_work_queue * next_free;
-  };
-} tcp_work_queue_entry_t;
+///*
+// * These things are sent bidirectionally.
+// */
+//typedef struct _tcp_work_queue_entry
+//{
+//  union
+//  {
+//    struct
+//    {
+//      u32 session_index;
+//      tcp_wq_entry_type_t type;
+//    };
+//    u64 as_u64;
+//    struct _tcp_work_queue * next_free;
+//  };
+//} tcp_work_queue_entry_t;
+//
+//typedef struct _tcp_work_queue
+//{
+//  volatile u32 lock;
+//  /*
+//   * Buffer trading. When the work queue processor
+//   * decides to process entries: grab lock, steal entry vector,
+//   * replace with entry from freelist [if available], drop lock.
+//   */
+//  tcp_work_queue_entry_t * entries;
+//  tcp_work_queue_entry_t * freelist;
+//} tcp_work_queue_t;
 
-typedef struct _tcp_work_queue
-{
-  volatile u32 lock;
-  /* 
-   * Buffer trading. When the work queue processor
-   * decides to process entries: grab lock, steal entry vector,
-   * replace with entry from freelist [if available], drop lock.
-   */
-  tcp_work_queue_entry_t * entries;
-  tcp_work_queue_entry_t * freelist;
-} tcp_work_queue_t;
-
-typedef struct _tcp_bind_table_entry
-{
-  /* 0 if vpp built-in server */
-  pid_t owner_pid;
-  u32 client_index;
-  /* vpp built-in server */
-  void * callback;
-  u8 is_ipv6;
-  u8 mask_width;
-  /* 80, 443, yadda yadda */
-  u16 dst_port;
-  union {
-    ip4_address_t ip4;
-    ip6_address_t ip6;
-  };
-} tcp_bind_table_entry_t;
+//typedef struct _tcp_bind_table_entry
+//{
+//  /* 0 if vpp built-in server */
+//  pid_t owner_pid;
+//  u32 client_index;
+//  /* vpp built-in server */
+//  void * callback;
+//  u8 is_ipv6;
+//  u8 mask_width;
+//  /* 80, 443, yadda yadda */
+//  u16 dst_port;
+//  union {
+//    ip4_address_t ip4;
+//    ip6_address_t ip6;
+//  };
+//} tcp_bind_table_entry_t;
 
 typedef enum _tcp_error
 {
@@ -323,20 +326,19 @@ tcp_register_listener (vlib_main_t * vm, tcp_listener_registration_t * r);
 typedef struct _tcp_main
 {
   /* Per-worker thread connection pools */
-  tcp4_session_t **ip4_sessions;
-  tcp6_session_t **ip6_sessions;
+//  tcp_session_t **sessions;
 
   /* Per-worker thread timer vectors, parallel to connection pools */
   tcp_timer_t **timers;
 
   /* Non-packet work queues */
-  tcp_work_queue_t **rx_work_queues;
+//  tcp_work_queue_t **rx_work_queues;
 
   /* Connections to peer processes */
 //  tcp_peer_connection_t * peer_connections;
 
   /* bind table vector $$$ sparse vector $$$ */
-  tcp_bind_table_entry_t * bind_table;
+//  tcp_bind_table_entry_t * bind_table;
 
   /* Per-worker ip4 session lookup tables */
 //  clib_bihash_16_4_t **ip4_lookup_tables;

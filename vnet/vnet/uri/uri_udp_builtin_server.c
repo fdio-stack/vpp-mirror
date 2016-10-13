@@ -33,7 +33,7 @@ static int builtin_session_clear_callback (stream_server_main_t * ssm,
                                            stream_server_t * ss, 
                                            stream_session_t * s)
 {
-  v4_stream_session_delete (ssm, s);
+  stream_session_delete (ssm, s);
   return 0;
 }
 

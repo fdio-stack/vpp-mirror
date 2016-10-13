@@ -89,7 +89,6 @@
 #include <vnet/ipsec-gre/ipsec_gre.h>
 #include <vnet/flow/flow_report_classify.h>
 #include <vnet/uri/uri.h>
-#include <vnet/uri/uri_db.h>
 #include <vnet/ip/punt.h>
 
 #undef BIHASH_TYPE
@@ -8595,8 +8594,6 @@ int send_session_create_callback (stream_server_t * ss, stream_session_t * s,
 {
   vl_api_accept_session_t * mp;
   unix_shared_memory_queue_t * q;
-//  udp4_session_t *s4;
-  // $$$$ udp6_session_t * s6;
   
   q = vl_api_client_index_to_input_queue (ss->api_client_index);
 
@@ -8608,7 +8605,22 @@ int send_session_create_callback (stream_server_t * ss, stream_session_t * s,
 
   /* Note: session_type is the first octet in all types of sessions */
 
-  memcpy (mp->key, &s->session_key, sizeof (s->session_key));
+  if (s->session_type == SESSION_TYPE_IP4_UDP
+      || s->session_type == SESSION_TYPE_IP4_TCP)
+    {
+      session_kv4_t kv;
+      transport_session_make_v4_kv (&kv, s->transport);
+      memcpy (mp->key, &kv.key, sizeof(kv));
+    }
+  else if (s->session_type == SESSION_TYPE_IP4_UDP
+      || s->session_type == SESSION_TYPE_IP4_TCP)
+    {
+      session_kv6_t kv;
+      transport_session_make_v6_kv (&kv, s->transport);
+      memcpy (mp->key, &kv.key, sizeof(kv));
+    }
+  else
+    clib_warning ("session does not have a key!");
 
   mp->accept_cookie = ss->accept_cookie;
   mp->server_rx_fifo = (u64) s->server_rx_fifo;

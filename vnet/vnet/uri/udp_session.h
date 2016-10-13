@@ -16,6 +16,7 @@
 #define __included_udp_session_h__
 
 #include <vnet/ip/ip.h>
+#include "transport.h"
 
 /* 16 octets */
 typedef CLIB_PACKED (struct
@@ -40,17 +41,10 @@ typedef CLIB_PACKED (struct
 
 typedef struct
 {
-//  u8 session_type;
-  u8 state;
+  transport_session_t session;          /** must be first */
+
   /** ersatz MTU to limit fifo pushes to test data size */
   u32 mtu;
-
-  /** session key */
-  union 
-  {
-    udp4_session_key_t as_key;
-    u64 as_u64[2];
-  } key;
 } udp4_session_t;
 
 /*

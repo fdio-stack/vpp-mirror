@@ -12,61 +12,181 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "uri.h"
+#include <vnet/uri/uri.h>
 #include <vlibmemory/api.h>
 
 /** @file
     URI handling, bind tables
 */
 
-/* FIXME eventually these should be registered by underlying transports */
-
-static u32 (*bind_session_fns[SESSION_TYPE_N_TYPES])
-(uri_main_t *, u16) =
-{
-#define _(A,a) vnet_bind_##a##_uri,
-  foreach_uri_session_type
-#undef _
-};
-
-static u32 (*unbind_session_fns[SESSION_TYPE_N_TYPES])
-(uri_main_t *, u16) =
-{
-#define _(A,a) vnet_unbind_##a##_uri,
-  foreach_uri_session_type
-#undef _
-};
-
-static u8 * (*format_stream_session[SESSION_TYPE_N_TYPES])
-(u8 *s, va_list *args) =
-{
-#define _(A, a) format_stream_session_##a,
-  foreach_uri_session_type
-#undef _
-};
+/** Per-type vector of transport protocol virtual function tables*/
+static transport_proto_vft_t *uri_transport_vfts;
 
 uri_main_t uri_main;
 stream_server_main_t stream_server_main;
 
-/** Create a session, ping the server by callback */
-stream_session_t *
-v4_stream_session_create (stream_server_main_t *ssm,
-                          stream_server_t * ss,
-                          stream_session_type_t session_type,
-                          clib_bihash_kv_16_8_t session_key,
-                          u32 connection_index,
-                          int my_thread_index)
+void
+stream_session_make_v4_kv (session_kv4_t *kv, ip4_address_t * lcl,
+                           ip4_address_t * rmt, u16 lcl_port, u16 rmt_port,
+                           u8 proto)
 {
-  svm_fifo_t * server_rx_fifo, * server_tx_fifo;
+  v4_session_key_t key;
+
+  key.src.as_u32 = lcl->as_u32;
+  key.dst.as_u32 = rmt->as_u32;
+  key.src_port = lcl_port;
+  key.dst_port = rmt_port;
+  key.proto = proto;
+
+  kv->key[0] = key.as_u64[0];
+  kv->key[1] = key.as_u64[1];
+  kv->value = ~0ULL;
+}
+
+void
+transport_session_make_v4_kv (session_kv4_t * kv, transport_session_t *t)
+{
+  return stream_session_make_v4_kv (kv, &t->local_ip.ip4, &t->remote_ip.ip4,
+                                    t->local_port, t->remote_port, t->proto);
+}
+
+void
+stream_session_make_v6_kv (session_kv6_t *kv, ip6_address_t * lcl,
+                           ip6_address_t * rmt, u16 lcl_port, u16 rmt_port,
+                           u8 proto)
+{
+  v6_session_key_t key;
+
+  key.src.as_u64[0] = lcl->as_u64[0];
+  key.src.as_u64[1] = lcl->as_u64[1];
+  key.dst.as_u64[0] = rmt->as_u64[0];
+  key.dst.as_u64[1] = rmt->as_u64[1];
+  key.src_port = lcl_port;
+  key.dst_port = rmt_port;
+  key.proto = proto;
+
+  kv->key[0] = key.as_u64[0];
+  kv->key[1] = key.as_u64[1];
+  kv->value = ~0ULL;
+}
+
+void
+transport_session_make_v6_kv (session_kv6_t *kv, transport_session_t *t)
+{
+  stream_session_make_v6_kv (kv, &t->local_ip.ip6, &t->remote_ip.ip6,
+                             t->local_port, t->remote_port, t->proto);
+}
+
+void
+stream_session_lookup_add (stream_server_main_t *ssm, stream_session_t *s,
+                           u64 value)
+{
+  session_kv4_t kv4;
+  session_kv6_t kv6;
+
+  switch (s->session_type)
+  {
+    case SESSION_TYPE_IP4_UDP:
+    case SESSION_TYPE_IP4_TCP:
+      transport_session_make_v4_kv (&kv4, s->transport);
+      kv4.value = value;
+      clib_bihash_add_del_16_8 (&ssm->v4_session_hash, &kv4, 1 /* is_add */);
+      break;
+    case SESSION_TYPE_IP6_UDP:
+    case SESSION_TYPE_IP6_TCP:
+      transport_session_make_v6_kv (&kv6, s->transport);
+      kv6.value = value;
+      clib_bihash_add_del_48_8 (&ssm->v6_session_hash, &kv6, 1 /* is_add */);
+      break;
+    default:
+      clib_warning ("Session type not supported");
+      ASSERT(0);
+  }
+}
+
+int
+stream_session_lookup_del (stream_server_main_t *ssm, stream_session_t *s)
+{
+  session_kv4_t kv4;
+  session_kv6_t kv6;
+
+  switch (s->session_type)
+  {
+    case SESSION_TYPE_IP4_UDP:
+    case SESSION_TYPE_IP4_TCP:
+      transport_session_make_v4_kv (&kv4, s->transport);
+      return clib_bihash_add_del_16_8 (&ssm->v4_session_hash, &kv4,
+                                       0 /* is_add */);
+      break;
+    case SESSION_TYPE_IP6_UDP:
+    case SESSION_TYPE_IP6_TCP:
+      transport_session_make_v6_kv (&kv6, s->transport);
+//      return clib_bihash_add_del_48_8 (&ssm->v6_session_hash, &kv6,
+//                                       0 /* is_add */);
+      break;
+    default:
+      clib_warning ("Session type not supported");
+      ASSERT(0);
+  }
+
+  return 0;
+}
+
+u64
+stream_session_lookup4 (ip4_address_t * lcl, ip4_address_t * rmt, u16 lcl_port,
+                        u16 rmt_port, u8 proto)
+{
+  stream_server_main_t *ssm = &stream_server_main;
+  session_kv4_t kv4;
+  stream_session_make_v4_kv (&kv4, lcl, rmt, lcl_port, rmt_port, proto);
+  clib_bihash_search_inline_16_8 (&ssm->v4_session_hash, &kv4);
+  return kv4.value;
+}
+
+u64
+stream_session_lookup6 (ip6_address_t * lcl, ip6_address_t * rmt, u16 lcl_port,
+                        u16 rmt_port, u8 proto)
+{
+  stream_server_main_t *ssm = &stream_server_main;
+  session_kv6_t kv6;
+  stream_session_make_v6_kv (&kv6, lcl, rmt, lcl_port, rmt_port, proto);
+  clib_bihash_search_inline_48_8 (&ssm->v6_session_hash, &kv6);
+  return kv6.value;
+}
+
+/** Create a session, ping the server by callback */
+int
+stream_session_create (transport_session_t *ts, u32 my_thread_index, u8 sst)
+{
+  stream_server_main_t * ssm = &stream_server_main;
+  stream_server_t * ss;
+  u16 i0;
+  svm_fifo_t * server_rx_fifo, *server_tx_fifo;
   svm_fifo_segment_private_t * fifo_segment;
   stream_session_t * s;
   u32 pool_index;
   u32 fifo_segment_index;
   unix_shared_memory_queue_t * vpp_event_queue;
+  u64 value;
+
+  /* Find the server */
+  i0 = sparse_vec_index (ssm->stream_server_by_dst_port[sst], ts->local_port);
+
+  if (i0 == SPARSE_VEC_INVALID_INDEX)
+    return URI_INPUT_ERROR_NO_LISTENER;
+
+  /* Note: -1 to dodge SPARSE_VEC_INVALID_INDEX */
+  ss = pool_elt_at_index(ssm->servers, i0 - 1);
+
+  /* Check the API queue */
+  if (check_api_queue_full (ss))
+    return URI_INPUT_ERROR_API_QUEUE_FULL;
+
+  /* Create the session */
 
   /* $$$ better allocation policy? */
-  ASSERT (vec_len(ss->segment_indices));
-  fifo_segment_index = ss->segment_indices[vec_len(ss->segment_indices)-1];
+  ASSERT(vec_len(ss->segment_indices));
+  fifo_segment_index = ss->segment_indices[vec_len(ss->segment_indices) - 1];
   fifo_segment = svm_fifo_get_segment (fifo_segment_index);
 
   /* $$$ size policy */
@@ -79,8 +199,8 @@ v4_stream_session_create (stream_server_main_t *ssm,
 
   ASSERT(server_tx_fifo);
 
-  pool_get (ssm->sessions[my_thread_index], s);
-  memset (s, 0, sizeof (*s));
+  pool_get(ssm->sessions[my_thread_index], s);
+  memset (s, 0, sizeof(*s));
 
   /* Initialize backpointers */
   pool_index = s - ssm->sessions[my_thread_index];
@@ -94,38 +214,41 @@ v4_stream_session_create (stream_server_main_t *ssm,
   s->server_tx_fifo = server_tx_fifo;
 
   /* Initialize state machine, such as it is... */
-  s->session_type = session_type;
+  s->session_type = sst;
   s->session_state = SESSION_STATE_CONNECTING;
   s->server_index = ss - ssm->servers;
   s->server_segment_index = fifo_segment_index;
   s->session_thread_index = my_thread_index;
   s->session_index = pool_index;
-  s->transport_connection_index = connection_index;
 
-  session_key.value = (((u64) my_thread_index) << 32) | (u64) pool_index;
-  s->session_key = session_key;
+  /* Attach transport to session */
+  s->transport = ts;
+
+  /* Attach session to transport */
+  ts->session_index = pool_index;
 
   /* Add to the main lookup table */
-  clib_bihash_add_del_16_8 (&ssm->v4_session_hash, &session_key,
-                            1 /* is_add */);
+  value = (((u64) my_thread_index) << 32) | (u64) pool_index;
+  stream_session_lookup_add (ssm, s, value);
 
   vpp_event_queue = ssm->vpp_event_queues[my_thread_index];
 
   /* Shoulder-tap the registered server */
   ss->session_create_callback (ss, s, vpp_event_queue);
-  return (s);
+
+  return 0;
 }
 
 void
-v4_stream_session_delete (stream_server_main_t *ssm, stream_session_t * s)
+stream_session_delete (stream_server_main_t *ssm, stream_session_t * s)
 {
   int rv;
   svm_fifo_segment_private_t * fifo_segment;
   u32 my_thread_index = ssm->vlib_main->cpu_index;
 
   /* delete from the main lookup table */
-  rv = clib_bihash_add_del_16_8 (&ssm->v4_session_hash, &s->session_key,
-                                 0 /* is_add */);
+
+  rv = stream_session_lookup_del (ssm, s);
 
   if (rv)
     clib_warning ("hash delete error, rv %d", rv);
@@ -136,20 +259,8 @@ v4_stream_session_delete (stream_server_main_t *ssm, stream_session_t * s)
   svm_fifo_segment_free_fifo (fifo_segment, s->server_rx_fifo);
   svm_fifo_segment_free_fifo (fifo_segment, s->server_tx_fifo);
 
+  s->transport->tp_vft->delete (s->transport);
   pool_put (ssm->sessions[my_thread_index], s);
-}
-
-/** Create a session, ping the server by callback */
-stream_session_t *
-v6_stream_session_create (stream_server_main_t *ssm,
-                          stream_server_t * ss,
-                          stream_session_type_t session_type,
-                          clib_bihash_kv_48_8_t session_key,
-                          u32 connection_index,
-                          int my_thread_index)
-{
-  clib_warning("unimplemented");
-  return 0;
 }
 
 /* types: fifo, tcp4, udp4, tcp6, udp6 */
@@ -275,7 +386,8 @@ uri_decode (char *uri, stream_session_type_t *sst, u16 *port)
   return 0;
 }
 
-int vnet_bind_uri (vnet_bind_uri_args_t *a)
+int
+vnet_bind_uri (vnet_bind_uri_args_t *a)
 {
   uword * p;
   uri_main_t * um = &uri_main;
@@ -292,6 +404,7 @@ int vnet_bind_uri (vnet_bind_uri_args_t *a)
   uri_bind_table_entry_t * e;
   u16 * n, port_number_host_byte_order;
   stream_session_type_t sst = SESSION_TYPE_N_TYPES;
+  transport_proto_vft_t *vft;
 
   ASSERT(a->uri);
   ASSERT(a->segment_name_length);
@@ -367,7 +480,7 @@ int vnet_bind_uri (vnet_bind_uri_args_t *a)
       a->server_event_queue_address = (u64) ss->event_queue;
 
       ss->session_create_callback = a->send_session_create_callback;
-      ss->session_delete_callback = v4_stream_session_delete;
+      ss->session_delete_callback = stream_session_delete;
       ss->session_clear_callback = a->send_session_clear_callback;
       ss->builtin_server_rx_callback = a->builtin_server_rx_callback;
       ss->api_client_index = a->api_client_index;
@@ -379,7 +492,8 @@ int vnet_bind_uri (vnet_bind_uri_args_t *a)
           clib_host_to_net_u16 (port_number_host_byte_order));
       n[0] = (ss - ssm->servers) + 1; /* avoid SPARSE_VEC_INDEX_INVALID */
 
-      bind_session_fns[sst] (um, port_number_host_byte_order);
+      vft = uri_get_transport (sst);
+      vft->bind (um->vlib_main, port_number_host_byte_order);
     }
 
   pool_get (um->fifo_bind_table, e);
@@ -411,6 +525,7 @@ int vnet_unbind_uri (char * uri, u32 api_client_index)
   u32 * deleted_sessions = 0;
   u32 * deleted_thread_indices = 0;
   stream_session_type_t sst = SESSION_TYPE_N_TYPES;
+  transport_proto_vft_t *vft;
 
   ASSERT(uri);
 
@@ -438,7 +553,8 @@ int vnet_unbind_uri (char * uri, u32 api_client_index)
       n[0] = SPARSE_VEC_INVALID_INDEX;
     }
 
-  unbind_session_fns[sst] (um, port_number_host_byte_order);
+  vft = uri_get_transport (sst);
+  vft->unbind (um->vlib_main, port_number_host_byte_order);
 
   /*
    * Find the stream_server_t corresponding to the api client
@@ -489,10 +605,10 @@ int vnet_unbind_uri (char * uri, u32 api_client_index)
               vec_add1(deleted_sessions,
                        session - ssm->sessions[thread_index]);
               vec_add1 (deleted_thread_indices, thread_index);
+              session->transport->tp_vft->delete (session->transport);
             }
 
-          clib_bihash_add_del_16_8 (&ssm->v4_session_hash, &session->session_key,
-                                    0 /* is_add */);
+          stream_session_lookup_del (ssm, session);
       }
 
       for (i = 0; i < vec_len (deleted_sessions); i++)
@@ -559,13 +675,28 @@ int vnet_disconnect_uri_session (u32 client_index, u32 session_index,
   switch (session->session_type)
     {
     case SESSION_TYPE_IP4_UDP:
-      v4_stream_session_delete (ssm, session);
+      stream_session_delete (ssm, session);
       break;
 
     default:
       return VNET_API_ERROR_UNIMPLEMENTED;
     }
   return 0;
+}
+
+void
+uri_register_transport (u8 type, const transport_proto_vft_t *vft)
+{
+  vec_validate (uri_transport_vfts, type);
+  uri_transport_vfts[type] = *vft;
+}
+
+transport_proto_vft_t *
+uri_get_transport (u8 type)
+{
+  if (type >= vec_len (uri_transport_vfts))
+    return 0;
+  return &uri_transport_vfts[type];
 }
 
 static clib_error_t *
@@ -617,6 +748,7 @@ show_uri_command_fn (vlib_main_t * vm,
       stream_session_t * pool;
       stream_session_t * s;
       u8 * str;
+      transport_proto_vft_t *vft;
 
       for (i = 0; i < vec_len (ssm->sessions); i++)
         {
@@ -636,13 +768,15 @@ show_uri_command_fn (vlib_main_t * vm,
                   /* *INDENT-OFF* */
                   pool_foreach (s, pool,
                   ({
+                    vft = uri_get_transport (s->session_type);
+
                     str = format (0, "%-20llx%-20llx%-6d%-6d",
                                 s->server_rx_fifo, s->server_tx_fifo, i,
                                 s - pool);
                     vlib_cli_output (vm, "%U%s",
-                                     format_stream_session[s->session_type],
-                                     &s->transport_connection_index,
-                                     &s->session_thread_index, str);
+                                     vft->format_session,
+                                     s->session_index, s->session_thread_index,
+                                     str);
                   }));
                   /* *INDENT-OFF* */
                 }
@@ -739,8 +873,8 @@ stream_server_init (vlib_main_t * vm)
 
   
   /* $$$ config parameters */
-  svm_fifo_segment_init(0x200000000ULL /* first segment base VA */, 
-                        20 /* timeout in seconds */);
+  svm_fifo_segment_init (0x200000000ULL /* first segment base VA */,
+                         20 /* timeout in seconds */);
 
   /* configure per-thread ** vectors */
   vec_validate (ssm->sessions, num_threads - 1);
@@ -750,10 +884,6 @@ stream_server_init (vlib_main_t * vm)
   vec_validate (ssm->current_enqueue_epoch, num_threads - 1);
   vec_validate (ssm->vpp_event_queues, num_threads - 1);
   vec_validate (ssm->copy_buffers, num_threads - 1);
-
-  /** FIXME move to udp main*/
-  vec_validate (udp4_sessions, num_threads - 1);
-
 
   /* $$$$ preallocate hack config parameter */
   for (i = 0; i < 200000; i++)
@@ -767,6 +897,9 @@ stream_server_init (vlib_main_t * vm)
       pool_put_index (ssm->sessions[0], i);
 
   clib_bihash_init_16_8 (&ssm->v4_session_hash, "v4 session table",
+                         200000 /* $$$$ config parameter nbuckets */,
+                         (64<<20) /*$$$ config parameter table size */);
+  clib_bihash_init_48_8 (&ssm->v6_session_hash, "v6 session table",
                          200000 /* $$$$ config parameter nbuckets */,
                          (64<<20) /*$$$ config parameter table size */);
   

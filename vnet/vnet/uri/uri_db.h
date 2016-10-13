@@ -15,13 +15,14 @@
 #ifndef __included_uri_db_h__
 #define __included_uri_db_h__
 
-#include <vlibmemory/unix_shared_memory_queue.h>
-#include <vlibmemory/api.h>
 #include <vppinfra/bihash_16_8.h>
 #include <vppinfra/bihash_48_8.h>
+#include <vlibmemory/unix_shared_memory_queue.h>
+#include <vlibmemory/api.h>
 #include <vppinfra/sparse_vec.h>
 #include <svm_fifo_segment.h>
 #include <vnet/uri/udp_session.h>
+#include <vnet/uri/transport.h>
 
 /** @file
     URI-related database
@@ -83,28 +84,29 @@ typedef CLIB_PACKED(struct
   u16 enqueue_length;
 }) fifo_event_t;
 
-typedef clib_bihash_kv_16_8_t session_key_t;
-
-typedef struct
+typedef struct _stream_session_t
 {
+  /** Type */
+  u8 session_type;
+
+  /** State */
+  u8 session_state;
+
+  /** Transport specific */
+  transport_session_t * transport;
+
+  /** Application specific */
+
   /** fifo pointers. Once allocated, these do not move */
   svm_fifo_t * server_rx_fifo;
   svm_fifo_t * server_tx_fifo;
 
-  /** tcp | udp */
-  u8 is_tcp;
   u8 session_thread_index;
   /** To avoid n**2 "one event per frame" check */
   u8 enqueue_epoch;
 
   /** used during unbind processing */
   u8 is_deleted;
-
-  /** Type */
-  u8 session_type;
-
-  /** State */
-  u8 session_state;
 
   /** Session index in per_thread pool */
   u32 session_index;
@@ -114,20 +116,6 @@ typedef struct
 
   /** svm segment index */
   u32 server_segment_index;
-
-  /** index into transport specific pool */
-  u32 transport_connection_index;
-
-  /** transport computed session key */
-  session_key_t session_key;
-
-//  union
-//  {
-//    udp4_session_t u4;
-//    /* udp6_session_t u6 */
-//    /* tcp4_session_t t4; */
-//    /* tcp4_session_t t6; */
-//  };
 } stream_session_t;
 
 struct _stream_server_main;
@@ -200,6 +188,11 @@ typedef struct _stream_server_main
   /* Convenience */
   vlib_main_t *vlib_main;
   vnet_main_t *vnet_main;
+
+  /** pool of udp4 sessions per worker thread FIXME move to udp main */
+//  udp4_session_t ** udp4_sessions;
+  //udp6_session_t ** udp6_sessions;
+
 } stream_server_main_t;
 
 extern stream_server_main_t stream_server_main;
@@ -207,19 +200,30 @@ extern vlib_node_registration_t udp4_uri_input_node;
 extern vlib_node_registration_t tcp4_uri_input_node;
 extern vlib_node_registration_t tcp6_uri_input_node;
 
-stream_session_t *
-v4_stream_session_create (stream_server_main_t *ssm, stream_server_t * ss,
-                          stream_session_type_t session_type,
-                          clib_bihash_kv_16_8_t session_key,
-                          u32 connection_index, int my_thread_index);
-void
-v4_stream_session_delete (stream_server_main_t *ssm, stream_session_t * s);
+int
+stream_session_create (transport_session_t *ts, u32 my_thread_index, u8 sst);
 
-stream_session_t *
-v6_stream_session_create (stream_server_main_t *ssm, stream_server_t * ss,
-                          stream_session_type_t session_type,
-                          clib_bihash_kv_48_8_t session_key,
-                          u32 connection_index, int my_thread_index);
+//stream_session_t *
+//v4_stream_session_create (stream_server_main_t *ssm, stream_server_t * ss,
+//                          stream_session_type_t session_type,
+//                          clib_bihash_kv_16_8_t session_key,
+//                          u32 connection_index, int my_thread_index);
+void
+stream_session_delete (stream_server_main_t *ssm, stream_session_t * s);
+
+//stream_session_t *
+//v6_stream_session_create (stream_server_main_t *ssm, stream_server_t * ss,
+//                          stream_session_type_t session_type,
+//                          clib_bihash_kv_48_8_t session_key,
+//                          u32 connection_index, int my_thread_index);
+
+u64
+stream_session_lookup4 (ip4_address_t * lcl, ip4_address_t * rmt, u16 lcl_port,
+                        u16 rmt_port, u8 proto);
+
+u64
+stream_session_lookup6 (ip6_address_t * lcl, ip6_address_t * rmt, u16 lcl_port,
+                        u16 rmt_port, u8 proto);
 
 always_inline int
 check_api_queue_full (stream_server_t *ss)
@@ -238,6 +242,53 @@ check_api_queue_full (stream_server_t *ss)
     return 1;
   return 0;
 }
+
+typedef u32
+(*tp_application_bind) (vlib_main_t *, u16);
+
+typedef u32
+(*tp_application_unbind) (vlib_main_t *, u16);
+
+typedef u32
+(*tp_application_send) (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b);
+
+typedef u8 *
+(*tp_session_format) (u8 *s, va_list *args);
+
+/*
+ * Transport protocol virtual function table
+ */
+typedef struct _transport_proto_vft
+{
+  tp_application_bind bind;
+  tp_application_unbind unbind;
+  tp_application_send send;
+  tp_session_format format_session;
+} transport_proto_vft_t;
+
+typedef clib_bihash_kv_16_8_t session_kv4_t;
+typedef clib_bihash_kv_48_8_t session_kv6_t;
+
+void
+uri_register_transport (u8 type, const transport_proto_vft_t *vft);
+
+transport_proto_vft_t *
+uri_get_transport (u8 type);
+
+void
+transport_session_make_v4_kv (session_kv4_t *kv, transport_session_t *t);
+
+void
+stream_session_make_v4_kv (session_kv4_t *kv, ip4_address_t * lcl,
+                           ip4_address_t * rmt, u16 lcl_port, u16 rmt_port,
+                           u8 proto);
+void
+transport_session_make_v6_kv (session_kv6_t *kv, transport_session_t *t);
+
+void
+stream_session_make_v6_kv (session_kv6_t *kv, ip6_address_t * lcl,
+                           ip6_address_t * rmt, u16 lcl_port, u16 rmt_port,
+                           u8 proto);
 /*
  * fd.io coding-style-patch-verification: ON
  *

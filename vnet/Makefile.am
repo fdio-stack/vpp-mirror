@@ -721,6 +721,7 @@ libvnet_la_SOURCES +=					\
 nobase_include_HEADERS +=			\
   vnet/uri/uri.h				\
   vnet/uri/uri_db.h				\
+  vnet/uri/transport.h				\
   vnet/uri/udp_session.h
 
 ########################################

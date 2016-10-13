@@ -22,9 +22,7 @@
 
 #undef __included_bihash_template_h__
 
-#ifdef IMPLEMENT_FOR_URI_IPV6
 #include <vppinfra/bihash_48_8.h>
 #include <vppinfra/bihash_template.h>
 
 #include <vppinfra/bihash_template.c>
-#endif

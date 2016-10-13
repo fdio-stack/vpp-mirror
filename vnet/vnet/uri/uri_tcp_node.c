@@ -70,6 +70,19 @@ typedef enum {
   TCP4_URI_INPUT_N_NEXT,
 } tcp4_uri_input_next_t;
 
+void
+uri_tcp_session_delete (transport_session_t *s)
+{
+  tcp_session_t * us;
+  us = (tcp_session_t *) s;
+  clib_mem_free(us);
+}
+
+static transport_session_vft_t tcp4_session_vft = {
+    .create = 0,
+    .delete = uri_tcp_session_delete
+};
+
 static uword
 tcp4_uri_input_node_fn (vlib_main_t * vm,
 		  vlib_node_runtime_t * node,
@@ -81,7 +94,6 @@ tcp4_uri_input_node_fn (vlib_main_t * vm,
   u32 my_thread_index = vm->cpu_index;
   u8 my_enqueue_epoch;
   u32 * session_indices_to_enqueue;
-  tcp_main_t *tm = &tcp_main;
   static u32 serial_number;
   int i;
 
@@ -182,16 +194,13 @@ tcp4_uri_input_node_fn (vlib_main_t * vm,
 	  vlib_buffer_t * b0;
           u32 next0 = TCP4_URI_INPUT_NEXT_DROP;
           u32 error0 = TCP4_URI_INPUT_ERROR_ENQUEUED;
-          udp_header_t * udp0;
-          clib_bihash_kv_16_8_t kv0;
-          tcp4_session_key_t key0;
+          tcp_header_t * tcp0;
           ip4_header_t * ip0;
           stream_session_t * s0;
           svm_fifo_t * f0;
-          stream_server_t *ss0;
-          u16 udp_len0;
-          u16 i0;
+          u16 tcp_h_len0, tcp_data_len0;
           u8 * data0;
+          u64 value;
           
           /* speculatively enqueue b0 to the current next frame */
 	  bi0 = from[0];
@@ -206,30 +215,24 @@ tcp4_uri_input_node_fn (vlib_main_t * vm,
           /* udp_local hands us a pointer to the udp data */
 
           data0 = vlib_buffer_get_current (b0);
-          udp0 = (udp_header_t *)(data0 - sizeof (*udp0));
+          tcp0 = (tcp_header_t *)(data0 - sizeof (*tcp0));
 
           /* $$$$ fixme: udp_local doesn't do ip options correctly anyhow */
-          ip0 = (ip4_header_t *) (((u8 *)udp0) - sizeof (*ip0));
+          ip0 = (ip4_header_t *) (((u8 *)tcp0) - sizeof (*ip0));
           s0 = 0;
 
-          key0.src.as_u32 = ip0->src_address.as_u32;
-          key0.dst.as_u32 = ip0->dst_address.as_u32;
-          key0.src_port = udp0->src_port;
-          key0.dst_port = udp0->dst_port;
-          key0.session_type = SESSION_TYPE_IP4_TCP;
+          /* look session */
+          value = stream_session_lookup4 (&ip0->dst_address, &ip0->src_address,
+                                          tcp0->dst_port, tcp0->src_port,
+                                          SESSION_TYPE_IP4_TCP);
 
-          kv0.key[0] = key0.as_u64[0];
-          kv0.key[1] = key0.as_u64[1];
-          kv0.value = ~0ULL;
-
-          /* look for session */
-          clib_bihash_search_inline_16_8 (&ssm->v4_session_hash, &kv0);
-
-          if (PREDICT_TRUE (kv0.value != ~0ULL))
+          if (PREDICT_TRUE (value != ~0ULL))
             {
               s0 = pool_elt_at_index (ssm->sessions[my_thread_index],
-                                      kv0.value & 0xFFFFFFFFULL);
+                                      value & 0xFFFFFFFFULL);
  
+              ASSERT ((u32)(value >> 32) == my_thread_index);
+
               f0 = s0->server_rx_fifo;
               
               if (PREDICT_FALSE(s0->session_state != SESSION_STATE_READY))
@@ -238,17 +241,18 @@ tcp4_uri_input_node_fn (vlib_main_t * vm,
                   goto trace0;
                 }
 
-              udp_len0 = clib_net_to_host_u16 (udp0->length);
+              tcp_h_len0 = tcp_header_bytes (tcp0);
+              tcp_data_len0 = clib_net_to_host_u16 (ip0->length)
+                  - ip4_header_bytes (ip0) - tcp_h_len0;
 
-              if (PREDICT_FALSE(udp_len0 > svm_fifo_max_enqueue (f0)))
+              if (PREDICT_FALSE(tcp_data_len0 > svm_fifo_max_enqueue (f0)))
                 {
                   error0 = TCP4_URI_INPUT_ERROR_FIFO_FULL;
                   goto trace0;
                 }
 
-              svm_fifo_enqueue_nowait2 (f0, 0 /* pid */, 
-                                        udp_len0 - sizeof(*udp0), 
-                                        (u8 *)(udp0+1));
+              svm_fifo_enqueue_nowait2 (f0, 0 /* pid */, tcp_data_len0,
+                                        (u8 *) data0);
 
               b0->error = node->errors[TCP4_URI_INPUT_ERROR_ENQUEUED];
 
@@ -264,37 +268,15 @@ tcp4_uri_input_node_fn (vlib_main_t * vm,
             }
           else
             {
-              tcp4_session_t *s;
+              tcp_session_t *s;
 
               b0->error = node->errors[TCP4_URI_INPUT_ERROR_NOT_READY];
               
-              /* Find the server */
-              i0 = sparse_vec_index (
-                  ssm->stream_server_by_dst_port[SESSION_TYPE_IP4_TCP],
-                  udp0->dst_port);
-              if (i0 == SPARSE_VEC_INVALID_INDEX)
-                {
-                  error0 = TCP4_URI_INPUT_ERROR_NO_LISTENER;
-                  goto trace0;
-                  
-                }
-              /* Note: -1 to dodge SPARSE_VEC_INVALID_INDEX */
-              ss0 = pool_elt_at_index (ssm->servers, i0-1);
+              s = clib_mem_alloc(sizeof(*s));
+              s->s_vft = &tcp4_session_vft;
 
-              /* Check the API queue */
-              if (check_api_queue_full (ss0))
-                {
-                  error0 = TCP4_URI_INPUT_ERROR_API_QUEUE_FULL;
-                  goto trace0;
-                }
-
-              pool_get (tm->ip4_sessions[my_thread_index], s);
-              /* FIXME fill in session */
-
-              /* Create a session */
-              s0 = v4_stream_session_create (
-                  ssm, ss0, SESSION_TYPE_IP4_TCP, kv0,
-                  s - tm->ip4_sessions[my_thread_index], my_thread_index);
+              error0 = stream_session_create (&s->session, my_thread_index,
+                                              SESSION_TYPE_IP4_TCP);
             }
 
         trace0:
@@ -456,7 +438,6 @@ tcp6_uri_input_node_fn (vlib_main_t * vm,
   u32 my_thread_index = vm->cpu_index;
   u8 my_enqueue_epoch;
   u32 * session_indices_to_enqueue;
-  tcp_main_t *tm = &tcp_main;
   static u32 serial_number;
   int i;
 
@@ -558,15 +539,14 @@ tcp6_uri_input_node_fn (vlib_main_t * vm,
           u32 next0 = TCP6_URI_INPUT_NEXT_DROP;
           u32 error0 = TCP6_URI_INPUT_ERROR_ENQUEUED;
           tcp_header_t * tcp0;
-          clib_bihash_kv_48_8_t kv0;
-          tcp6_session_key_t key0;
           ip6_header_t * ip0;
           stream_session_t * s0;
           svm_fifo_t * f0;
-          stream_server_t *ss0;
+//          stream_server_t *ss0;
           u16 tcp_h_len0, tcp_data_len0;
-          u16 i0;
+//          u16 i0;
           u8 * data0;
+          u64 value;
 
           /* speculatively enqueue b0 to the current next frame */
           bi0 = from[0];
@@ -587,25 +567,17 @@ tcp6_uri_input_node_fn (vlib_main_t * vm,
           ip0 = (ip6_header_t *) (((u8 *)tcp0) - sizeof (*ip0));
           s0 = 0;
 
-          key0.src.as_u64[0] = ip0->src_address.as_u64[0];
-          key0.src.as_u64[1] = ip0->src_address.as_u64[1];
-          key0.dst.as_u64[0] = ip0->dst_address.as_u64[0];
-          key0.dst.as_u64[1] = ip0->dst_address.as_u64[1];
-          key0.src_port = tcp0->src;
-          key0.dst_port = tcp0->dst;
-          key0.session_type = SESSION_TYPE_IP4_TCP;
+          /* look session */
+          value = stream_session_lookup6 (&ip0->dst_address, &ip0->src_address,
+                                          tcp0->dst_port, tcp0->src_port,
+                                          SESSION_TYPE_IP6_TCP);
 
-          memset(&kv0.key, 0, sizeof(kv0.key));
-          clib_memcpy(&kv0.key, &key0, sizeof(key0));
-          kv0.value = ~0ULL;
-
-          /* look for session */
-          clib_bihash_search_inline_48_8 (&ssm->v6_session_hash, &kv0);
-
-          if (PREDICT_TRUE (kv0.value != ~0ULL))
+          if (PREDICT_TRUE (value != ~0ULL))
             {
               s0 = pool_elt_at_index (ssm->sessions[my_thread_index],
-                                      kv0.value & 0xFFFFFFFFULL);
+                                      value & 0xFFFFFFFFULL);
+
+              ASSERT ((u32)(value >> 32) == my_thread_index);
 
               f0 = s0->server_rx_fifo;
 
@@ -643,37 +615,14 @@ tcp6_uri_input_node_fn (vlib_main_t * vm,
             }
           else
             {
-              tcp6_session_t *s;
+              tcp_session_t *s;
 
               b0->error = node->errors[TCP6_URI_INPUT_ERROR_NOT_READY];
 
-              /* Find the server */
-              i0 = sparse_vec_index (
-                  ssm->stream_server_by_dst_port[SESSION_TYPE_IP4_TCP],
-                  tcp0->dst);
-              if (i0 == SPARSE_VEC_INVALID_INDEX)
-                {
-                  error0 = TCP6_URI_INPUT_ERROR_NO_LISTENER;
-                  goto trace0;
+              s = clib_mem_alloc(sizeof(*s));
 
-                }
-              /* Note: -1 to dodge SPARSE_VEC_INVALID_INDEX */
-              ss0 = pool_elt_at_index (ssm->servers, i0-1);
-
-              /* Check the API queue */
-              if (check_api_queue_full (ss0))
-                {
-                  error0 = TCP6_URI_INPUT_ERROR_API_QUEUE_FULL;
-                  goto trace0;
-                }
-
-              pool_get (tm->ip6_sessions[my_thread_index], s);
-              /* FIXME fill in session */
-
-              /* Create a session */
-              s0 = v6_stream_session_create (
-                  ssm, ss0, SESSION_TYPE_IP6_TCP, kv0,
-                  s - tm->ip6_sessions[my_thread_index], my_thread_index);
+              error0 = stream_session_create (&s->session, my_thread_index,
+                                              SESSION_TYPE_IP6_TCP);
             }
 
         trace0:
