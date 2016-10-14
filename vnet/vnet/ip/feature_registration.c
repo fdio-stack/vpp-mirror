@@ -17,7 +17,9 @@
 #include <vnet/ip/ip.h>
 #include <vnet/mpls/mpls.h>
 
-/** \file
+/**
+ * @file
+ * @brief IP Feature Subgraph Ordering.
 
     Dynamically compute IP feature subgraph ordering by performing a
     topological sort across a set of "feature A before feature B" and
@@ -40,7 +42,7 @@
     feature subgraph arc, which needs to run before @c ip4-lookup.  In
     either base code or a plugin,
     <CODE><PRE>
-    \#include <vnet/ip/ip_feature_registration.h>
+    \#include <vnet/ip/feature_registration.h>
     </PRE></CODE>
 
     and add the new feature as shown:
@@ -128,14 +130,30 @@ comma_split (u8 * s, u8 ** a, u8 ** b)
   return 0;
 }
 
+/**
+ * @brief Initialize a feature graph arc
+ * @param vm vlib main structure pointer
+ * @param vcm vnet config main structure pointer
+ * @param feature_start_nodes names of start-nodes which use this
+ *	  feature graph arc
+ * @param num_feature_start_nodes number of start-nodes
+ * @param first_reg first element in
+ *        [an __attribute__((constructor)) function built, or
+ *        otherwise created] singly-linked list of feature registrations
+ * @param [out] in_feature_nodes returned vector of
+ *        topologically-sorted feature node names, for use in
+ *        show commands
+ * @returns 0 on success, otherwise an error message. Errors
+ *        are fatal since they invariably involve mistyped node-names, or
+ *        genuinely missing node-names
+ */
 clib_error_t *
-ip_feature_init_cast (vlib_main_t * vm,
-		      ip_config_main_t * cm,
-		      vnet_config_main_t * vcm,
-		      char **feature_start_nodes,
-		      int num_feature_start_nodes,
-		      vnet_ip_feature_registration_t * first_reg,
-		      char ***in_feature_nodes)
+vnet_feature_arc_init (vlib_main_t * vm,
+		       vnet_config_main_t * vcm,
+		       char **feature_start_nodes,
+		       int num_feature_start_nodes,
+		       vnet_feature_registration_t * first_reg,
+		       char ***in_feature_nodes)
 {
   uword *index_by_name;
   uword *reg_by_index;
@@ -153,7 +171,7 @@ ip_feature_init_cast (vlib_main_t * vm,
   int a_index, b_index;
   int n_features;
   u32 *result = 0;
-  vnet_ip_feature_registration_t *this_reg = 0;
+  vnet_feature_registration_t *this_reg = 0;
   char **feature_nodes = 0;
   hash_pair_t *hp;
   u8 **keys_to_delete = 0;
@@ -273,7 +291,7 @@ again:
     {
       p = hash_get (reg_by_index, result[i]);
       ASSERT (p != 0);
-      this_reg = (vnet_ip_feature_registration_t *) p[0];
+      this_reg = (vnet_feature_registration_t *) p[0];
       *this_reg->feature_index = n_features - (i + 1);
       vec_add1 (feature_nodes, this_reg->node_name);
     }
@@ -305,12 +323,12 @@ again:
   return 0;
 }
 
-#define foreach_af_cast                         \
-_(4, VNET_IP_RX_UNICAST_FEAT, "ip4 unicast")               \
-_(4, VNET_IP_RX_MULTICAST_FEAT, "ip4 multicast")           \
-_(4, VNET_IP_TX_FEAT, "ip4 output")                 \
-_(6, VNET_IP_RX_UNICAST_FEAT, "ip6 unicast")               \
-_(6, VNET_IP_RX_MULTICAST_FEAT, "ip6 multicast")		\
+#define foreach_af_cast                                 \
+_(4, VNET_IP_RX_UNICAST_FEAT, "ip4 unicast")            \
+_(4, VNET_IP_RX_MULTICAST_FEAT, "ip4 multicast")        \
+_(4, VNET_IP_TX_FEAT, "ip4 output")                     \
+_(6, VNET_IP_RX_UNICAST_FEAT, "ip6 unicast")            \
+_(6, VNET_IP_RX_MULTICAST_FEAT, "ip6 multicast")        \
 _(6, VNET_IP_TX_FEAT, "ip6 output")
 
 /** Display the set of available ip features.
@@ -342,6 +360,46 @@ show_ip_features_command_fn (vlib_main_t * vm,
   return 0;
 }
 
+/*?
+ * This command is used to display the set of available IP features.
+ * This can be useful for verifying that expected features are present.
+ *
+ * @cliexpar
+ * Example of how to display the set of available IP features:
+ * @cliexstart{show ip features}
+ * Available IP feature nodes
+ * ip4 unicast:
+ *   ip4-inacl
+ *   ip4-source-check-via-rx
+ *   ip4-source-check-via-any
+ *   ip4-source-and-port-range-check-rx
+ *   ip4-policer-classify
+ *   ipsec-input-ip4
+ *   vpath-input-ip4
+ *   snat-in2out
+ *   snat-out2in
+ *   ip4-lookup
+ * ip4 multicast:
+ *   vpath-input-ip4
+ *   ip4-lookup-multicast
+ * ip4 output:
+ *   ip4-source-and-port-range-check-tx
+ *   interface-output
+ * ip6 unicast:
+ *   ip6-inacl
+ *   ip6-policer-classify
+ *   ipsec-input-ip6
+ *   l2tp-decap
+ *   vpath-input-ip6
+ *   sir-to-ila
+ *   ip6-lookup
+ * ip6 multicast:
+ *   vpath-input-ip6
+ *   ip6-lookup
+ * ip6 output:
+ *   interface-output
+ * @cliexend
+?*/
 /* *INDENT-OFF* */
 VLIB_CLI_COMMAND (show_ip_features_command, static) = {
   .path = "show ip features",
@@ -437,10 +495,32 @@ show_ip_interface_features_command_fn (vlib_main_t * vm,
   return 0;
 }
 
+/*?
+ * This command is used to display the set of IP features configured
+ * on a specific interface
+ *
+ * @cliexpar
+ * Example of how to display the set of available IP features on an interface:
+ * @cliexstart{show ip interface features GigabitEthernet2/0/0}
+ * IP feature paths configured on GigabitEthernet2/0/0...
+ * ipv4 unicast:
+ *   ip4-lookup
+ * ipv4 multicast:
+ *   ip4-lookup-multicast
+ * ipv4 multicast:
+ *   interface-output
+ * ipv6 unicast:
+ *   ip6-lookup
+ * ipv6 multicast:
+ *   ip6-lookup
+ * ipv6 multicast:
+ *   interface-output
+ * @cliexend
+?*/
 /* *INDENT-OFF* */
 VLIB_CLI_COMMAND (show_ip_interface_features_command, static) = {
   .path = "show ip interface features",
-  .short_help = "show ip interface features <intfc>",
+  .short_help = "show ip interface features <interface>",
   .function = show_ip_interface_features_command_fn,
 };
 /* *INDENT-ON* */

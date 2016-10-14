@@ -56,10 +56,7 @@ vec_resize_allocate_memory (void *v,
 
   if (!v)
     {
-      new =
-	clib_mem_alloc_aligned_at_offset (data_bytes, data_align,
-					  header_bytes, 
-                                          1 /* call os_out_of_memory */);
+      new = clib_mem_alloc_aligned_at_offset (data_bytes, data_align, header_bytes, 1	/* yes, call os_out_of_memory */);
       data_bytes = clib_mem_size (new);
       memset (new, 0, data_bytes);
       v = new + header_bytes;
@@ -85,8 +82,8 @@ vec_resize_allocate_memory (void *v,
 
   new =
     clib_mem_alloc_aligned_at_offset (new_alloc_bytes, data_align,
-				      header_bytes, 
-                                      1 /* call os_out_of_memory */);
+				      header_bytes,
+				      1 /* yes, call os_out_of_memory */ );
   /* FIXME fail gracefully. */
   if (!new)
     clib_panic

@@ -52,6 +52,7 @@ typedef struct _tcp_header
       u16 dst;          /**< Destination port. */
     };
     u32 src_and_dst;    /**< Source and destination ports. */
+    u16 src_port, dst_port;     /**< backward compatibility */
   };
 
   u32 seq_number;       /**< Sequence number. */

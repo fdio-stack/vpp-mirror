@@ -233,9 +233,9 @@ nobase_include_HEADERS +=			\
 # Layer 2 / LLDP
 ########################################
 libvnet_la_SOURCES +=				\
-  vnet/lldp/lldp_input.c				\
+  vnet/lldp/lldp_input.c			\
   vnet/lldp/lldp_node.c				\
-  vnet/lldp/lldp_output.c	\
+  vnet/lldp/lldp_output.c			\
   vnet/lldp/lldp_cli.c
 
 nobase_include_HEADERS +=			\
@@ -267,19 +267,18 @@ nobase_include_HEADERS +=			\
 # Layer 3 protocol: IP v4/v6
 ########################################
 libvnet_la_SOURCES +=				\
+ vnet/ip/feature_registration.c			\
  vnet/ip/format.c				\
  vnet/ip/icmp4.c				\
  vnet/ip/icmp6.c				\
- vnet/ip/ip_feature_registration.c		\
  vnet/ip/ip46_cli.c				\
- vnet/ip/ping.c					\
  vnet/ip/ip4_format.c				\
  vnet/ip/ip4_forward.c				\
  vnet/ip/ip4_input.c				\
  vnet/ip/ip4_mtrie.c				\
  vnet/ip/ip4_pg.c				\
- vnet/ip/ip4_source_check.c			\
  vnet/ip/ip4_source_and_port_range_check.c	\
+ vnet/ip/ip4_source_check.c			\
  vnet/ip/ip6_format.c				\
  vnet/ip/ip6_forward.c				\
  vnet/ip/ip6_hop_by_hop.c			\
@@ -287,44 +286,46 @@ libvnet_la_SOURCES +=				\
  vnet/ip/ip6_neighbor.c				\
  vnet/ip/ip6_pg.c				\
  vnet/ip/ip_checksum.c				\
+ vnet/ip/ip_frag.c				\
  vnet/ip/ip.h					\
  vnet/ip/ip_init.c				\
+ vnet/ip/ip_input_acl.c				\
  vnet/ip/lookup.c				\
+ vnet/ip/ping.c					\
+ vnet/ip/punt.c					\
  vnet/ip/udp_format.c				\
  vnet/ip/udp_init.c				\
  vnet/ip/udp_local.c				\
- vnet/ip/punt.c					\
- vnet/ip/udp_pg.c                               \
- vnet/ip/ip_input_acl.c                         \
- vnet/ip/ip_frag.c
+ vnet/ip/udp_pg.c
 
 nobase_include_HEADERS +=			\
+ vnet/ip/feature_registration.h			\
  vnet/ip/format.h				\
  vnet/ip/icmp46_packet.h			\
  vnet/ip/icmp4.h				\
  vnet/ip/icmp6.h				\
  vnet/ip/igmp_packet.h				\
- vnet/ip/ip.h					\
- vnet/ip/ip_feature_registration.h		\
- vnet/ip/ip_source_and_port_range_check.h \
+ vnet/ip/ip4_error.h				\
  vnet/ip/ip4.h					\
  vnet/ip/ip4_mtrie.h				\
- vnet/ip/ip4_error.h				\
  vnet/ip/ip4_packet.h				\
- vnet/ip/ip6.h					\
  vnet/ip/ip6_error.h				\
+ vnet/ip/ip6.h					\
  vnet/ip/ip6_hop_by_hop.h			\
  vnet/ip/ip6_hop_by_hop_packet.h		\
  vnet/ip/ip6_packet.h				\
- vnet/ip/lookup.h				\
+ vnet/ip/ip.h					\
  vnet/ip/ip_packet.h				\
+ vnet/ip/ip_source_and_port_range_check.h	\
+ vnet/ip/lookup.h				\
  vnet/ip/ports.def				\
  vnet/ip/protocols.def				\
- vnet/ip/udp.h					\
- vnet/ip/udp_error.def				\
- vnet/ip/udp_packet.h				\
  vnet/ip/punt_error.def				\
- vnet/ip/punt.h
+ vnet/ip/punt.h					\
+ vnet/ip/tcp_packet.h				\
+ vnet/ip/udp_error.def				\
+ vnet/ip/udp.h					\
+ vnet/ip/udp_packet.h
 
 ########################################
 # Layer 3 protocol: IPSec
@@ -508,14 +509,14 @@ LDS = -lvppinfra -l:libvlib.a $(dpdk_libs) -l:libvlibmemory.a \
 TESTS += test_cp_serdes test_lisp_types
 
 test_cp_serdes_SOURCES =			\
- test/lisp-cp/test_cp_serdes.c		\
+ test/lisp-cp/test_cp_serdes.c			\
  vnet/lisp-cp/lisp_msg_serdes.c			\
  vnet/lisp-cp/lisp_types.c			\
  vnet/lisp-cp/packets.c				\
  vnet/ip/ip_checksum.c
 
 test_lisp_types_SOURCES =			\
- test/lisp-cp/test_lisp_types.c		\
+ test/lisp-cp/test_lisp_types.c			\
  vnet/lisp-cp/lisp_types.c
 
 test_cp_serdes_CPPFLAGS = $(AM_CPPFLAGS) -DCLIB_DEBUG

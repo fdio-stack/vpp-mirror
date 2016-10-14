@@ -19,6 +19,7 @@
 
 #include <vnet/ip/ip.h>
 #include <vnet/ethernet/ethernet.h>
+#include <vnet/fib/ip4_fib.h>
 #include <snat/snat.h>
 
 #include <vppinfra/hash.h>
@@ -537,9 +538,9 @@ snat_in2out_node_fn_inline (vlib_main_t * vm,
 
           if (PREDICT_TRUE(proto0 == SNAT_PROTOCOL_TCP))
             {
-              old_port0 = tcp0->ports.src;
-              tcp0->ports.src = s0->out2in.port;
-              new_port0 = tcp0->ports.src;
+              old_port0 = tcp0->src_port;
+              tcp0->src_port = s0->out2in.port;
+              new_port0 = tcp0->src_port;
 
               sum0 = tcp0->checksum;
               sum0 = ip_csum_update (sum0, old_addr0, new_addr0,
@@ -686,9 +687,9 @@ snat_in2out_node_fn_inline (vlib_main_t * vm,
 
           if (PREDICT_TRUE(proto1 == SNAT_PROTOCOL_TCP))
             {
-              old_port1 = tcp1->ports.src;
-              tcp1->ports.src = s1->out2in.port;
-              new_port1 = tcp1->ports.src;
+              old_port1 = tcp1->src_port;
+              tcp1->src_port = s1->out2in.port;
+              new_port1 = tcp1->src_port;
 
               sum1 = tcp1->checksum;
               sum1 = ip_csum_update (sum1, old_addr1, new_addr1,
@@ -871,9 +872,9 @@ snat_in2out_node_fn_inline (vlib_main_t * vm,
 
           if (PREDICT_TRUE(proto0 == SNAT_PROTOCOL_TCP))
             {
-              old_port0 = tcp0->ports.src;
-              tcp0->ports.src = s0->out2in.port;
-              new_port0 = tcp0->ports.src;
+              old_port0 = tcp0->src_port;
+              tcp0->src_port = s0->out2in.port;
+              new_port0 = tcp0->src_port;
 
               sum0 = tcp0->checksum;
               sum0 = ip_csum_update (sum0, old_addr0, new_addr0,
@@ -1004,7 +1005,8 @@ static inline u32 icmp_in2out_static_map (snat_main_t *sm,
                                           icmp46_header_t * icmp0,
                                           u32 sw_if_index0,
                                           vlib_node_runtime_t * node,
-                                          u32 next0)
+                                          u32 next0,
+                                          u32 rx_fib_index0)
 {
   snat_session_key_t key0, sm0;
   icmp_echo_header_t *echo0;
@@ -1017,6 +1019,7 @@ static inline u32 icmp_in2out_static_map (snat_main_t *sm,
 
   key0.addr = ip0->src_address;
   key0.port = echo0->identifier;
+  key0.fib_index = rx_fib_index0;
   
   if (snat_static_mapping_match(sm, key0, &sm0, 0))
     {
@@ -1106,6 +1109,7 @@ snat_in2out_fast_static_map_fn (vlib_main_t * vm,
           icmp46_header_t * icmp0;
           snat_session_key_t key0, sm0;
           u32 proto0;
+          u32 rx_fib_index0;
 
           /* speculatively enqueue b0 to the current next frame */
 	  bi0 = from[0];
@@ -1124,6 +1128,7 @@ snat_in2out_fast_static_map_fn (vlib_main_t * vm,
           icmp0 = (icmp46_header_t *) udp0;
 
           sw_if_index0 = vnet_buffer(b0)->sw_if_index[VLIB_RX];
+	  rx_fib_index0 = ip4_fib_table_get_index_for_sw_if_index(sw_if_index0);
 
           proto0 = ~0;
           proto0 = (ip0->protocol == IP_PROTOCOL_UDP)
@@ -1155,12 +1160,13 @@ snat_in2out_fast_static_map_fn (vlib_main_t * vm,
                 goto trace0;
 
               next0 = icmp_in2out_static_map
-                (sm, b0, ip0, icmp0, sw_if_index0, node, next0);
+                (sm, b0, ip0, icmp0, sw_if_index0, node, next0, rx_fib_index0);
               goto trace0;
             }
 
           key0.addr = ip0->src_address;
           key0.port = udp0->src_port;
+          key0.fib_index = rx_fib_index0;
 
           if (snat_static_mapping_match(sm, key0, &sm0, 0))
             {
@@ -1185,8 +1191,8 @@ snat_in2out_fast_static_map_fn (vlib_main_t * vm,
             {
               if (PREDICT_TRUE(proto0 == SNAT_PROTOCOL_TCP))
                 {
-                  old_port0 = tcp0->ports.src;
-                  tcp0->ports.src = new_port0;
+                  old_port0 = tcp0->src_port;
+                  tcp0->src_port = new_port0;
 
                   sum0 = tcp0->checksum;
                   sum0 = ip_csum_update (sum0, old_addr0, new_addr0,
