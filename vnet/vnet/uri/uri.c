@@ -305,7 +305,7 @@ int vnet_bind_uri (vnet_bind_uri_args_t *a)
     return rv;
 
   /* External client? */
-  if (a->api_client_index != (u16)~0)
+  if (a->api_client_index != ~0)
     {
       regp = vl_api_client_index_to_registration (a->api_client_index);
       ASSERT(regp);
@@ -369,6 +369,7 @@ int vnet_bind_uri (vnet_bind_uri_args_t *a)
       ss->session_create_callback = a->send_session_create_callback;
       ss->session_delete_callback = v4_stream_session_delete;
       ss->session_clear_callback = a->send_session_clear_callback;
+      ss->builtin_server_rx_callback = a->builtin_server_rx_callback;
       ss->api_client_index = a->api_client_index;
 
       vec_add1(ss->segment_indices, ca->new_segment_index);
@@ -748,6 +749,7 @@ stream_server_init (vlib_main_t * vm)
   vec_validate (ssm->fifo_events, num_threads - 1);
   vec_validate (ssm->current_enqueue_epoch, num_threads - 1);
   vec_validate (ssm->vpp_event_queues, num_threads - 1);
+  vec_validate (ssm->copy_buffers, num_threads - 1);
 
   /** FIXME move to udp main*/
   vec_validate (udp4_sessions, num_threads - 1);

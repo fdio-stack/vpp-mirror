@@ -157,6 +157,10 @@ typedef struct _stream_server
   void (*session_clear_callback) (struct _stream_server_main *ssm,
                                   struct _stream_server *server,
                                   stream_session_t *session);
+  /* Direct RX callback, for built-in servers */
+  void (*builtin_server_rx_callback)(struct _stream_server_main *ssm,
+                                     struct _stream_server *server,
+                                     stream_session_t *session);
 } stream_server_t;
 
 typedef struct _stream_server_main
@@ -186,6 +190,9 @@ typedef struct _stream_server_main
 
   /** per-worker active event vectors */
   fifo_event_t ** fifo_events;
+
+  /** per-worker built-in server copy buffers */
+  u8 **copy_buffers;
 
   /** vpp fifo event queue */
   unix_shared_memory_queue_t **vpp_event_queues;
@@ -218,6 +225,10 @@ always_inline int
 check_api_queue_full (stream_server_t *ss)
 {
   unix_shared_memory_queue_t * q;
+
+  /* builtin servers are always OK */
+  if (ss->api_client_index == ~0)
+    return 0;
 
   q = vl_api_client_index_to_input_queue (ss->api_client_index);
   if (!q)

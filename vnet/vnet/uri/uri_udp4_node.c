@@ -346,6 +346,13 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
       /* Get session's server */
       ss0 = pool_elt_at_index (ssm->servers, s0->server_index);
       
+      /* Built-in server? Deliver the goods... */
+      if (ss0->builtin_server_rx_callback)
+        {
+          ss0->builtin_server_rx_callback(ssm, ss0, s0);
+          continue;
+        }
+
       /* Fabricate event */
       evt.fifo = s0->server_rx_fifo;
       evt.event_type = FIFO_EVENT_SERVER_RX;
@@ -355,6 +362,7 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
       /* Add event to server's event queue */
       q = ss0->event_queue;
       
+
       /* Don't block for lack of space */
       if (PREDICT_TRUE (q->cursize < q->maxsize))
         unix_shared_memory_queue_add (ss0->event_queue, (u8 *)&evt, 

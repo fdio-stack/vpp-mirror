@@ -57,6 +57,7 @@ typedef struct
   void * send_session_create_callback;
   void * send_session_delete_callback;
   void * send_session_clear_callback;
+  void * builtin_server_rx_callback;
 
   /** segment name (result) */
   char *segment_name;
