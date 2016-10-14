@@ -1118,7 +1118,7 @@ static u8 * format_ip4_rewrite_trace (u8 * s, va_list * args)
 
   s = format (s, "tx_sw_if_index %d dpo-idx %d : %U flow hash: 0x%08x",
               t->fib_index, t->dpo_index, format_ip_adjacency,
-              vnm, t->dpo_index, FORMAT_IP_ADJACENCY_NONE,
+              t->dpo_index, FORMAT_IP_ADJACENCY_NONE,
 	      t->flow_hash);
   s = format (s, "\n%U%U",
               format_white_space, indent,
@@ -1889,6 +1889,13 @@ ip4_arp_inline (vlib_main_t * vm,
 	  n_left_to_next_drop -= 1;
 
 	  p0->error = node->errors[drop0 ? IP4_ARP_ERROR_DROP : IP4_ARP_ERROR_REQUEST_SENT];
+
+	  /*
+	   * the adj has been updated to a rewrite but the node the DPO that got
+	   * us here hasn't - yet. no big deal. we'll drop while we wait.
+	   */
+	  if (IP_LOOKUP_NEXT_REWRITE == adj0->lookup_next_index)
+	    continue;
 
 	  if (drop0)
 	    continue;
@@ -2982,6 +2989,7 @@ test_lookup_command_fn (vlib_main_t * vm,
                         unformat_input_t * input,
                         vlib_cli_command_t * cmd)
 {
+  ip4_fib_t *fib;
   u32 table_id = 0;
   f64 count = 1;
   u32 n;
@@ -2991,7 +2999,13 @@ test_lookup_command_fn (vlib_main_t * vm,
 
   while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT) {
       if (unformat (input, "table %d", &table_id))
-	;
+      {
+          /* Make sure the entry exists. */
+          fib = ip4_fib_get(table_id);
+          if ((fib) && (fib->index != table_id))
+              return clib_error_return (0, "<fib-index> %d does not exist",
+                                        table_id);
+      }
       else if (unformat (input, "count %f", &count))
 	;
 
