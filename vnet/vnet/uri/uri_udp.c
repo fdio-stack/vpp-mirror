@@ -112,14 +112,15 @@ uri_tx_ip4_udp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b)
 u8 *
 format_stream_session_ip4_udp (u8 * s, va_list * args)
 {
-  u32 * tsi = va_arg (*args, u32 *);
-  u32 * thread_index = va_arg (*args, u32 *);
+  u32 ssi = va_arg (*args, u32);
+  u32 thread_index = va_arg (*args, u32);
   udp4_session_t *u4;
   stream_server_main_t * ssm = &stream_server_main;
+  stream_session_t *ss;
 
-  /* FIXME */
-  u4 = (udp4_session_t *) pool_elt_at_index(ssm->sessions[thread_index[0]],
-                                            tsi[0]);
+  ss = pool_elt_at_index(ssm->sessions[thread_index], ssi);
+
+  u4 = (udp4_session_t *) ss->transport;
   
   s = format (s, "%-20U%-20U%-10d%-10d%-8s", format_ip4_address,
               &u4->s_lcl_ip4, format_ip4_address, &u4->s_rmt_ip4,

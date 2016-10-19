@@ -773,7 +773,7 @@ show_uri_command_fn (vlib_main_t * vm,
                     str = format (0, "%-20llx%-20llx%-6d%-6d",
                                 s->server_rx_fifo, s->server_tx_fifo, i,
                                 s - pool);
-                    vlib_cli_output (vm, "%U%s",
+                    vlib_cli_output (vm, "%U%v",
                                      vft->format_session,
                                      s->session_index, s->session_thread_index,
                                      str);
