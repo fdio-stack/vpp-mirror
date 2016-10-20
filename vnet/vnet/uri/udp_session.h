@@ -45,7 +45,7 @@ typedef struct
 
   /** ersatz MTU to limit fifo pushes to test data size */
   u32 mtu;
-} udp4_session_t;
+} udp_session_t;
 
 /*
  * fd.io coding-style-patch-verification: ON

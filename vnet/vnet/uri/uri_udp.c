@@ -173,12 +173,13 @@ uri_tx_ip4_udp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b)
   udp_header_t * udp;
   u8 * data;
   u32 max_dequeue, len_to_dequeue, actual_length;
-  udp4_session_t *us;
+  udp_session_t *us;
   u32 my_thread_index = vm->cpu_index;
 
   ASSERT(s->session_thread_index == my_thread_index);
 
-  us = (udp4_session_t *) s->transport;
+  us = pool_elt_at_index(udp_sessions[my_thread_index],
+                         s->transport_session_index);
 
   f = s->server_tx_fifo;
   ip = vlib_buffer_get_current (b);
@@ -217,19 +218,29 @@ uri_tx_ip4_udp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b)
   return URI_QUEUE_NEXT_IP4_LOOKUP;
 }
 
-u8 *
-format_stream_session_ip4_udp (u8 * s, va_list * args)
+transport_session_t *
+uri_udp_session_get (u32 transport_session_index, u32 my_thread_index)
 {
-  u32 ssi = va_arg (*args, u32);
+  udp_session_t * us;
+  us = pool_elt_at_index (udp_sessions[my_thread_index], transport_session_index);
+  return &us->session;
+}
+
+void
+uri_udp_session_delete (u32 transport_session_index, u32 my_thread_index)
+{
+  pool_put_index (udp_sessions[my_thread_index], transport_session_index);
+}
+
+u8 *
+format_ip4_udp_stream_session (u8 * s, va_list * args)
+{
+  u32 tsi = va_arg (*args, u32);
   u32 thread_index = va_arg (*args, u32);
-  udp4_session_t *u4;
-  stream_server_main_t * ssm = &stream_server_main;
-  stream_session_t *ss;
+  udp_session_t *u4;
 
-  ss = pool_elt_at_index(ssm->sessions[thread_index], ssi);
+  u4 = pool_elt_at_index(udp_sessions[thread_index], tsi);
 
-  u4 = (udp4_session_t *) ss->transport;
-  
   s = format (s, "%-20U%-20U%-10d%-10d%-8s", format_ip4_address,
               &u4->s_lcl_ip4, format_ip4_address, &u4->s_rmt_ip4,
               clib_net_to_host_u16 (u4->s_lcl_port),
@@ -267,7 +278,9 @@ const static transport_proto_vft_t udp4_proto = {
   .bind = vnet_bind_ip4_udp_uri,
   .unbind = vnet_unbind_ip4_udp_uri,
   .send = uri_tx_ip4_udp,
-  .format_session = format_stream_session_ip4_udp
+  .get_session = uri_udp_session_get,
+  .delete_session = uri_udp_session_delete,
+  .format_session = format_ip4_udp_stream_session
 };
 
 static clib_error_t *

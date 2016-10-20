@@ -85,13 +85,15 @@ u32 uri_tx_ip4_tcp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b)
   tcp_header_t * tcp;
   u8 * data;
   u32 max_dequeue, len_to_dequeue, actual_length;
-  tcp_session_t *us;
+  tcp_session_t *ts;
   u32 my_thread_index = vm->cpu_index;
+  tcp_main_t * tm = vnet_get_tcp_main ();
 
   ASSERT(s->session_thread_index == my_thread_index);
 
   /** FIXME compute based on offset */
-  us = (tcp_session_t *) s->transport;
+  ts = pool_elt_at_index(tm->sessions[my_thread_index],
+                         s->transport_session_index);
 
   f = s->server_tx_fifo;
   ip = vlib_buffer_get_current (b);
@@ -114,16 +116,16 @@ u32 uri_tx_ip4_tcp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b)
   b->current_length = sizeof (*ip) + sizeof (*tcp) + actual_length;
 
   /* Build packet header, swap rx key src + dst fields */
-  ip->src_address.as_u32 = us->s_lcl_ip4.as_u32;
-  ip->dst_address.as_u32 = us->s_rmt_ip4.as_u32;
+  ip->src_address.as_u32 = ts->s_lcl_ip4.as_u32;
+  ip->dst_address.as_u32 = ts->s_rmt_ip4.as_u32;
   ip->ip_version_and_header_length = 0x45;
   ip->ttl = 254;
   ip->protocol = IP_PROTOCOL_TCP;
   ip->length = clib_host_to_net_u16 (b->current_length);
   ip->checksum = ip4_header_checksum(ip);
 
-  tcp->src = us->s_lcl_port;
-  tcp->dst = us->s_rmt_port;
+  tcp->src = ts->s_lcl_port;
+  tcp->dst = ts->s_rmt_port;
 //  tcp->length = clib_host_to_net_u16 (actual_length + sizeof (*tcp));
 //  tcp->checksum = 0;
 

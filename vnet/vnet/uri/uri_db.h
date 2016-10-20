@@ -67,7 +67,7 @@ typedef enum
 } stream_session_type_t;
 
 /* 
- * Epic catalog of all session states from all session types 
+ * Application session state
  */
 typedef enum
 {
@@ -93,7 +93,7 @@ typedef struct _stream_session_t
   u8 session_state;
 
   /** Transport specific */
-  transport_session_t * transport;
+  u32 transport_session_index;
 
   /** Application specific */
 
@@ -102,6 +102,7 @@ typedef struct _stream_session_t
   svm_fifo_t * server_tx_fifo;
 
   u8 session_thread_index;
+
   /** To avoid n**2 "one event per frame" check */
   u8 enqueue_epoch;
 
@@ -195,10 +196,6 @@ typedef struct _stream_server_main
   vlib_main_t *vlib_main;
   vnet_main_t *vnet_main;
 
-  /** pool of udp4 sessions per worker thread FIXME move to udp main */
-//  udp4_session_t ** udp4_sessions;
-  //udp6_session_t ** udp6_sessions;
-
 } stream_server_main_t;
 
 extern stream_server_main_t stream_server_main;
@@ -207,21 +204,10 @@ extern vlib_node_registration_t tcp4_uri_input_node;
 extern vlib_node_registration_t tcp6_uri_input_node;
 
 int
-stream_session_create (transport_session_t *ts, u32 my_thread_index, u8 sst);
+stream_session_create (u32 transport_session_index, u32 my_thread_index, u8 sst);
 
-//stream_session_t *
-//v4_stream_session_create (stream_server_main_t *ssm, stream_server_t * ss,
-//                          stream_session_type_t session_type,
-//                          clib_bihash_kv_16_8_t session_key,
-//                          u32 connection_index, int my_thread_index);
 void
 stream_session_delete (stream_server_main_t *ssm, stream_session_t * s);
-
-//stream_session_t *
-//v6_stream_session_create (stream_server_main_t *ssm, stream_server_t * ss,
-//                          stream_session_type_t session_type,
-//                          clib_bihash_kv_48_8_t session_key,
-//                          u32 connection_index, int my_thread_index);
 
 u64
 stream_session_lookup4 (ip4_address_t * lcl, ip4_address_t * rmt, u16 lcl_port,
@@ -261,6 +247,12 @@ typedef u32
 typedef u8 *
 (*tp_session_format) (u8 *s, va_list *args);
 
+typedef transport_session_t *
+(*tp_session_get) (u32 session_index, u32 my_thread_index);
+
+typedef void
+(*tp_session_del) (u32 session_index, u32 my_thread_index);
+
 /*
  * Transport protocol virtual function table
  */
@@ -270,6 +262,8 @@ typedef struct _transport_proto_vft
   tp_application_unbind unbind;
   tp_application_send send;
   tp_session_format format_session;
+  tp_session_get get_session;
+  tp_session_del delete_session;
 } transport_proto_vft_t;
 
 typedef clib_bihash_kv_16_8_t session_kv4_t;

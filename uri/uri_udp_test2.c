@@ -497,7 +497,7 @@ vl_api_connect_uri_reply_t_handler (vl_api_connect_uri_reply_t * mp)
   rv = svm_fifo_segment_attach (a);
   if (rv)
     {
-      clib_warning ("sm_fifo_segment_create ('%s') failed",
+      clib_warning ("sm_fifo_segment_create ('%v') failed",
                     mp->segment_name);
       return;
     }

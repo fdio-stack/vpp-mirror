@@ -109,30 +109,12 @@ vnet_connect_ip4_udp (u8 * ip46_address, u16 * port,
                       u8 * segment_name, u32 * name_length);
 
 unformat_function_t unformat_vnet_uri;
-
-//u32 vnet_bind_ip4_udp_uri (uri_main_t * um, u16 port);
-//u32 vnet_bind_ip6_udp_uri (uri_main_t * um, u16 port);
-//u32 vnet_bind_ip4_tcp_uri (uri_main_t * um, u16 port);
-//u32 vnet_bind_ip6_tcp_uri (uri_main_t * um, u16 port);
-//u32 vnet_bind_fifo_uri (uri_main_t * um, u16 port);
-//u32 vnet_unbind_ip4_udp_uri (uri_main_t * um, u16 port);
-//u32 vnet_unbind_ip6_udp_uri (uri_main_t * um, u16 port);
-//u32 vnet_unbind_ip4_tcp_uri (uri_main_t * um, u16 port);
-//u32 vnet_unbind_ip6_tcp_uri (uri_main_t * um, u16 port);
-//u32 vnet_unbind_fifo_uri (uri_main_t * um, u16 port);
-//u32 uri_tx_ip4_udp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b);
-//u32 uri_tx_ip4_tcp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b);
-//u32 uri_tx_ip6_udp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b);
-//u32 uri_tx_ip6_tcp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b);
-//u32 uri_tx_fifo (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b);
-
-//u8* format_stream_session_ip4_tcp(u8 *s, va_list *args);
-//u8* format_stream_session_ip6_tcp(u8 *s, va_list *args);
-//u8* format_stream_session_ip4_udp(u8 *s, va_list *args);
-//u8* format_stream_session_ip6_udp(u8 *s, va_list *args);
-//u8* format_stream_session_fifo(u8 *s, va_list *args);
-
 format_function_t format_bind_table_entry;
+
+
+/* FIXME move to UDP main
+ * Per-worker thread udp connection pools */
+udp_session_t **udp_sessions;
 
 #endif /* __included_uri_h__ */
 

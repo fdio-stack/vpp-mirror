@@ -85,9 +85,9 @@ struct _transport_session
 
   u8 state;                     /**< transport session state */
   u32 session_index;            /**< parent session index */
-  u32 transport_session_index;  /**< transport session index */
+  u32 transport_session_index;  /**< index in transport pool */
 
-  const transport_session_vft_t *tp_vft;   /**< virtual function table */
+  const transport_session_vft_t *ts_vft;   /**< virtual function table */
 
   /** Macros for 'derived classes' where base is named "session" */
 #define s_lcl_ip4 session.local_ip.ip4
@@ -98,7 +98,8 @@ struct _transport_session
 #define s_rmt_port session.remote_port
 #define s_proto session.proto
 #define s_s_index session.session_index
-#define s_vft session.tp_vft
+#define s_t_index session.transport_session_index
+#define s_vft session.ts_vft
 
 };
 

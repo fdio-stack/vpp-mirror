@@ -74,19 +74,6 @@ typedef enum {
   UDP4_URI_INPUT_N_NEXT,
 } udp4_uri_input_next_t;
 
-void
-uri_udp_session_delete (transport_session_t *s)
-{
-  udp4_session_t * us;
-  us = (udp4_session_t *) s;
-  clib_mem_free(us);
-}
-
-static transport_session_vft_t udp4_session_vft = {
-    .create = 0,
-    .delete = uri_udp_session_delete
-};
-
 static uword
 udp4_uri_input_node_fn (vlib_main_t * vm,
 		  vlib_node_runtime_t * node,
@@ -270,7 +257,7 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
             }
           else
             {
-              udp4_session_t *ts;
+              udp_session_t *us;
               int rv;
 
               error0 = UDP4_URI_INPUT_ERROR_NOT_READY;
@@ -278,22 +265,23 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
               /*
                * create udp transport session
                */
-              ts = clib_mem_alloc(sizeof(*ts));
+              pool_get (udp_sessions[my_thread_index], us);
 
-              ts->mtu = 1024; /* $$$$ policy */
+              us->mtu = 1024; /* $$$$ policy */
 
-              ts->s_lcl_ip4.as_u32 = ip0->dst_address.as_u32;
-              ts->s_rmt_ip4.as_u32 = ip0->src_address.as_u32;
-              ts->s_lcl_port = udp0->dst_port;
-              ts->s_rmt_port = udp0->src_port;
-              ts->s_proto = SESSION_TYPE_IP4_UDP;
-              ts->s_vft = &udp4_session_vft;
+              us->s_lcl_ip4.as_u32 = ip0->dst_address.as_u32;
+              us->s_rmt_ip4.as_u32 = ip0->src_address.as_u32;
+              us->s_lcl_port = udp0->dst_port;
+              us->s_rmt_port = udp0->src_port;
+              us->s_proto = SESSION_TYPE_IP4_UDP;
+              us->s_t_index = us - udp_sessions[my_thread_index];
 
               /*
                * create stream session and attach the udp session to it
                */
-              rv = stream_session_create (&ts->session, my_thread_index,
-                                              SESSION_TYPE_IP4_UDP);
+              rv = stream_session_create (us - udp_sessions[my_thread_index],
+                                          my_thread_index,
+                                          SESSION_TYPE_IP4_UDP);
               if (rv)
                 error0 = rv;
 

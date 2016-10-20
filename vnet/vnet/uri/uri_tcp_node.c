@@ -78,11 +78,6 @@ uri_tcp_session_delete (transport_session_t *s)
   clib_mem_free(us);
 }
 
-static transport_session_vft_t tcp4_session_vft = {
-    .create = 0,
-    .delete = uri_tcp_session_delete
-};
-
 static uword
 tcp4_uri_input_node_fn (vlib_main_t * vm,
 		  vlib_node_runtime_t * node,
@@ -201,6 +196,7 @@ tcp4_uri_input_node_fn (vlib_main_t * vm,
           u16 tcp_h_len0, tcp_data_len0;
           u8 * data0;
           u64 value;
+          tcp_main_t * tm = vnet_get_tcp_main ();
           
           /* speculatively enqueue b0 to the current next frame */
 	  bi0 = from[0];
@@ -272,10 +268,9 @@ tcp4_uri_input_node_fn (vlib_main_t * vm,
 
               b0->error = node->errors[TCP4_URI_INPUT_ERROR_NOT_READY];
               
-              s = clib_mem_alloc(sizeof(*s));
-              s->s_vft = &tcp4_session_vft;
-
-              error0 = stream_session_create (&s->session, my_thread_index,
+              pool_get (tm->sessions[my_thread_index], s);
+              s->s_t_index = s - tm->sessions[my_thread_index];
+              error0 = stream_session_create (s->s_t_index, my_thread_index,
                                               SESSION_TYPE_IP4_TCP);
             }
 
@@ -439,6 +434,7 @@ tcp6_uri_input_node_fn (vlib_main_t * vm,
   u8 my_enqueue_epoch;
   u32 * session_indices_to_enqueue;
   static u32 serial_number;
+  tcp_main_t * tm = vnet_get_tcp_main ();
   int i;
 
   my_enqueue_epoch = ++ssm->current_enqueue_epoch[my_thread_index];
@@ -542,9 +538,7 @@ tcp6_uri_input_node_fn (vlib_main_t * vm,
           ip6_header_t * ip0;
           stream_session_t * s0;
           svm_fifo_t * f0;
-//          stream_server_t *ss0;
           u16 tcp_h_len0, tcp_data_len0;
-//          u16 i0;
           u8 * data0;
           u64 value;
 
@@ -617,11 +611,11 @@ tcp6_uri_input_node_fn (vlib_main_t * vm,
             {
               tcp_session_t *s;
 
-              b0->error = node->errors[TCP6_URI_INPUT_ERROR_NOT_READY];
+              error0 = TCP6_URI_INPUT_ERROR_NO_SESSION;
 
-              s = clib_mem_alloc(sizeof(*s));
-
-              error0 = stream_session_create (&s->session, my_thread_index,
+              pool_get (tm->sessions[my_thread_index], s);
+              s->s_t_index = s - tm->sessions[my_thread_index];
+              error0 = stream_session_create (s->s_t_index, my_thread_index,
                                               SESSION_TYPE_IP6_TCP);
             }
 

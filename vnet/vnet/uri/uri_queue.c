@@ -27,15 +27,6 @@
 
 #include <vnet/ip/udp_packet.h>
 
-
-//static u32 (*event_queue_tx_fns[SESSION_TYPE_N_TYPES])
-//(vlib_main_t *, stream_session_t *, vlib_buffer_t *) =
-//{
-//#define _(A,a) uri_tx_##a,
-//  foreach_uri_session_type
-//#undef _
-//};
-
 vlib_node_registration_t uri_queue_node;
 
 typedef struct 
