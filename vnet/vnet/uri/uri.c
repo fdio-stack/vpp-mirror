@@ -386,6 +386,65 @@ uri_decode (char *uri, stream_session_type_t *sst, u16 *port)
   return 0;
 }
 
+/**
+ * unformat a vnet URI
+ *
+ * fifo://name
+ * tcp://ip46-addr:port
+ * udp://ip46-addr:port
+ *
+ * u8 ip46_address[16];
+ * u16  port_in_host_byte_order;
+ * stream_session_type_t sst;
+ * u8 *fifo_name;
+ *
+ * if (unformat (input, "%U", unformat_vnet_uri, &ip46_address, 
+ *              &sst, &port, &fifo_name))
+ *  etc...
+ *
+ */
+
+uword 
+unformat_vnet_uri (unformat_input_t * input, va_list * args)
+{
+  u8 * address = va_arg (*args, u8 *);
+  stream_session_type_t * sst = va_arg (*args, stream_session_type_t *);
+  u16 * port = va_arg(*args, u16 *);
+  u8 ** fifo_name = va_arg(*args, u8 *);
+  u8 * name = 0;
+  
+  *fifo_name = 0;
+  
+  if (unformat (input, "tcp://%U/%d", unformat_ip4_address, address, port))
+    {
+      *sst = SESSION_TYPE_IP4_TCP;
+      return 1;
+    }
+  if (unformat (input, "udp://%U/%d", unformat_ip4_address, address, port))
+    {
+      *sst = SESSION_TYPE_IP4_UDP;
+      return 1;
+    }
+  if (unformat (input, "udp://%U/%d", unformat_ip6_address, address, port))
+    {
+      *sst = SESSION_TYPE_IP6_UDP;
+      return 1;
+    }
+  if (unformat (input, "tcp://%U/%d", unformat_ip6_address, address, port))
+    {
+      *sst = SESSION_TYPE_IP6_TCP;
+      return 1;
+    }
+  if (unformat (input, "fifo://%s", name))
+    {
+      *fifo_name = name;
+      *sst = SESSION_TYPE_FIFO;
+      return 1;
+    }
+
+  return 0;
+}
+
 int
 vnet_bind_uri (vnet_bind_uri_args_t *a)
 {
@@ -484,6 +543,7 @@ vnet_bind_uri (vnet_bind_uri_args_t *a)
       ss->session_clear_callback = a->send_session_clear_callback;
       ss->builtin_server_rx_callback = a->builtin_server_rx_callback;
       ss->api_client_index = a->api_client_index;
+      ss->flags = a->options[URI_OPTIONS_FLAGS];
 
       vec_add1(ss->segment_indices, ca->new_segment_index);
 
@@ -645,13 +705,39 @@ int vnet_connect_uri (char * uri, u32 api_client_index,
                       u64 *options, char *segment_name, u32 *name_length)
 {
   ASSERT(uri);
+  unformat_input_t _input, *input= &_input;
+  u8 ip46_address[16];
+  u16 port;
+  stream_session_type_t sst;
+  u8 *fifo_name;
+  int rv;
 
-  /* Mumble top-level decode mumble */
-  if (uri[0] == 'f')
-    return vnet_connect_fifo_uri (uri, api_client_index, options, 
-                                  segment_name, name_length);
-  else
-    return VNET_API_ERROR_UNKNOWN_URI_TYPE;
+  unformat_init_string (input, uri, strlen (uri));
+
+  if (unformat (input, "%U", unformat_vnet_uri, &ip46_address,
+                &sst, &port, &fifo_name))
+    {
+      switch (sst)
+        {
+        case SESSION_TYPE_FIFO:
+          rv = vnet_connect_fifo_uri (uri, api_client_index, options, 
+                                      segment_name, name_length);
+          vec_free (fifo_name);
+          return rv;
+
+        case SESSION_TYPE_IP4_UDP:
+          rv = vnet_connect_ip4_udp (ip46_address, &port, api_client_index,
+                                     options, (u8 *) segment_name, name_length);
+          return rv;
+          
+        case SESSION_TYPE_IP4_TCP:
+        case SESSION_TYPE_IP6_UDP:
+        case SESSION_TYPE_IP6_TCP:
+        default:
+          return VNET_API_ERROR_UNKNOWN_URI_TYPE;
+        }
+    }
+  return VNET_API_ERROR_INVALID_VALUE;
 }
 
 int vnet_disconnect_uri_session (u32 client_index, u32 session_index,

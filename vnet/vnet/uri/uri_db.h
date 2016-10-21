@@ -122,6 +122,9 @@ struct _stream_server_main;
 
 typedef struct _stream_server
 {
+  /** Flags */
+  u32 flags;
+
   /** segments mapped by this server */
   u32 * segment_indices;
 
@@ -184,6 +187,9 @@ typedef struct _stream_server_main
 
   /** vpp fifo event queue */
   unix_shared_memory_queue_t **vpp_event_queues;
+
+  /** Unique segment name counter */
+  u32 unique_segment_name_counter;
 
   /* Convenience */
   vlib_main_t *vlib_main;

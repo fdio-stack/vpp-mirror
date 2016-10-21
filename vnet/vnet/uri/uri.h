@@ -83,6 +83,16 @@ typedef struct
   u64 server_event_queue_address;
 } vnet_bind_uri_args_t;
 
+/* Bind / connect options */
+typedef enum
+{
+  URI_OPTIONS_FLAGS,
+  URI_OPTIONS_N_OPTIONS
+} uri_options_index_t;
+
+#define URI_OPTIONS_FLAGS_USE_FIFO	(1<<0)
+
+
 int vnet_bind_uri (vnet_bind_uri_args_t *);
 
 int vnet_unbind_uri (char * uri, u32 api_client_index);
@@ -93,7 +103,12 @@ int vnet_connect_uri (char * uri, u32 api_client_index,
 int vnet_disconnect_uri_session (u32 client_index, u32 session_index,
                                  u32 thread_index);
 
+int
+vnet_connect_ip4_udp (u8 * ip46_address, u16 * port, 
+                      u32 api_client_index, u64 *options, 
+                      u8 * segment_name, u32 * name_length);
 
+unformat_function_t unformat_vnet_uri;
 
 //u32 vnet_bind_ip4_udp_uri (uri_main_t * um, u16 port);
 //u32 vnet_bind_ip6_udp_uri (uri_main_t * um, u16 port);

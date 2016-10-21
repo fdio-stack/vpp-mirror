@@ -8688,6 +8688,37 @@ int send_session_clear_callback (stream_server_main_t * ssm,
   return 0;
 }
 
+/**
+ * Send a bind uri reply, e.g. to ask a udp/tcp server to
+ * map a cut-through fifo segment. Only sent if the server has
+ * bound the related port with URI_OPTIONS_FLAGS_USE_FIFO
+ */
+int send_bind_uri_reply_callback (u32 api_client_index,
+                                  u8 * segment_name,
+                                  u32 segment_size)
+{
+  vl_api_bind_uri_reply_t * mp;
+  unix_shared_memory_queue_t * q;
+  
+  q = vl_api_client_index_to_input_queue (api_client_index);
+
+  if (!q)
+    return VNET_API_ERROR_INVALID_VALUE;
+  
+  mp = vl_msg_api_alloc (sizeof (*mp));
+  memset (mp, 0, sizeof (*mp));
+  mp->_vl_msg_id = clib_host_to_net_u16 (VL_API_BIND_URI_REPLY);
+  strncpy ((char *) mp->segment_name, 
+           (char *) segment_name, ARRAY_LEN(mp->segment_name)-1);
+  mp->segment_name_length = strlen((char *) segment_name);
+  mp->segment_size = segment_size;
+
+  vl_msg_api_send_shmem (q, (u8 *) & mp);
+
+  return 0;
+}
+
+
 static void
 vl_api_bind_uri_t_handler (vl_api_bind_uri_t * mp)
 {
