@@ -718,7 +718,8 @@ int vnet_unbind_uri (char * uri, u32 api_client_index)
 }
 
 int vnet_connect_uri (char * uri, u32 api_client_index,
-                      u64 *options, char *segment_name, u32 *name_length)
+                      u64 *options, char *segment_name, u32 *name_length,
+                      void *mp)
 {
   ASSERT(uri);
   unformat_input_t _input, *input= &_input;
@@ -743,7 +744,8 @@ int vnet_connect_uri (char * uri, u32 api_client_index,
 
         case SESSION_TYPE_IP4_UDP:
           rv = vnet_connect_ip4_udp (ip46_address, &port, api_client_index,
-                                     options, (u8 *) segment_name, name_length);
+                                     options, (u8 *) segment_name, name_length,
+                                     mp);
           return rv;
           
         case SESSION_TYPE_IP4_TCP:

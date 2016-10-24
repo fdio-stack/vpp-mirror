@@ -8694,33 +8694,56 @@ int send_session_clear_callback (stream_server_main_t * ssm,
 }
 
 /**
- * Send a bind uri reply, e.g. to ask a udp/tcp server to
- * map a cut-through fifo segment. Only sent if the server has
- * bound the related port with URI_OPTIONS_FLAGS_USE_FIFO
+ * Redirect a connect_uri message to the indicated server.
+ * Only sent if the server has bound the related port with 
+ * URI_OPTIONS_FLAGS_USE_FIFO
  */
-int send_bind_uri_reply_callback (u32 api_client_index,
-                                  u8 * segment_name,
-                                  u32 segment_size)
+int redirect_connect_uri_callback (u32 server_api_client_index, void * mp_arg)
 {
-  vl_api_bind_uri_reply_t * mp;
-  unix_shared_memory_queue_t * q;
+  vl_api_connect_uri_t * mp = mp_arg;
+  unix_shared_memory_queue_t * server_q, * client_q;
+  vlib_main_t * vm = vlib_get_main();
+  f64 timeout = vlib_time_now (vm) + 0.5;
+  int rv;
   
-  q = vl_api_client_index_to_input_queue (api_client_index);
+  server_q = vl_api_client_index_to_input_queue (server_api_client_index);
 
-  if (!q)
+  if (!server_q)
     return VNET_API_ERROR_INVALID_VALUE;
   
-  mp = vl_msg_api_alloc (sizeof (*mp));
-  memset (mp, 0, sizeof (*mp));
-  mp->_vl_msg_id = clib_host_to_net_u16 (VL_API_BIND_URI_REPLY);
-  strncpy ((char *) mp->segment_name, 
-           (char *) segment_name, ARRAY_LEN(mp->segment_name)-1);
-  mp->segment_name_length = strlen((char *) segment_name);
-  mp->segment_size = segment_size;
+  client_q = vl_api_client_index_to_input_queue (mp->client_index);
+  if (!client_q)
+    return VNET_API_ERROR_INVALID_VALUE_2;
 
-  vl_msg_api_send_shmem (q, (u8 *) & mp);
+  /* Tell the server the client's API queue address, so it can reply */
+  mp->client_queue_address = (u64) client_q;
 
-  return 0;
+  /* 
+   * Bounce message handlers MUST NOT block the data-plane. 
+   * Spin waiting for the queue lock, but
+   */
+  
+  while (vlib_time_now (vm) < timeout)
+    {
+    rv = unix_shared_memory_queue_add (server_q, (u8 *)&mp, 1 /*nowait*/);
+    switch (rv)
+      {
+        /* correctly enqueued */
+      case 0:
+        return VNET_CONNECT_URI_REDIRECTED;
+
+        /* continue spinning, wait for pthread_mutex_trylock to work */
+      case -1:
+        continue;
+
+        /* queue stuffed, drop the msg */
+      case -2:
+        return VNET_API_ERROR_QUEUE_FULL;
+      }
+    }
+
+  /* NOTREACHED */
+  return VNET_API_ERROR_UNIMPLEMENTED;
 }
 
 
@@ -8788,17 +8811,22 @@ vl_api_connect_uri_t_handler (vl_api_connect_uri_t * mp)
 
   rv = vnet_connect_uri ((char *) mp->uri, mp->client_index, 
                          mp->options, segment_name, 
-                         &segment_name_length);
+                         &segment_name_length, (void *) mp);
 
-  REPLY_MACRO2 (VL_API_CONNECT_URI_REPLY,
-  ({
-    rmp->segment_name_length = 0;
-    if (segment_name_length)
-      {
-        memcpy (rmp->segment_name, segment_name, segment_name_length);
-        rmp->segment_name_length = segment_name_length;
-      }
-  }));
+  if (rv != VNET_CONNECT_URI_REDIRECTED)
+    {
+      REPLY_MACRO2 (VL_API_CONNECT_URI_REPLY,
+      ({
+        rmp->segment_name_length = 0;
+        if (segment_name_length)
+          {
+            memcpy (rmp->segment_name, segment_name, segment_name_length);
+            rmp->segment_name_length = segment_name_length;
+          }
+      }));
+      /* See bounce registration below */
+      vl_msg_api_free (mp);
+    }
 }
 
 static void
@@ -9088,6 +9116,15 @@ vpe_api_hookup (vlib_main_t * vm)
    */
   am->is_mp_safe[VL_API_IP_ADD_DEL_ROUTE] = 1;
   am->is_mp_safe[VL_API_GET_NODE_GRAPH] = 1;
+
+  /* 
+   * Messages which bounce off the data-plane to 
+   * an API client. Simply tells the message handling infra not
+   * to free the message.
+   *
+   * Bounced message handlers MUST NOT block the data plane
+   */
+  am->message_bounce[VL_API_CONNECT_URI] = 1;
 
   return 0;
 }

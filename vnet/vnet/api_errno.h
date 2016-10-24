@@ -93,7 +93,8 @@ _(UNKNOWN_URI_TYPE, -99, "Unknown URI type")				\
 _(ADDRESS_IN_USE, -100, "Address in use")				\
 _(ADDRESS_NOT_IN_USE, -101, "Address not in use")			\
 _(URI_FIFO_CREATE_FAILED, -102, "URI FIFO segment create failed")       \
-_(TABLE_TOO_BIG, -103, "Table too big")
+_(TABLE_TOO_BIG, -103, "Table too big")					\
+_(QUEUE_FULL, -104, "Queue full")
 
 typedef enum
 {

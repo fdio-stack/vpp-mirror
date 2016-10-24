@@ -60,11 +60,9 @@ vnet_unbind_ip6_udp_uri (vlib_main_t *vm, u16 port_number_host_byte_order)
 }
 
 int
-send_bind_uri_reply_callback (u32 api_client_index, u8 * new_segment_name,
-                              u32 new_segment_size) __attribute__((weak));
+redirect_connect_uri_callback (u32 api_client_index, void *mp) __attribute__((weak));
 
-int send_bind_uri_reply_callback (u32 api_client_index, u8 * new_segment_name,
-                                  u32 new_segment_size)
+int redirect_connect_uri_callback (u32 api_client_index, void *mp)
 {
   clib_warning ("STUB");
   return -1;
@@ -73,7 +71,7 @@ int send_bind_uri_reply_callback (u32 api_client_index, u8 * new_segment_name,
 int
 vnet_connect_ip4_udp (u8 * ip46_address, u16 * port, 
                       u32 api_client_index, u64 * options, 
-                      u8 * segment_name, u32 * name_length)
+                      u8 * segment_name, u32 * name_length, void *mp)
 {
   u16 i0;
   stream_server_main_t *ssm = &stream_server_main;
@@ -137,27 +135,9 @@ vnet_connect_ip4_udp (u8 * ip46_address, u16 * port,
 
   if (dpo0->dpoi_type == DPO_RECEIVE)
     {
-      u8 * new_segment_name;
-      u32 new_segment_size;
       int rv;
-      /* 
-       * Send contestants 1 and 2 enough detail to 
-       * rendevous. The external server creates the fifos.
-       */
-      new_segment_name = format (0, "%U:%d-direct%d%c",
-                             format_ip4_address, dst_addr0,
-                             *port, ssm->unique_segment_name_counter++, 0);
-      new_segment_size = (4<<20); /* $$$$ config parameter, bind option, etc */
-      
-      /* Tell the server */
-      rv = send_bind_uri_reply_callback (ss->api_client_index, new_segment_name,
-                                         new_segment_size);
-      
-      /* vl_api_connect_uri_t_handler will tell the client */
-      strncpy ((char *)segment_name, (char *) new_segment_name, *name_length);
-      *name_length = vec_len (new_segment_name) < *name_length ?
-        vec_len(new_segment_name) : *name_length;
-
+      /* redirect to the server */
+      rv = redirect_connect_uri_callback (ss->api_client_index, mp);
       return rv;
     }
 

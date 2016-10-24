@@ -98,6 +98,11 @@ typedef struct
   /* $$$$ hack: cut-through session index */
   volatile u32 cut_through_session_index;
 
+  /* unique segment name counter */
+  u32 unique_segment_index;
+
+  pid_t my_pid;
+
   /* pthread handle */
   pthread_t cut_through_thread_handle;
 
@@ -110,6 +115,8 @@ typedef struct
   volatile int time_to_stop;
   volatile int time_to_print_stats;
 
+  u32 configured_segment_size;
+
   /* VNET_API_ERROR_FOO -> "Foo" hash table */
   uword * error_string_by_error_number;
 
@@ -119,7 +126,7 @@ typedef struct
 } uri_udp_test_main_t;
 
 #if CLIB_DEBUG > 0
-#define NITER 100000
+#define NITER 1000
 #else
 #define NITER 100000000
 #endif
@@ -296,9 +303,7 @@ static void
 vl_api_bind_uri_reply_t_handler (vl_api_bind_uri_reply_t * mp)
 {
   uri_udp_test_main_t *utm = &uri_udp_test_main;
-  svm_fifo_segment_main_t * sm = &svm_fifo_segment_main;
   svm_fifo_segment_create_args_t _a, *a = &_a;
-  session_t * session;
   int rv;
 
   if (mp->segment_name_length == 0)
@@ -310,66 +315,97 @@ vl_api_bind_uri_reply_t_handler (vl_api_bind_uri_reply_t * mp)
   a->segment_name = (char *) mp->segment_name;
   a->segment_size = mp->segment_size;
 
-  /* Cheesy way to tell if this is a cut-through connection or not */
-  if (mp->server_event_queue_address)
+  ASSERT(mp->server_event_queue_address);
+
+  /* Attach to the segment vpp created */
+  rv = svm_fifo_segment_attach (a);
+  if (rv)
     {
-      /* Attach to the segment vpp created */
-      rv = svm_fifo_segment_attach (a);
-      if (rv)
-        {
-          clib_warning ("sm_fifo_segment_create ('%s') failed",
-                        mp->segment_name);
-          return;
-        }
-      
-      utm->our_event_queue = (unix_shared_memory_queue_t *)
-        mp->server_event_queue_address;
+      clib_warning ("sm_fifo_segment_create ('%s') failed",
+                    mp->segment_name);
+      return;
     }
-  else /* cut-through */
-    {
-      u32 segment_index;
-      svm_fifo_segment_private_t *seg;
+  
+  utm->our_event_queue = (unix_shared_memory_queue_t *)
+    mp->server_event_queue_address;
 
-      /* Create the segment */
-      rv = svm_fifo_segment_create (a);
-      if (rv)
-        {
-          clib_warning ("sm_fifo_segment_create ('%s') failed",
-                        mp->segment_name);
-          return;
-        }
-      
-      vec_add2 (utm->seg, seg, 1);
-      
-      segment_index = vec_len (sm->segments) - 1;
-
-      memcpy (seg, sm->segments+segment_index, sizeof (utm->seg[0]));
-
-      pool_get (utm->sessions, session);
-
-      /* 
-       * By construction the master's idea of the rx fifo ends up in 
-       * fsh->fifos[0], and the master's idea of the tx fifo ends up in
-       * fsh->fifos[1].
-       */
-      session->server_rx_fifo = svm_fifo_segment_alloc_fifo (utm->seg, 
-                                                             128*1024);
-      ASSERT (session->server_rx_fifo);
-
-      session->server_tx_fifo = svm_fifo_segment_alloc_fifo (utm->seg, 
-                                                             128*1024);
-      ASSERT (session->server_tx_fifo);
-
-      session->server_rx_fifo->server_session_index = session - utm->sessions;
-      session->server_tx_fifo->server_session_index = session - utm->sessions;
-      utm->cut_through_session_index = session - utm->sessions;
-
-      rv = pthread_create (&utm->cut_through_thread_handle,
-			   NULL /*attr */ , cut_through_thread_fn, 0);
-      if (rv)
-	clib_warning ("pthread_create returned %d", rv);
-    }
   utm->state = STATE_READY;
+}
+
+static void
+vl_api_connect_uri_t_handler (vl_api_connect_uri_t * mp)
+{
+  u32 segment_index;
+  uri_udp_test_main_t *utm = &uri_udp_test_main;
+  svm_fifo_segment_main_t * sm = &svm_fifo_segment_main;
+  svm_fifo_segment_create_args_t _a, *a = &_a;
+  svm_fifo_segment_private_t *seg;
+  unix_shared_memory_queue_t *client_q;
+  vl_api_connect_uri_reply_t * rmp;
+  session_t * session;
+  int rv = 0;
+
+  /* Create the segment */
+  a->segment_name = (char *) format (0, "%d:segment%d%c", utm->my_pid, 
+                                     utm->unique_segment_index++, 0);
+  a->segment_size = utm->configured_segment_size;
+
+  rv = svm_fifo_segment_create (a);
+  if (rv)
+    {
+      clib_warning ("sm_fifo_segment_create ('%s') failed",
+                    a->segment_name);
+      rv = VNET_API_ERROR_URI_FIFO_CREATE_FAILED;
+      goto send_reply;
+    }
+  
+  vec_add2 (utm->seg, seg, 1);
+      
+  segment_index = vec_len (sm->segments) - 1;
+
+  memcpy (seg, sm->segments+segment_index, sizeof (utm->seg[0]));
+
+  pool_get (utm->sessions, session);
+
+  /* 
+   * By construction the master's idea of the rx fifo ends up in 
+   * fsh->fifos[0], and the master's idea of the tx fifo ends up in
+   * fsh->fifos[1].
+   */
+  session->server_rx_fifo = svm_fifo_segment_alloc_fifo (utm->seg, 
+                                                         128*1024);
+  ASSERT (session->server_rx_fifo);
+  
+  session->server_tx_fifo = svm_fifo_segment_alloc_fifo (utm->seg, 
+                                                         128*1024);
+  ASSERT (session->server_tx_fifo);
+  
+  session->server_rx_fifo->server_session_index = session - utm->sessions;
+  session->server_tx_fifo->server_session_index = session - utm->sessions;
+  utm->cut_through_session_index = session - utm->sessions;
+  
+  rv = pthread_create (&utm->cut_through_thread_handle,
+                       NULL /*attr */ , cut_through_thread_fn, 0);
+  if (rv)
+    {
+      clib_warning ("pthread_create returned %d", rv);
+      rv = VNET_API_ERROR_SYSCALL_ERROR_1;
+    }
+
+ send_reply:
+  rmp = vl_msg_api_alloc (sizeof (*rmp));
+  memset (rmp, 0, sizeof (*rmp));
+
+  rmp->_vl_msg_id = ntohs(VL_API_CONNECT_URI_REPLY); 
+  rmp->context = mp->context;
+  rmp->retval = ntohl(rv);
+  rmp->segment_name_length = vec_len (a->segment_name);
+  memcpy (rmp->segment_name, a->segment_name, vec_len (a->segment_name));
+  
+  vec_free (a->segment_name);
+
+  client_q = (unix_shared_memory_queue_t *) mp->client_queue_address;
+  vl_msg_api_send_shmem (client_q, (u8 *)&rmp);
 }
 
 static void
@@ -528,6 +564,7 @@ vl_api_connect_uri_reply_t_handler (vl_api_connect_uri_reply_t * mp)
 
 #define foreach_uri_msg                         \
 _(BIND_URI_REPLY, bind_uri_reply)               \
+_(CONNECT_URI, connect_uri)                     \
 _(CONNECT_URI_REPLY, connect_uri_reply)         \
 _(UNBIND_URI_REPLY, unbind_uri_reply)           \
 _(ACCEPT_SESSION, accept_session)		\
@@ -693,6 +730,7 @@ main (int argc, char **argv)
   u8 *chroot_prefix;
   u8 *heap;
   u8 * bind_name = (u8 *) "udp4:1234";
+  u32 tmp;
   mheap_t *h;
   session_t * session;
   int i;
@@ -711,6 +749,9 @@ main (int argc, char **argv)
   utm->session_index_by_vpp_handles =
     hash_create (0, sizeof(uword));
 
+  utm->my_pid = getpid();
+  utm->configured_segment_size = 1<<20;
+
   clib_time_init (&utm->clib_time);
   init_error_string_table (utm);
   svm_fifo_segment_init(0x200000000ULL, 20);
@@ -724,7 +765,11 @@ main (int argc, char **argv)
 	}
       else if (unformat (a, "uri %s", &bind_name))
         ;
-      if (unformat (a, "master"))
+      else if (unformat (a, "segment-size %dM", &tmp))
+        utm->configured_segment_size = tmp<<20;
+      else if (unformat (a, "segment-size %dG", &tmp))
+        utm->configured_segment_size = tmp<<30;
+      else if (unformat (a, "master"))
         i_am_master = 1;
       else if (unformat (a, "slave"))
         i_am_master = 0;

@@ -5190,6 +5190,7 @@ define connect_uri {
   u32 client_index;
   u32 context;
   u8 uri[128];
+  u64 client_queue_address;
   /* or some such */
   u64 options[16];
 };
