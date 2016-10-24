@@ -110,8 +110,8 @@ stream_session_lookup_add (stream_server_main_t *ssm, stream_session_t * s,
 {
   transport_session_t * ts;
 
-  ts = tp_vfts[s->session_index].get_session (s->transport_session_index,
-                                              s->session_thread_index);
+  ts = tp_vfts[s->session_type].get_session (s->transport_session_index,
+                                             s->session_thread_index);
   transport_session_lookup_add (ssm, s->session_type, ts, value);
 }
 
@@ -122,7 +122,7 @@ stream_session_lookup_del (stream_server_main_t *ssm, stream_session_t *s)
   session_kv6_t kv6;
   transport_session_t * ts;
 
-  ts = tp_vfts[s->session_index].get_session (s->transport_session_index,
+  ts = tp_vfts[s->session_type].get_session (s->transport_session_index,
                                               s->session_thread_index);
   switch (s->session_type)
   {
@@ -678,16 +678,18 @@ int vnet_unbind_uri (char * uri, u32 api_client_index)
               vec_add1(deleted_sessions,
                        session - ssm->sessions[thread_index]);
               vec_add1 (deleted_thread_indices, thread_index);
-              tp_vfts[sst].delete_session (session->transport_session_index,
-                                            thread_index);
             }
-
-          stream_session_lookup_del (ssm, session);
       }
 
       for (i = 0; i < vec_len (deleted_sessions); i++)
-        pool_put_index (ssm->sessions[deleted_thread_indices[i]],
-                        deleted_sessions[i]);
+        {
+          stream_session_t * session;
+
+          session = pool_elt_at_index (ssm->sessions[deleted_thread_indices[i]],
+                                       deleted_sessions[i]);
+          stream_session_lookup_del (ssm, session);
+          pool_put (ssm->sessions[deleted_thread_indices[i]], session);
+        }
 
       vec_reset_length (deleted_sessions);
       vec_reset_length (deleted_thread_indices);
@@ -847,11 +849,14 @@ show_uri_command_fn (vlib_main_t * vm,
       int i;
       stream_session_t * pool;
       stream_session_t * s;
-      u8 * str;
+      u8 * str = 0;
 
       for (i = 0; i < vec_len (ssm->sessions); i++)
         {
+          u32 once_per_pool;
           pool = ssm->sessions[i];
+
+          once_per_pool = 1;
 
           if (pool_elts (pool))
             {
@@ -860,20 +865,27 @@ show_uri_command_fn (vlib_main_t * vm,
                                i, pool_elts (pool));
               if (verbose)
                 {
-                  str = format (0, "%-20s%-20s%-10s%-10s%-8s%-20s%-20s%-8s%-8s",
-                                "Src", "Dst", "SrcP", "DstP", "Proto",
-                                "Rx fifo", "Tx fifo", "Thread", "Index");
+                  if (once_per_pool)
+                    {
+                      str = format (str, "%-20s%-20s%-10s%-10s%-8s%-20s%-20s%-15s",
+                                    "Src", "Dst", "SrcP", "DstP", "Proto",
+                                    "Rx fifo", "Tx fifo", "Session Index");
+                      vlib_cli_output (vm, "%v", str);
+                      vec_reset_length (str);
+                      once_per_pool = 0;
+                    }
 
                   /* *INDENT-OFF* */
                   pool_foreach (s, pool,
                   ({
-                    str = format (0, "%-20llx%-20llx%-6d%-6d",
-                                s->server_rx_fifo, s->server_tx_fifo, i,
-                                s - pool);
+                    str = format (str, "%-20llx%-20llx%-15lld",
+                                  s->server_rx_fifo, s->server_tx_fifo,
+                                  s - pool);
                     vlib_cli_output (vm, "%U%v",
                                      tp_vfts[s->session_type].format_session,
                                      s->transport_session_index,
                                      s->session_thread_index, str);
+                    vec_reset_length(str);
                   }));
                   /* *INDENT-OFF* */
                 }
@@ -881,6 +893,7 @@ show_uri_command_fn (vlib_main_t * vm,
           else
             vlib_cli_output (vm, "Thread %d: no active sessions", i);
         }
+      vec_free(str);
     }
 
   return 0;
