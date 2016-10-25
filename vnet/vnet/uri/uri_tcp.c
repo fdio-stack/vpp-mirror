@@ -21,12 +21,13 @@
 #include <vnet/tcp/tcp.h>
 
 u32
-vnet_bind_ip4_tcp_uri (vlib_main_t * vm, u16 port_number_host_byte_order)
+vnet_bind_ip4_tcp_uri (vlib_main_t * vm, ip46_address_t *ip,
+                       u16 port_number_host_byte_order)
 {
   tcp_listener_registration_t _a, *a = &_a;
 
   a->port = port_number_host_byte_order;
-  a->event_function = 0;
+//  a->event_function = 0;
   a->flags = TCP_LISTENER_IP4;
   a->data_node_index = tcp4_uri_input_node.index;
 
@@ -36,12 +37,13 @@ vnet_bind_ip4_tcp_uri (vlib_main_t * vm, u16 port_number_host_byte_order)
 }
 
 u32
-vnet_bind_ip6_tcp_uri (vlib_main_t * vm, u16 port_number_host_byte_order)
+vnet_bind_ip6_tcp_uri (vlib_main_t * vm, ip46_address_t *ip,
+                       u16 port_number_host_byte_order)
 {
   tcp_listener_registration_t _a, *a = &_a;
 
   a->port = port_number_host_byte_order;
-  a->event_function = 0;
+//  a->event_function = 0;
   a->flags = TCP_LISTENER_IP6;
   a->data_node_index = tcp6_uri_input_node.index;
 
@@ -133,6 +135,19 @@ u32 uri_tx_ip4_tcp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b)
   return URI_QUEUE_NEXT_IP4_LOOKUP;
 }
 
+void
+uri_tcp_session_delete (u32 transport_session_index, u32 my_thread_index)
+{
+  tcp_session_delete (transport_session_index, my_thread_index);
+}
+
+transport_session_t *
+uri_tcp_session_get (u32 ts_index, u32 my_thread_index)
+{
+  tcp_session_t *ts = tcp_session_get (ts_index, my_thread_index);
+  return &ts->session;
+}
+
 u32
 uri_tx_ip6_tcp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b)
 {
@@ -144,6 +159,8 @@ const static transport_proto_vft_t tcp4_proto = {
   .bind = vnet_bind_ip4_tcp_uri,
   .unbind = vnet_unbind_ip4_tcp_uri,
   .send = uri_tx_ip4_tcp,
+  .get_session = uri_tcp_session_get,
+  .delete_session = uri_tcp_session_delete,
   .format_session = format_stream_session_ip4_tcp
 };
 

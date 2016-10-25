@@ -13,8 +13,8 @@
  * limitations under the License.
  */
 
-#ifndef included_tcp_packet_2h
-#define included_tcp_packet_2h
+#ifndef included_tcp_packet_h
+#define included_tcp_packet_h
 
 #include <vnet/vnet.h>
 
@@ -46,17 +46,26 @@ enum
 
 typedef struct _tcp_header
 {
-  union {
-    struct {
-      u16 src;          /**< Source port. */
-      u16 dst;          /**< Destination port. */
+  union
+  {
+    struct
+    {
+      u16 src_port; /**< Source port. */
+      u16 dst_port; /**< Destination port. */
     };
-    u32 src_and_dst;    /**< Source and destination ports. */
-    u16 src_port, dst_port;     /**< backward compatibility */
+    struct
+    {
+      u16 src, dst;
+    };
   };
 
-  u32 seq_number;       /**< Sequence number. */
-  u32 ack_number;       /**< Acknowledgement number. */
+  u32 seq_number;       /**< Sequence number of the first data octet in this
+                         *   segment, except when SYN is present. If SYN
+                         *   is present the seq number is is the ISN and the
+                         *   first data octet is ISN+1 */
+  u32 ack_number;       /**< Acknowledgement number if ACK is set. It contains
+                         *   the value of the next sequence number the sender
+                         *   of the segment is expecting to receive. */
 
   union
   {
@@ -91,25 +100,26 @@ tcp_header_bytes (tcp_header_t *t)
 /* TCP options. */
 typedef enum tcp_option_type
 {
-  TCP_OPTION_END = 0,                   /**< End of options. */
+  TCP_OPTION_EOL = 0,                   /**< End of options. */
   TCP_OPTION_NOOP = 1,                  /**< No operation. */
   TCP_OPTION_MSS = 2,                   /**< Limit MSS. */
   TCP_OPTION_WINDOW_SCALE = 3,          /**< Window scale. */
   TCP_OPTION_SACK_PERMITTED = 4,        /**< Selective Ack permitted. */
   TCP_OPTION_SACK_BLOCK = 5,            /**< Selective Ack block. */
-  TCP_OPTION_TIME_STAMP = 8,            /**< Timestamps. */
+  TCP_OPTION_TIMESTAMP = 8,             /**< Timestamps. */
   TCP_OPTION_UTO = 28,                  /**< User timeout. */
   TCP_OPTION_AO = 29,                   /**< Authentication Option. */
 } tcp_option_type_t;
 
-typedef struct
-{
-  tcp_option_type_t type : 8;
+/* TCP option lengths */
+#define TCP_OPTION_LEN_EOL              1
+#define TCP_OPTION_LEN_NOOP             1
+#define TCP_OPTION_LEN_MSS              4
+#define TCP_OPTION_LEN_WINDOW_SCALE     3
+#define TCP_OPTION_LEN_SACK_PERMITTED   2
+#define TCP_OPTION_LEN_TIMESTAMP        10
 
-  /** Length of this option in bytes. All except NOP and END have 1 byte
-   * length field.*/
-  u8 length;
-} tcp_option_with_length_t;
+#define TCP_MAX_WND_SCALE               14
 
 #endif /* included_tcp_packet_h */
 

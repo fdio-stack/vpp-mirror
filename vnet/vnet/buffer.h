@@ -324,6 +324,16 @@ typedef struct
       u16 buffer_advance;
     } device_input_feat;
 
+    /* TCP */
+    struct
+    {
+      u32 session_index;
+      u32 seq_number;
+      u32 end_seq;
+      u32 ack_number;
+      u8 flags;
+    } tcp;
+
     u32 unused[6];
   };
 } vnet_buffer_opaque_t;

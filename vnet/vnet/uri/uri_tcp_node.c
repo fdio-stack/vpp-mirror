@@ -70,14 +70,6 @@ typedef enum {
   TCP4_URI_INPUT_N_NEXT,
 } tcp4_uri_input_next_t;
 
-void
-uri_tcp_session_delete (transport_session_t *s)
-{
-  tcp_session_t * us;
-  us = (tcp_session_t *) s;
-  clib_mem_free(us);
-}
-
 static uword
 tcp4_uri_input_node_fn (vlib_main_t * vm,
 		  vlib_node_runtime_t * node,

@@ -96,6 +96,7 @@ typedef struct _stream_session_t
   u32 transport_session_index;
 
   /** Application specific */
+  u32 pid;
 
   /** fifo pointers. Once allocated, these do not move */
   svm_fifo_t * server_rx_fifo;
@@ -165,11 +166,13 @@ typedef struct _stream_server
 
 } stream_server_t;
 
+typedef clib_bihash_kv_16_8_t session_kv4_t;
+typedef clib_bihash_kv_48_8_t session_kv6_t;
+
 typedef struct _stream_server_main
 {
-  /** Lookup tables */
+  /** Lookup tables for established sessions and listeners */
   clib_bihash_16_8_t v4_session_hash;
-
   clib_bihash_48_8_t v6_session_hash;
 
   /** per worker thread session pools */
@@ -227,6 +230,21 @@ u64
 stream_session_lookup6 (ip6_address_t * lcl, ip6_address_t * rmt, u16 lcl_port,
                         u16 rmt_port, u8 proto);
 
+always_inline stream_session_t *
+stream_session_get_tsi (u64 ti_and_si, u32 thread_index)
+{
+  ASSERT ((u32)(ti_and_si >> 32) == thread_index);
+  return pool_elt_at_index (stream_server_main.sessions[thread_index],
+                          ti_and_si & 0xFFFFFFFFULL);
+}
+
+always_inline stream_session_t *
+stream_session_get (u64 si, u32 thread_index)
+{
+  return pool_elt_at_index(stream_server_main.sessions[thread_index], si);
+}
+
+
 always_inline int
 check_api_queue_full (stream_server_t *ss)
 {
@@ -246,7 +264,7 @@ check_api_queue_full (stream_server_t *ss)
 }
 
 typedef u32
-(*tp_application_bind) (vlib_main_t *, u16);
+(*tp_application_bind) (vlib_main_t *, ip46_address_t *, u16);
 
 typedef u32
 (*tp_application_unbind) (vlib_main_t *, u16);
@@ -275,9 +293,6 @@ typedef struct _transport_proto_vft
   tp_session_get get_session;
   tp_session_del delete_session;
 } transport_proto_vft_t;
-
-typedef clib_bihash_kv_16_8_t session_kv4_t;
-typedef clib_bihash_kv_48_8_t session_kv6_t;
 
 void
 uri_register_transport (u8 type, const transport_proto_vft_t *vft);

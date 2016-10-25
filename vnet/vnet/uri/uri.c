@@ -44,6 +44,23 @@ stream_session_make_v4_kv (session_kv4_t *kv, ip4_address_t * lcl,
 }
 
 void
+make_listener_v4_kv (session_kv4_t *kv, ip4_address_t * lcl, u16 lcl_port,
+                     u8 proto)
+{
+  v4_session_key_t key;
+
+  key.src.as_u32 = lcl->as_u32;
+  key.dst.as_u32 = 0;
+  key.src_port = lcl_port;
+  key.dst_port = 0;
+  key.proto = proto;
+
+  kv->key[0] = key.as_u64[0];
+  kv->key[1] = key.as_u64[1];
+  kv->value = ~0ULL;
+}
+
+void
 transport_session_make_v4_kv (session_kv4_t * kv, transport_session_t *t)
 {
   return stream_session_make_v4_kv (kv, &t->local_ip.ip4, &t->remote_ip.ip4,
@@ -63,6 +80,25 @@ stream_session_make_v6_kv (session_kv6_t *kv, ip6_address_t * lcl,
   key.dst.as_u64[1] = rmt->as_u64[1];
   key.src_port = lcl_port;
   key.dst_port = rmt_port;
+  key.proto = proto;
+
+  kv->key[0] = key.as_u64[0];
+  kv->key[1] = key.as_u64[1];
+  kv->value = ~0ULL;
+}
+
+void
+make_listener_v6_kv (session_kv6_t *kv, ip6_address_t * lcl, u16 lcl_port,
+                     u8 proto)
+{
+  v6_session_key_t key;
+
+  key.src.as_u64[0] = lcl->as_u64[0];
+  key.src.as_u64[1] = lcl->as_u64[1];
+  key.dst.as_u64[0] = 0;
+  key.dst.as_u64[1] = 0;
+  key.src_port = lcl_port;
+  key.dst_port = 0;
   key.proto = proto;
 
   kv->key[0] = key.as_u64[0];
@@ -152,9 +188,21 @@ stream_session_lookup4 (ip4_address_t * lcl, ip4_address_t * rmt, u16 lcl_port,
 {
   stream_server_main_t *ssm = &stream_server_main;
   session_kv4_t kv4;
+  int rv;
+
+  /* Lookup session amongst established ones */
   stream_session_make_v4_kv (&kv4, lcl, rmt, lcl_port, rmt_port, proto);
-  clib_bihash_search_inline_16_8 (&ssm->v4_session_hash, &kv4);
-  return kv4.value;
+  rv = clib_bihash_search_inline_16_8 (&ssm->v4_session_hash, &kv4);
+  if (rv == 0)
+    return kv4.value;
+
+  /* If nothing is found, check if any listener is available */
+  make_listener_v4_kv (&kv4, lcl, lcl_port, proto);
+  rv = clib_bihash_search_inline_16_8 (&ssm->v4_session_hash, &kv4);
+  if (rv == 0)
+    return kv4.value;
+
+  return ~0;
 }
 
 u64
@@ -163,9 +211,20 @@ stream_session_lookup6 (ip6_address_t * lcl, ip6_address_t * rmt, u16 lcl_port,
 {
   stream_server_main_t *ssm = &stream_server_main;
   session_kv6_t kv6;
+  int rv;
+
   stream_session_make_v6_kv (&kv6, lcl, rmt, lcl_port, rmt_port, proto);
-  clib_bihash_search_inline_48_8 (&ssm->v6_session_hash, &kv6);
-  return kv6.value;
+  rv = clib_bihash_search_inline_48_8 (&ssm->v6_session_hash, &kv6);
+  if (rv == 0)
+    return kv6.value;
+
+  /* If nothing is found, check if any listener is available */
+  make_listener_v6_kv (&kv6, lcl, lcl_port, proto);
+  rv = clib_bihash_search_inline_48_8 (&ssm->v6_session_hash, &kv6);
+  if (rv == 0)
+    return kv6.value;
+
+  return ~0;
 }
 
 int vnet_uri_add_segment (stream_server_main_t *ssm, stream_server_t * ss)
@@ -560,6 +619,9 @@ vnet_bind_uri (vnet_bind_uri_args_t *a)
   uri_bind_table_entry_t * e;
   u16 * n, port_number_host_byte_order;
   stream_session_type_t sst = SESSION_TYPE_N_TYPES;
+  unformat_input_t _input, *input= &_input;
+  ip46_address_t ip46_address;
+  u8 *fifo_name;
 
   ASSERT(a->uri);
   ASSERT(a->segment_name_length);
@@ -569,8 +631,9 @@ vnet_bind_uri (vnet_bind_uri_args_t *a)
   if (p)
     return VNET_API_ERROR_ADDRESS_IN_USE;
 
-  if ((rv = uri_decode (a->uri, &sst, &port_number_host_byte_order)))
-    return rv;
+  unformat_init_string (input, a->uri, strlen (a->uri));
+  unformat (input, "%U", unformat_vnet_uri, &ip46_address,
+                  &sst, &port_number_host_byte_order, &fifo_name);
 
   /* External client? */
   if (a->api_client_index != ~0)
@@ -654,7 +717,8 @@ vnet_bind_uri (vnet_bind_uri_args_t *a)
           clib_host_to_net_u16 (port_number_host_byte_order));
       n[0] = (ss - ssm->servers) + 1; /* avoid SPARSE_VEC_INDEX_INVALID */
 
-      tp_vfts[sst].bind (um->vlib_main, port_number_host_byte_order);
+      tp_vfts[sst].bind (um->vlib_main, &ip46_address,
+                         port_number_host_byte_order);
     }
 
   pool_get (um->fifo_bind_table, e);
@@ -669,6 +733,7 @@ vnet_bind_uri (vnet_bind_uri_args_t *a)
   hash_set_mem (um->uri_bind_table_entry_by_name, e->bind_name,
                 e - um->fifo_bind_table);
 
+  vec_free (fifo_name);
   return 0;
 }
 

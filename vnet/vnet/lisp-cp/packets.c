@@ -142,6 +142,27 @@ pkt_push_udp (vlib_main_t * vm, vlib_buffer_t * b, u16 sp, u16 dp)
 }
 
 void *
+pkt_push_tcp (vlib_main_t * vm, vlib_buffer_t * b, u16 sp, u16 dp, u32 seq,
+              u32 ack, u8 tcp_hdr_opts_len, u8 flags, u16 wnd)
+{
+  tcp_header_t *th;
+
+  th = vlib_buffer_push_uninit (b, tcp_hdr_opts_len);
+
+  th->src_port = clib_host_to_net_u16 (sp);
+  th->dst_port = clib_host_to_net_u16 (dp);
+  th->seq_number = clib_host_to_net_u32 (seq);
+  th->ack_number = clib_host_to_net_u32 (ack);
+  th->reserved1 = 0;
+  th->data_offset = tcp_hdr_opts_len >> 2;
+  th->flags = flags;
+  th->window = clib_host_to_net_u16 (wnd);
+  th->checksum = 0;
+  th->urgent_pointer = 0;
+  return th;
+}
+
+void *
 pkt_push_ipv4 (vlib_main_t * vm, vlib_buffer_t * b, ip4_address_t * src,
 	       ip4_address_t * dst, int proto)
 {
@@ -224,7 +245,7 @@ pkt_push_ip (vlib_main_t * vm, vlib_buffer_t * b, ip_address_t * src,
 
 void *
 pkt_push_udp_and_ip (vlib_main_t * vm, vlib_buffer_t * b, u16 sp, u16 dp,
-		     ip_address_t * sip, ip_address_t * dip)
+                     ip_address_t * sip, ip_address_t * dip)
 {
   u16 udpsum;
   udp_header_t *uh;

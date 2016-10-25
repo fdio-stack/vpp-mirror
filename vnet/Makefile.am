@@ -404,6 +404,7 @@ libvnet_la_SOURCES +=							\
  vnet/tcp/tcp_init.c							\
  vnet/tcp/tcp_syn_filter4.c						\
  vnet/tcp/tcp_timer.c							\
+ vnet/tcp/tcp_output.c							\
  vnet/tcp/tcp.c
 
 nobase_include_HEADERS +=						\

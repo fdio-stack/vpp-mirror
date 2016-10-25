@@ -175,7 +175,7 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
           svm_fifo_t * f0;
           u16 udp_len0;
           u8 * data0;
-          u64 value;
+          u64 si0;
           
           /* speculatively enqueue b0 to the current next frame */
 	  bi0 = from[0];
@@ -197,16 +197,14 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
           s0 = 0;
 
           /* look session */
-          value = stream_session_lookup4 (&ip0->dst_address, &ip0->src_address,
+          si0 = stream_session_lookup4 (&ip0->dst_address, &ip0->src_address,
                                           udp0->dst_port, udp0->src_port,
                                           SESSION_TYPE_IP4_UDP);
 
-          if (PREDICT_TRUE (value != ~0ULL))
+          if (PREDICT_TRUE (si0 != ~0ULL))
             {
-              s0 = pool_elt_at_index (ssm->sessions[my_thread_index],
-                                      value & 0xFFFFFFFFULL);
- 
-              ASSERT ((u32)(value >> 32) == my_thread_index);
+              s0 = stream_session_get_tsi (si0, my_thread_index);
+
               f0 = s0->server_rx_fifo;
               
               if (PREDICT_FALSE(s0->session_state != SESSION_STATE_READY))

@@ -23,7 +23,8 @@
 #include <vnet/fib/ip4_fib.h>
 
 u32
-vnet_bind_ip4_udp_uri (vlib_main_t *vm, u16 port_number_host_byte_order)
+vnet_bind_ip4_udp_uri (vlib_main_t *vm, ip46_address_t *ip,
+                       u16 port_number_host_byte_order)
 {
   udp_register_dst_port (vm, port_number_host_byte_order,
                          udp4_uri_input_node.index, 1 /* is_ipv4 */);

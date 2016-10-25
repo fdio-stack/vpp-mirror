@@ -21,13 +21,13 @@
 #include <vnet/tcp/tcp_packet.h>
 #include <vnet/uri/transport.h>
 
+#define MAX_HDRS_LEN 100
+#define TCP_TSTAMP_RESOLUTION 1e-3
+#define TCP_PAWS_IDLE 24 * 24 * 60 * 60 / TCP_TSTAMP_RESOLUTION /* 24 days */
+#define TCP_MAX_OPTION_SPACE 40
+
 /* Provisionally assume 32-bit timers */
 typedef u32 tcp_timer_t;
-
-typedef struct 
-{
-  u32 his, ours;
-} tcp_sequence_pair_t;
 
 /** TCP FSM state definitions as per RFC793. */
 #define foreach_tcp_fsm_state   \
@@ -45,49 +45,88 @@ typedef struct
 
 typedef enum _tcp_fsm_states
 {
-#define _(sym, str) TCP_STATE_##sym,
+#define _(sym, str) TCP_CONNECTION_STATE_##sym,
   foreach_tcp_fsm_state
 #undef _
-  TCP_N_STATE
+  TCP_N_CONNECTION_STATE
 } tcp_fsm_states_t;
 
 format_function_t format_tcp_state;
 
-typedef struct 
+typedef struct
+{
+  /* Option flags */
+  union
+  {
+    u8 mss_flag :1,     /**< MSS advertised in SYN */
+       tstamp_seen :1,  /**< Seen timestamp in last packet */
+       tstamp_flag :1,  /**< Timestamp capability advertised in SYN */
+       wscale_flag :1,  /**< Window scale capability advertised in SYN */
+       sack_flag :1,    /**< SACK capability advertised in SYN */
+       unused :3;
+    u8 flags;
+  };
+
+  /* Received options*/
+  u16 mss;              /**< Maximum segment size advertised by peer */
+  u8 wscale;            /**< Window scale advertised by peer */
+  u32 tsval;            /**< Peer's timestamp value */
+  u32 tsecr;            /**< Echoed/reflected time stamp */
+
+  /* Send options */
+  u8 wscale_snd;        /**< Window scale to advertise to peer */
+
+  /* Session variables */
+  u32 tsval_recent;     /**< last timestamp received */
+  u32 tsval_recent_age; /**< when last updated tstamp_recent*/
+} tcp_options_t;
+
+typedef struct
 {
   /* sum, sum**2 */
   f64 sum, sum_sq;
   f64 count;
 } tcp_rtt_stats_t;
 
-typedef CLIB_PACKED(struct _tcp_session
+typedef struct _tcp_session
 {
   transport_session_t session;          /** must be first */
 
-  tcp_sequence_pair_t sequence_numbers;
-
   /* our timer is in the dense parallel vector */
-  tcp_timer_t his_timestamp_net_byte_order;
+  tcp_timer_t remote_timestamp_net_byte_order;
+
+  u8 state;   /* tcp_state_t */
+
+  /* TODO RFC4898 */
+
+  /** Send sequence variables RFC793*/
+  u32 snd_una;          /**< oldest unacknowledged sequence number */
+  u16 snd_wnd;          /**< send window */
+  u32 snd_wl1;          /**< seq number used for last snd.wnd update */
+  u32 snd_wl2;          /**< ack number used for last snd.wnd update */
+  u32 snd_nxt;          /**< next seq number to be sent */
+
+  /** Receive sequence variables RFC793 */
+  u32 rcv_nxt;          /**< next sequence number expected */
+  u32 rcv_wnd;          /**< receive window we expect */
+
+  u32 rcv_las;          /**< rcv_nxt at last ack sent/rcv_wnd update */
+
+  tcp_options_t rcv_opt;        /**< received options */
+
+  u32 iss;              /**< initial sent sequence */
+  u32 irs;              /**< initial remote sequence */
 
   u16 max_segment_size;
-  u16 his_window;
-  u16 my_window;
-  u8 his_window_scale;
-  u8 my_window_scale;
+  u8 remote_window_scale;
+  u8 local_window_scale;
 
   u32 n_tx_unacked_bytes;
 
   /* Set if connected to another tcp46_session_t */
   u32 connected_session_index;
 
-  /* This session is ip6 */
-  u8 is_ip6;
-  /* 4-6, 6-4 connections are possible, separate pools */
-  u8 connected_to_ip6;
-
   u16 flags;
-
-  u8 state;   /* tcp_state_t */
 
   /* tos, ttl to use on tx */
   u8 tos;
@@ -102,7 +141,7 @@ typedef CLIB_PACKED(struct _tcp_session
    * a few high-throughput flows
    */
   u32 rewrite_template_index;
-}) tcp_session_t;
+} tcp_session_t;
 
 typedef enum {
   TCP_IP4,
@@ -117,57 +156,6 @@ typedef enum _tcp_error
 #undef tcp_error
   TCP_N_ERROR,
 } tcp_error_t;
-
-#define foreach_tcp4_dst_port                   \
-_ (4342, lisp_cp)
-
-#define foreach_tcp6_dst_port                   \
-_ (4342, lisp_cp6)
-
-typedef enum _tcp_dst_port
-{
-#define _(n,f) TCP_DST_PORT_##f = n,
-  foreach_tcp4_dst_port
-  foreach_tcp6_dst_port
-#undef _
-} tcp_static_dst_port_t;
-
-//typedef struct _tcp_dst_port_info
-//{
-//  /* Name (a c string). */
-//  char * name;
-//
-//  /* host byte order. */
-//  tcp_dst_port_t dst_port;
-//
-//  /* Node which handles this type. */
-//  u32 node_index;
-//
-//  /* Next index for this type. */
-//  u32 next_index;
-//} tcp_dst_port_info_t;
-
-#define foreach_tcp_event                                       \
-  /* Received a SYN-ACK after sending a SYN to connect. Or
-   * received an ACK after sending a SYN-ACK */                 \
-  _ (connection_established)                                    \
-  /* Received a RST from a non-established connection. */       \
-  _ (connect_failed)                                            \
-  /* Received a FIN from an established connection. */          \
-  _ (fin_received)                                              \
-  _ (connection_closed)                                         \
-  /* Received a RST from an established connection. */          \
-  _ (reset_received)
-
-typedef enum _tcp_event_type
-{
-#define _(f) TCP_EVENT_##f,
-  foreach_tcp_event
-#undef _
-} tcp_event_type_t;
-
-typedef void
-(tcp_event_function_t) (u32 * connections, tcp_event_type_t event_type);
 
 typedef struct tcp_listener
 {
@@ -187,7 +175,7 @@ typedef struct tcp_listener
   u32 * eof_connections[TCP_N_AF];
   u32 * close_connections[TCP_N_AF];
 
-  tcp_event_function_t * event_function;
+//  tcp_event_function_t * event_function;
 } tcp_listener_t;
 
 typedef struct tcp_listener_registration
@@ -203,8 +191,12 @@ typedef struct tcp_listener_registration
   u32 data_node_index;
 
   /* Event function: called on new connections */
-  tcp_event_function_t * event_function;
+//  tcp_event_function_t * event_function;
 } tcp_listener_registration_t;
+
+typedef struct {
+  u8 next, error;
+} tcp_lookup_dispatch_t;
 
 uword
 tcp_register_listener (vlib_main_t * vm, tcp_listener_registration_t * r);
@@ -231,6 +223,11 @@ typedef struct _tcp_main
   tcp_listener_t *listener_pool;
   u32 *listener_index_by_dst_port;
 
+  /** Dispatch table by state and flags */
+  tcp_lookup_dispatch_t dispatch_table[TCP_N_CONNECTION_STATE][64];
+
+  u8 log2_tstamp_clocks_per_tick;
+
   /* convenience */
   vlib_main_t * vlib_main;
   vnet_main_t * vnet_main;
@@ -240,10 +237,72 @@ typedef struct _tcp_main
 
 tcp_main_t tcp_main;
 
+extern vlib_node_registration_t tcp4_output_node;
+extern vlib_node_registration_t tcp6_output_node;
+
 always_inline tcp_main_t *
 vnet_get_tcp_main ()
 {
   return &tcp_main;
+}
+
+always_inline tcp_session_t *
+tcp_session_get (u32 tsi, u32 thread_index)
+{
+  return pool_elt_at_index(tcp_main.sessions[thread_index], tsi);
+}
+
+void
+tcp_send_ack (tcp_session_t *ts, u8 is_ip4);
+void
+tcp_send_synack (tcp_session_t *ts, u8 is_ip4);
+void
+tcp_send_dupack (tcp_session_t *ts, u8 is_ip4);
+
+always_inline u32
+tcp_end_seq (tcp_header_t *th, u32 len)
+{
+  return th->seq_number + th->syn + th->fin + len;
+}
+
+/* Modulo arithmetic for TCP sequence numbers */
+#define seq_lt(_s1, _s2) ((i32)((_s1)-(_s2)) < 0)
+#define seq_leq(_s1, _s2) ((i32)((_s1)-(_s2)) <= 0)
+#define seq_gt(_s1, _s2) ((i32)((_s1)-(_s2)) > 0)
+
+/* Modulo arithmetic for timestamps */
+#define timestamp_lt(_t1, _t2) ((i32)((_t1)-(_t2)) < 0)
+
+
+/**
+ * Compute actual receive window. Peer might have pushed more data than our
+ * window since the last ack we sent, in which case, receive window is 0.
+ */
+always_inline u32
+tcp_actual_receive_window (const tcp_session_t *ts)
+{
+  i32 rcv_wnd = ts->rcv_wnd + ts->rcv_las - ts->rcv_nxt;
+  if (rcv_wnd < 0)
+    rcv_wnd = 0;
+  return (u32) rcv_wnd;
+}
+
+always_inline u32
+tcp_snd_wnd_end (const tcp_session_t *ts)
+{
+  return ts->snd_una + ts->snd_wnd;
+}
+
+always_inline u32
+tcp_time_now ()
+{
+  return clib_cpu_time_now () >> tcp_main.log2_tstamp_clocks_per_tick;
+}
+
+always_inline void
+tcp_session_delete (u32 session_index, u32 my_thread_index)
+{
+  pool_put_index(tcp_main.sessions[my_thread_index], session_index);
 }
 
 #endif /* _vnet_tcp_h_ */

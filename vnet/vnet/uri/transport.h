@@ -97,6 +97,7 @@ struct _transport_session
 #define s_lcl_port session.local_port
 #define s_rmt_port session.remote_port
 #define s_proto session.proto
+#define s_state session.state
 #define s_s_index session.session_index
 #define s_t_index session.transport_session_index
 #define s_vft session.ts_vft
