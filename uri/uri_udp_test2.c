@@ -126,9 +126,9 @@ typedef struct
 } uri_udp_test_main_t;
 
 #if CLIB_DEBUG > 0
-#define NITER 1000
+#define NITER 10000
 #else
-#define NITER 100000000
+#define NITER 4000000
 #endif
 
 uri_udp_test_main_t uri_udp_test_main;
@@ -193,6 +193,8 @@ int wait_for_state_change (uri_udp_test_main_t * utm, connection_state_t state)
   return -1;
 }
 
+u64 server_bytes_received, server_bytes_sent;
+
 static void *
 cut_through_thread_fn (void *arg)
 {
@@ -202,7 +204,9 @@ cut_through_thread_fn (void *arg)
   u8 * my_copy_buffer = 0;
   uri_udp_test_main_t *utm = &uri_udp_test_main;
   i32 actual_transfer;
-  
+  int rv;
+  u32 buffer_offset;
+
   while (utm->cut_through_session_index == ~0)
     ;
 
@@ -211,18 +215,32 @@ cut_through_thread_fn (void *arg)
   rx_fifo = s->server_rx_fifo;
   tx_fifo = s->server_tx_fifo;
 
-  vec_validate (my_copy_buffer, 16*1024 - 1);
+  vec_validate (my_copy_buffer, 64*1024-1);
 
   while (true)
     {
       /* We read from the tx fifo and write to the rx fifo */
-      actual_transfer = svm_fifo_dequeue_nowait2 (tx_fifo, 0, 
-                                                  vec_len(my_copy_buffer),
-                                                  my_copy_buffer);
+      do {
+        actual_transfer = svm_fifo_dequeue_nowait2 (tx_fifo, 0,
+                                                    vec_len(my_copy_buffer),
+                                                    my_copy_buffer);
+      } while (actual_transfer <= 0);
 
-      if (actual_transfer > 0)
-        svm_fifo_enqueue_nowait2 (rx_fifo, 0, actual_transfer,
-                                  my_copy_buffer);
+      server_bytes_received += actual_transfer;
+
+      buffer_offset = 0;
+      while (actual_transfer > 0)
+        {
+          rv = svm_fifo_enqueue_nowait2 (rx_fifo, 0, actual_transfer,
+                                  my_copy_buffer + buffer_offset);
+          if (rv > 0)
+            {
+              actual_transfer -= rv;
+              buffer_offset += rv;
+              server_bytes_sent += rv;
+            }
+
+        }
       if (PREDICT_FALSE (utm->time_to_stop))
         break;
     }
@@ -235,14 +253,16 @@ static void uri_udp_slave_test (uri_udp_test_main_t * utm)
   vl_api_connect_uri_t * cmp;
   int i;
   u8 * test_data = 0;
-  u64 bytes_received = 0;
-  u32 max_dequeue;
+  u64 bytes_received = 0, bytes_sent = 0;
+  i32 bytes_to_read;
+  int rv;
   int mypid = getpid();
   f64 before, after, delta, bytes_per_second;
   session_t * session;
   svm_fifo_t * rx_fifo, * tx_fifo;
-  
-  vec_validate (test_data, 4095);
+  int buffer_offset, bytes_to_send = 0;
+
+  vec_validate (test_data, 64 * 1024 - 1);
   for (i = 0; i < vec_len (test_data); i++)
     test_data[i] = i & 0xff;
 
@@ -260,30 +280,74 @@ static void uri_udp_slave_test (uri_udp_test_main_t * utm)
       clib_warning ("timeout waiting for STATE_READY");
       return;
     }
-  
+
   session = pool_elt_at_index (utm->sessions, utm->cut_through_session_index);
   rx_fifo = session->server_rx_fifo;
   tx_fifo = session->server_tx_fifo;
 
   before = clib_time_now (&utm->clib_time);
+
+  vec_validate (utm->rx_buf, vec_len (test_data) - 1);
+
   for (i = 0; i < NITER; i++)
     {
-      (void) svm_fifo_enqueue (tx_fifo, mypid, 
-                               vec_len (test_data), test_data);
-      while ((max_dequeue = svm_fifo_max_dequeue (rx_fifo)) > 4096)
+      bytes_to_send = vec_len (test_data);
+      buffer_offset = 0;
+      while (bytes_to_send > 0)
         {
-          vec_validate (utm->rx_buf, max_dequeue - 1);
-          bytes_received += svm_fifo_dequeue (rx_fifo, mypid, 
-                                              vec_len (utm->rx_buf),
-                                              utm->rx_buf);
+          rv = svm_fifo_enqueue_nowait2 (tx_fifo, mypid,
+                                         bytes_to_send, 
+                                         test_data + buffer_offset);
+
+          if (rv > 0)
+            {
+              bytes_to_send -= rv;
+              buffer_offset += rv;
+              bytes_sent += rv;
+            }
+        }
+
+      bytes_to_read = svm_fifo_max_dequeue (rx_fifo);
+
+      bytes_to_read = vec_len(utm->rx_buf) > bytes_to_read ?
+        bytes_to_read : vec_len(utm->rx_buf);
+
+      buffer_offset = 0;
+      while (bytes_to_read > 0)
+        {
+          rv = svm_fifo_dequeue_nowait2 (rx_fifo, mypid,
+                                         bytes_to_read,
+                                         utm->rx_buf + buffer_offset);
+          if (rv > 0)
+            {
+              bytes_to_read -= rv;
+              buffer_offset += rv;
+              bytes_received += rv;
+            }
         }
     }
-  while ((max_dequeue = svm_fifo_max_dequeue (rx_fifo)) > 0)
+  while (bytes_received < bytes_sent)
     {
-      vec_validate (utm->rx_buf, max_dequeue - 1);
-      bytes_received += svm_fifo_dequeue (rx_fifo, mypid, 
-                                          vec_len (utm->rx_buf),
-                                          utm->rx_buf);
+      rv = svm_fifo_dequeue_nowait2 (rx_fifo, mypid,
+                                     vec_len (utm->rx_buf),
+                                     utm->rx_buf);
+      if (rv > 0)
+        {
+#if CLIB_DEBUG > 0
+          int j;
+          for (j = 0; j < rv; j++)
+            {
+              if (utm->rx_buf[j] != ((bytes_received + j) & 0xff))
+                {
+                  clib_warning ("error at byte %lld, 0x%x not 0x%x",
+                                bytes_received + j,
+                                utm->rx_buf[j], 
+                                ((bytes_received + j )&0xff));
+                }
+            }
+#endif
+          bytes_received += (u64) rv;
+        }
     }
   
   after = clib_time_now (&utm->clib_time);
@@ -293,13 +357,15 @@ static void uri_udp_slave_test (uri_udp_test_main_t * utm)
   if (delta > 0.0)
     bytes_per_second = (f64) bytes_received / delta;
 
-  fformat (stdout, "Done: %lld bytes in %.2f seconds, %.2f bytes/sec...\n",
+  fformat (stdout, "Done: %lld recv bytes in %.2f seconds, %.2f bytes/sec...\n\n",
            bytes_received, delta, bytes_per_second);
-  fformat (stdout, "     %.2f Gbit/sec (full-duplex)", 
+  fformat (stdout, "Done: %lld sent bytes in %.2f seconds, %.2f bytes/sec...\n\n",
+           bytes_sent, delta, bytes_per_second);
+  fformat (stdout, "client -> server -> client round trip: %.2f Gbit/sec \n\n",
            (bytes_per_second*8.0)/1e9);
 }
 
-static void 
+static void
 vl_api_bind_uri_reply_t_handler (vl_api_bind_uri_reply_t * mp)
 {
   uri_udp_test_main_t *utm = &uri_udp_test_main;
@@ -434,7 +500,7 @@ vl_api_accept_session_t_handler (vl_api_accept_session_t * mp)
 
   utm->vpp_event_queue = (unix_shared_memory_queue_t *)
     mp->vpp_event_queue_address;
-  
+
   pool_get (utm->sessions, session);
 
   rx_fifo = (svm_fifo_t *)mp->server_rx_fifo;
@@ -454,8 +520,8 @@ vl_api_accept_session_t_handler (vl_api_accept_session_t * mp)
   if (pool_elts (utm->sessions) && (pool_elts(utm->sessions) % 20000) == 0)
     {
       f64 now = clib_time_now (&utm->clib_time);
-      fformat (stdout, "%d active sessions in %.2f seconds, %.2f/sec...\n", 
-               pool_elts(utm->sessions), now - start_time, 
+      fformat (stdout, "%d active sessions in %.2f seconds, %.2f/sec...\n",
+               pool_elts(utm->sessions), now - start_time,
                (f64)pool_elts(utm->sessions) / (now - start_time));
     }
 
@@ -477,7 +543,7 @@ vl_api_disconnect_session_t_handler (vl_api_disconnect_session_t * mp)
   uword * p;
   int rv = 0;
   u64 key;
-  
+
   key = (((u64)mp->session_thread_index) << 32) | (u64)mp->session_index;
 
   p = hash_get (utm->session_index_by_vpp_handles, key);
@@ -503,7 +569,7 @@ vl_api_disconnect_session_t_handler (vl_api_disconnect_session_t * mp)
   vl_msg_api_send_shmem (utm->vl_input_queue, (u8 *)&rmp);
 }
 
-static void 
+static void
 vl_api_connect_uri_reply_t_handler (vl_api_connect_uri_reply_t * mp)
 {
   svm_fifo_segment_main_t * sm = &svm_fifo_segment_main;
@@ -551,7 +617,7 @@ vl_api_connect_uri_reply_t_handler (vl_api_connect_uri_reply_t * mp)
 
   pool_get (utm->sessions, session);
   utm->cut_through_session_index = session - utm->sessions;
-  
+
   session->server_rx_fifo = (svm_fifo_t *) fsh->fifos[0];
   ASSERT (session->server_rx_fifo);
   session->server_tx_fifo = (svm_fifo_t *) fsh->fifos[1];
@@ -575,7 +641,7 @@ uri_api_hookup (uri_udp_test_main_t * utm)
 {
 #define _(N,n)                                                  \
     vl_msg_api_set_handlers(VL_API_##N, #n,                     \
-                           vl_api_##n##_t_handler,	        \
+                           vl_api_##n##_t_handler,              \
                            vl_noop_handler,                     \
                            vl_api_##n##_t_endian,               \
                            vl_api_##n##_t_print,                \
@@ -619,7 +685,7 @@ init_error_string_table (uri_udp_test_main_t * utm)
   hash_set (utm->error_string_by_error_number, 99, "Misc");
 }
 
-void handle_fifo_event_server_rx (uri_udp_test_main_t *utm, 
+void handle_fifo_event_server_rx (uri_udp_test_main_t *utm,
                                   fifo_event_t * e)
 {
   svm_fifo_t * rx_fifo, * tx_fifo;
@@ -633,7 +699,7 @@ void handle_fifo_event_server_rx (uri_udp_test_main_t *utm,
   tx_fifo = utm->sessions[rx_fifo->client_session_index].server_tx_fifo;
 
   do {
-    nbytes = svm_fifo_dequeue_nowait2 (rx_fifo, 0, 
+    nbytes = svm_fifo_dequeue_nowait2 (rx_fifo, 0,
                                        vec_len(utm->rx_buf), utm->rx_buf);
   } while (nbytes <= 0);
   do {
@@ -656,14 +722,14 @@ void handle_event_queue (uri_udp_test_main_t * utm)
 
   while (1)
     {
-      unix_shared_memory_queue_sub (utm->our_event_queue, (u8 *)e, 
+      unix_shared_memory_queue_sub (utm->our_event_queue, (u8 *)e,
                                     0 /* nowait */);
       switch (e->event_type)
         {
         case FIFO_EVENT_SERVER_RX:
           handle_fifo_event_server_rx (utm, e);
           break;
-          
+
         case FIFO_EVENT_SERVER_EXIT:
           return;
 
@@ -685,7 +751,7 @@ void uri_udp_test (uri_udp_test_main_t * utm)
 {
   vl_api_bind_uri_t * bmp;
   vl_api_unbind_uri_t * ump;
-  
+
   bmp = vl_msg_api_alloc (sizeof (*bmp));
   memset (bmp, 0, sizeof (*bmp));
 
@@ -702,17 +768,17 @@ void uri_udp_test (uri_udp_test_main_t * utm)
       clib_warning ("timeout waiting for STATE_READY");
       return;
     }
-  
+
   handle_event_queue (utm);
 
   ump = vl_msg_api_alloc (sizeof (*ump));
   memset (ump, 0, sizeof (*ump));
-  
+
   ump->_vl_msg_id = ntohs (VL_API_UNBIND_URI);
   ump->client_index = utm->my_client_index;
   memcpy (ump->uri, utm->uri, vec_len (utm->uri));
   vl_msg_api_send_shmem (utm->vl_input_queue, (u8 *)&ump);
-  
+
   if (wait_for_state_change (utm, STATE_START))
     {
       clib_warning ("timeout waiting for STATE_START");
@@ -760,9 +826,9 @@ main (int argc, char **argv)
   while (unformat_check_input (a) != UNFORMAT_END_OF_INPUT)
     {
       if (unformat (a, "chroot prefix %s", &chroot_prefix))
-	{
-	  vl_set_memory_root_path ((char *) chroot_prefix);
-	}
+        {
+          vl_set_memory_root_path ((char *) chroot_prefix);
+        }
       else if (unformat (a, "uri %s", &bind_name))
         ;
       else if (unformat (a, "segment-size %dM", &tmp))
@@ -774,10 +840,10 @@ main (int argc, char **argv)
       else if (unformat (a, "slave"))
         i_am_master = 0;
       else
-	{
-	  fformat (stderr, "%s: usage [master|slave]\n");
-	  exit (1);
-	}
+        {
+          fformat (stderr, "%s: usage [master|slave]\n");
+          exit (1);
+        }
     }
 
   utm->cut_through_session_index = ~0;
@@ -797,7 +863,7 @@ main (int argc, char **argv)
       fformat (stderr, "Couldn't connect to vpe, exiting...\n");
       exit (1);
     }
-  
+
   if (i_am_master == 0)
     {
       uri_udp_slave_test (utm);

@@ -333,10 +333,6 @@ static int svm_fifo_dequeue_internal2 (svm_fifo_t * f,
 
   __sync_fetch_and_sub (&f->cursize, total_copy_bytes);
   
-  /* Wake up transmitter when fifo at or below 1/4 full */
-  if (f->cursize <= f->nitems/4)
-    pthread_cond_broadcast (&f->condvar);
-
   return (total_copy_bytes);
 }
 

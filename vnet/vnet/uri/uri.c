@@ -324,7 +324,7 @@ vnet_unbind_fifo_uri (uri_main_t *um, u16 port)
 }
 
 int vnet_connect_fifo_uri (char *uri, u32 api_client_index,
-                           u64 * options, char *segment_name_arg, 
+                           u64 * options, char *segment_name_arg,
                            u32 * segment_name_length)
 {
   uri_main_t * um = &uri_main;
@@ -415,13 +415,13 @@ uri_decode (char *uri, stream_session_type_t *sst, u16 *port)
  * stream_session_type_t sst;
  * u8 *fifo_name;
  *
- * if (unformat (input, "%U", unformat_vnet_uri, &ip46_address, 
+ * if (unformat (input, "%U", unformat_vnet_uri, &ip46_address,
  *              &sst, &port, &fifo_name))
  *  etc...
  *
  */
 
-uword 
+uword
 unformat_vnet_uri (unformat_input_t * input, va_list * args)
 {
   u8 * address = va_arg (*args, u8 *);
@@ -429,9 +429,9 @@ unformat_vnet_uri (unformat_input_t * input, va_list * args)
   u16 * port = va_arg(*args, u16 *);
   u8 ** fifo_name = va_arg(*args, u8 **);
   u8 * name = 0;
-  
+
   *fifo_name = 0;
-  
+
   if (unformat (input, "tcp://%U/%d", unformat_ip4_address, address, port))
     {
       *sst = SESSION_TYPE_IP4_TCP;
@@ -737,7 +737,7 @@ int vnet_connect_uri (char * uri, u32 api_client_index,
       switch (sst)
         {
         case SESSION_TYPE_FIFO:
-          rv = vnet_connect_fifo_uri (uri, api_client_index, options, 
+          rv = vnet_connect_fifo_uri (uri, api_client_index, options,
                                       segment_name, name_length);
           vec_free (fifo_name);
           return rv;
@@ -747,7 +747,7 @@ int vnet_connect_uri (char * uri, u32 api_client_index,
                                      options, (u8 *) segment_name, name_length,
                                      mp);
           return rv;
-          
+
         case SESSION_TYPE_IP4_TCP:
         case SESSION_TYPE_IP6_UDP:
         case SESSION_TYPE_IP6_TCP:
@@ -970,7 +970,7 @@ uri_init (vlib_main_t * vm)
 
 VLIB_INIT_FUNCTION (uri_init);
 
-static clib_error_t * 
+static clib_error_t *
 stream_server_init (vlib_main_t * vm)
 {
   u32 num_threads;
@@ -983,7 +983,7 @@ stream_server_init (vlib_main_t * vm)
   if (num_threads < 1)
     return clib_error_return (0, "n_thread_stacks not set");
 
-  
+
   /* $$$ config parameters */
   svm_fifo_segment_init (0x200000000ULL /* first segment base VA */,
                          20 /* timeout in seconds */);
@@ -1017,7 +1017,7 @@ stream_server_init (vlib_main_t * vm)
   clib_bihash_init_48_8 (&ssm->v6_session_hash, "v6 session table",
                          200000 /* $$$$ config parameter nbuckets */,
                          (64<<20) /*$$$ config parameter table size */);
-  
+
   ssm->vlib_main = vm;
   ssm->vnet_main = vnet_get_main();
 

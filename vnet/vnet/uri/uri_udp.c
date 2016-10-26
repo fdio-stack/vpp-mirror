@@ -86,21 +86,21 @@ vnet_connect_ip4_udp (u8 * ip46_address, u16 * port,
   const dpo_id_t *dpo0;
   ip4_fib_mtrie_t * mtrie0;
 
-  /* 
-   * Connect to a local URI? 
+  /*
+   * Connect to a local URI?
    */
-  i0 = sparse_vec_index (ssm->stream_server_by_dst_port[SESSION_TYPE_IP4_UDP], 
+  i0 = sparse_vec_index (ssm->stream_server_by_dst_port[SESSION_TYPE_IP4_UDP],
                          port_net_byte_order);
 
   /* No listener for dst port... */
   if (i0 == SPARSE_VEC_INVALID_INDEX)
     goto create_regular_session;
-  
+
   /* Find the server */
   ss = pool_elt_at_index(ssm->servers, i0 - 1);
-  /* 
+  /*
    * Server is willing to have a direct fifo connection created
-   * instead of going through the state machine, etc. 
+   * instead of going through the state machine, etc.
    */
 
   if ((ss->flags & URI_OPTIONS_FLAGS_USE_FIFO) == 0)
@@ -123,7 +123,7 @@ vnet_connect_ip4_udp (u8 * ip46_address, u16 * port,
   leaf0 = ip4_fib_mtrie_lookup_step (mtrie0, leaf0, dst_addr0, 3);
   if (leaf0 == IP4_FIB_MTRIE_LEAF_EMPTY)
     goto create_regular_session;
-  
+
   lbi0 = ip4_fib_mtrie_leaf_get_adj_index (leaf0);
   lb0 = load_balance_get (lbi0);
 
@@ -176,7 +176,7 @@ uri_tx_ip4_udp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b)
     }
 
   len_to_dequeue = max_dequeue < us->mtu ? max_dequeue : us->mtu;
-  
+
   actual_length = svm_fifo_dequeue (f, 0, len_to_dequeue, data);
 
   b->current_length = sizeof (*ip) + sizeof (*udp) + actual_length;
@@ -194,7 +194,7 @@ uri_tx_ip4_udp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b)
   udp->dst_port = us->s_rmt_port;
   udp->length = clib_host_to_net_u16 (actual_length + sizeof (*udp));
   udp->checksum = 0;
-  
+
   return URI_QUEUE_NEXT_IP4_LOOKUP;
 }
 
