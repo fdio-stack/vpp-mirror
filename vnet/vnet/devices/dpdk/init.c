@@ -221,7 +221,6 @@ dpdk_device_lock_init (dpdk_device_t * xd)
 					     CLIB_CACHE_LINE_BYTES);
       memset ((void *) xd->lockp[q], 0, CLIB_CACHE_LINE_BYTES);
     }
-  xd->need_txlock = 1;
 }
 
 void
@@ -233,7 +232,6 @@ dpdk_device_lock_free (dpdk_device_t * xd)
     clib_mem_free ((void *) xd->lockp[q]);
   vec_free (xd->lockp);
   xd->lockp = 0;
-  xd->need_txlock = 0;
 }
 
 static clib_error_t *
@@ -433,7 +431,11 @@ dpdk_lib_init (dpdk_main_t * dm)
 
       /* workaround for drivers not setting driver_name */
       if ((!dev_info.driver_name) && (dev_info.pci_dev))
+#if RTE_VERSION < RTE_VERSION_NUM(16, 11, 0, 0)
 	dev_info.driver_name = dev_info.pci_dev->driver->name;
+#else
+	dev_info.driver_name = dev_info.pci_dev->driver->driver.name;
+#endif
       ASSERT (dev_info.driver_name);
 
       if (!xd->pmd)
@@ -610,17 +612,6 @@ dpdk_lib_init (dpdk_main_t * dm)
 	    }
 	}
 
-#if RTE_VERSION < RTE_VERSION_NUM(16, 4, 0, 0)
-      /*
-       * Older VMXNET3 driver doesn't support jumbo / multi-buffer pkts
-       */
-      if (xd->pmd == VNET_DPDK_PMD_VMXNET3)
-	{
-	  xd->port_conf.rxmode.max_rx_pkt_len = 1518;
-	  xd->port_conf.rxmode.jumbo_frame = 0;
-	}
-#endif
-
       if (xd->pmd == VNET_DPDK_PMD_AF_PACKET)
 	{
 	  f64 now = vlib_time_now (vm);
@@ -796,100 +787,15 @@ dpdk_lib_init (dpdk_main_t * dm)
 	    clib_warning ("VLAN strip cannot be supported by interface\n");
 	}
 
-#if RTE_VERSION < RTE_VERSION_NUM(16, 4, 0, 0)
-      /*
-       * Older VMXNET3 driver doesn't support jumbo / multi-buffer pkts
-       */
-      else if (xd->pmd == VNET_DPDK_PMD_VMXNET3)
-	hi->max_packet_bytes = 1518;
-#endif
-
       hi->max_l3_packet_bytes[VLIB_RX] = hi->max_l3_packet_bytes[VLIB_TX] =
 	xd->port_conf.rxmode.max_rx_pkt_len - sizeof (ethernet_header_t);
 
       rte_eth_dev_set_mtu (xd->device_index, hi->max_packet_bytes);
     }
 
-#ifdef RTE_LIBRTE_KNI
-  if (dm->conf->num_kni)
-    {
-      clib_warning ("Initializing KNI interfaces...");
-      rte_kni_init (dm->conf->num_kni);
-      for (i = 0; i < dm->conf->num_kni; i++)
-	{
-	  u8 addr[6];
-	  int j;
-
-	  /* Create vnet interface */
-	  vec_add2_aligned (dm->devices, xd, 1, CLIB_CACHE_LINE_BYTES);
-	  xd->flags |= DPDK_DEVICE_FLAG_KNI;
-
-	  xd->device_index = xd - dm->devices;
-	  ASSERT (nports + i == xd->device_index);
-	  xd->per_interface_next_index = ~0;
-	  xd->kni_port_id = i;
-	  xd->cpu_socket = -1;
-	  hash_set (dm->dpdk_device_by_kni_port_id, i, xd - dm->devices);
-	  xd->rx_q_used = 1;
-
-	  /* assign interface to input thread */
-	  dpdk_device_and_queue_t *dq;
-	  vec_add2 (dm->devices_by_cpu[dm->input_cpu_first_index], dq, 1);
-	  dq->device = xd->device_index;
-	  dq->queue_id = 0;
-
-	  vec_validate_aligned (xd->tx_vectors, tm->n_vlib_mains,
-				CLIB_CACHE_LINE_BYTES);
-	  for (j = 0; j < tm->n_vlib_mains; j++)
-	    {
-	      vec_validate_ha (xd->tx_vectors[j], xd->nb_tx_desc,
-			       sizeof (tx_ring_hdr_t), CLIB_CACHE_LINE_BYTES);
-	      vec_reset_length (xd->tx_vectors[j]);
-	    }
-
-	  vec_validate_aligned (xd->rx_vectors, xd->rx_q_used,
-				CLIB_CACHE_LINE_BYTES);
-	  for (j = 0; j < xd->rx_q_used; j++)
-	    {
-	      vec_validate_aligned (xd->rx_vectors[j], VLIB_FRAME_SIZE - 1,
-				    CLIB_CACHE_LINE_BYTES);
-	      vec_reset_length (xd->rx_vectors[j]);
-	    }
-
-	  /* FIXME Set up one TX-queue per worker thread */
-
-	  {
-	    f64 now = vlib_time_now (vm);
-	    u32 rnd;
-	    rnd = (u32) (now * 1e6);
-	    rnd = random_u32 (&rnd);
-
-	    clib_memcpy (addr + 2, &rnd, sizeof (rnd));
-	    addr[0] = 2;
-	    addr[1] = 0xfe;
-	  }
-
-	  error = ethernet_register_interface
-	    (dm->vnet_main, dpdk_device_class.index, xd->device_index,
-	     /* ethernet address */ addr,
-	     &xd->vlib_hw_if_index, dpdk_flag_change);
-
-	  if (error)
-	    return error;
-
-	  sw = vnet_get_hw_sw_interface (dm->vnet_main, xd->vlib_hw_if_index);
-	  xd->vlib_sw_if_index = sw->sw_if_index;
-	  hi = vnet_get_hw_interface (dm->vnet_main, xd->vlib_hw_if_index);
-	}
-    }
-#endif
-
   if (nb_desc > dm->conf->num_mbufs)
     clib_warning ("%d mbufs allocated but total rx/tx ring size is %d\n",
 		  dm->conf->num_mbufs, nb_desc);
-
-  /* init next vhost-user if index */
-  dm->next_vu_if_id = 0;
 
   return 0;
 }
@@ -1086,9 +992,6 @@ dpdk_config (vlib_main_t * vm, unformat_input_t * input)
 
   conf->device_config_index_by_pci_addr = hash_create (0, sizeof (uword));
 
-  // MATT-FIXME: inverted virtio-vhost logic to use virtio by default
-  conf->use_virtio_vhost = 1;
-
   while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
     {
       /* Prime the pump */
@@ -1146,18 +1049,6 @@ dpdk_config (vlib_main_t * vm, unformat_input_t * input)
 	;
       else if (unformat (input, "socket-mem %s", &socket_mem))
 	;
-      else
-	if (unformat
-	    (input, "vhost-user-coalesce-frames %d",
-	     &conf->vhost_coalesce_frames))
-	;
-      else
-	if (unformat
-	    (input, "vhost-user-coalesce-time %f",
-	     &conf->vhost_coalesce_time))
-	;
-      else if (unformat (input, "enable-vhost-user"))
-	conf->use_virtio_vhost = 0;
       else if (unformat (input, "no-pci"))
 	{
 	  no_pci = 1;
@@ -1559,7 +1450,6 @@ dpdk_update_link_state (dpdk_device_t * xd, f64 now)
 	  break;
 	}
     }
-#if RTE_VERSION >= RTE_VERSION_NUM(16, 4, 0, 0)
   if (hw_flags_chg || (xd->link.link_speed != prev_link.link_speed))
     {
       hw_flags_chg = 1;
@@ -1587,35 +1477,6 @@ dpdk_update_link_state (dpdk_device_t * xd, f64 now)
 	  break;
 	}
     }
-#else
-  if (hw_flags_chg || (xd->link.link_speed != prev_link.link_speed))
-    {
-      hw_flags_chg = 1;
-      switch (xd->link.link_speed)
-	{
-	case ETH_LINK_SPEED_10:
-	  hw_flags |= VNET_HW_INTERFACE_FLAG_SPEED_10M;
-	  break;
-	case ETH_LINK_SPEED_100:
-	  hw_flags |= VNET_HW_INTERFACE_FLAG_SPEED_100M;
-	  break;
-	case ETH_LINK_SPEED_1000:
-	  hw_flags |= VNET_HW_INTERFACE_FLAG_SPEED_1G;
-	  break;
-	case ETH_LINK_SPEED_10000:
-	  hw_flags |= VNET_HW_INTERFACE_FLAG_SPEED_10G;
-	  break;
-	case ETH_LINK_SPEED_40G:
-	  hw_flags |= VNET_HW_INTERFACE_FLAG_SPEED_40G;
-	  break;
-	case 0:
-	  break;
-	default:
-	  clib_warning ("unknown link speed %d", xd->link.link_speed);
-	  break;
-	}
-    }
-#endif
   if (hw_flags_chg)
     {
       if (LINK_STATE_ELOGS)
@@ -1650,9 +1511,6 @@ dpdk_process (vlib_main_t * vm, vlib_node_runtime_t * rt, vlib_frame_t * f)
   ethernet_main_t *em = &ethernet_main;
   dpdk_device_t *xd;
   vlib_thread_main_t *tm = vlib_get_thread_main ();
-#if DPDK_VHOST_USER
-  void *vu_state;
-#endif
   int i;
 
   error = dpdk_lib_init (dm);
@@ -1677,10 +1535,6 @@ dpdk_process (vlib_main_t * vm, vlib_node_runtime_t * rt, vlib_frame_t * f)
   if (error)
     clib_error_report (error);
 
-#if DPDK_VHOST_USER
-  dpdk_vhost_user_process_init (&vu_state);
-#endif
-
   tm->worker_thread_release = 1;
 
   f64 now = vlib_time_now (vm);
@@ -1704,7 +1558,11 @@ dpdk_process (vlib_main_t * vm, vlib_node_runtime_t * rt, vlib_frame_t * f)
 	    struct rte_eth_dev_info dev_info;
 	    rte_eth_dev_info_get (i, &dev_info);
 	    if (!dev_info.driver_name)
+#if RTE_VERSION < RTE_VERSION_NUM(16, 11, 0, 0)
 	      dev_info.driver_name = dev_info.pci_dev->driver->name;
+#else
+	      dev_info.driver_name = dev_info.pci_dev->driver->driver.name;
+#endif
 	    ASSERT (dev_info.driver_name);
 	    if (strncmp (dev_info.driver_name, "rte_bond_pmd", 12) == 0)
 	      {
@@ -1803,17 +1661,8 @@ dpdk_process (vlib_main_t * vm, vlib_node_runtime_t * rt, vlib_frame_t * f)
 	if ((now - xd->time_last_link_update) >= dm->link_state_poll_interval)
 	  dpdk_update_link_state (xd, now);
 
-#if DPDK_VHOST_USER
-	if (xd->flags & DPDK_DEVICE_FLAG_VHOST_USER)
-	  if (dpdk_vhost_user_process_if (vm, xd, vu_state) != 0)
-	    continue;
-#endif
       }
     }
-
-#if DPDK_VHOST_USER
-  dpdk_vhost_user_process_cleanup (vu_state);
-#endif
 
   return 0;
 }
@@ -1890,10 +1739,6 @@ dpdk_init (vlib_main_t * vm)
 			      DPDK_NB_RX_DESC_10GE) / 100);
   dm->efd.consec_full_frames_hi_thresh =
     DPDK_EFD_DEFAULT_CONSEC_FULL_FRAMES_HI_THRESH;
-
-  /* vhost-user coalescence frames defaults */
-  dm->conf->vhost_coalesce_frames = 32;
-  dm->conf->vhost_coalesce_time = 1e-3;
 
   /* Default vlib_buffer_t flags, DISABLES tcp/udp checksumming... */
   dm->buffer_flags_template =
