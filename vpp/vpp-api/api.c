@@ -8717,16 +8717,22 @@ int redirect_connect_uri_callback (u32 server_api_client_index, void * mp_arg)
   unix_shared_memory_queue_t * server_q, * client_q;
   vlib_main_t * vm = vlib_get_main();
   f64 timeout = vlib_time_now (vm) + 0.5;
-  int rv;
+  int rv = 0;
   
   server_q = vl_api_client_index_to_input_queue (server_api_client_index);
 
   if (!server_q)
-    return VNET_API_ERROR_INVALID_VALUE;
+    {
+      rv = VNET_API_ERROR_INVALID_VALUE;
+      goto out;
+    }
   
   client_q = vl_api_client_index_to_input_queue (mp->client_index);
   if (!client_q)
-    return VNET_API_ERROR_INVALID_VALUE_2;
+    {
+      rv = VNET_API_ERROR_INVALID_VALUE_2;
+      goto out;
+    }
 
   /* Tell the server the client's API queue address, so it can reply */
   mp->client_queue_address = (u64) client_q;
@@ -8751,12 +8757,14 @@ int redirect_connect_uri_callback (u32 server_api_client_index, void * mp_arg)
 
         /* queue stuffed, drop the msg */
       case -2:
-        return VNET_API_ERROR_QUEUE_FULL;
+        rv = VNET_API_ERROR_QUEUE_FULL;
+        goto out;
       }
     }
-
-  /* NOTREACHED */
-  return VNET_API_ERROR_UNIMPLEMENTED;
+ out:
+  /* Dispose of the message */
+  vl_msg_api_free (mp);
+  return rv;
 }
 
 
