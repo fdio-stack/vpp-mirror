@@ -15,23 +15,29 @@ AUTOMAKE_OPTIONS = foreign subdir-objects
 
 AM_CFLAGS = -Wall
 
-# nobase_include_HEADERS = 
+# nobase_include_HEADERS =
 
 # lib_LTLIBRARIES = liburiclient.la
 
 # liburiclient_la_SOURCES = uriclient.c
-# nobase_include_HEADERS += uriclient.h 
+# nobase_include_HEADERS += uriclient.h
 
 bin_PROGRAMS = uri_udp_test2
 
 #uritest_SOURCES = uritest.c
 #uritest_LDADD = -lvlibmemoryclient -lvlibapi -lsvm \
-#	-lvppinfra -lpthread -lm -lrt 
+#	-lvppinfra -lpthread -lm -lrt
 
 #uri_udp_test_SOURCES = uri_udp_test.c
 #uri_udp_test_LDADD = -lvlibmemoryclient -lvlibapi -lsvm \
-#	-lvppinfra -lpthread -lm -lrt 
+#	-lvppinfra -lpthread -lm -lrt
 
 uri_udp_test2_SOURCES = uri_udp_test2.c
 uri_udp_test2_LDADD = -lvlibmemoryclient -lvlibapi -lsvm \
-	-lvppinfra -lpthread -lm -lrt 
+	-lvppinfra -lpthread -lm -lrt
+
+lib_LTLIBRARIES = libvpp_commapi.la
+
+libvpp_commapi_la_SOURCES = vpp_commapi.c
+libvpp_commapi_la_LIBADD =  -lvlibmemoryclient -lvlibapi -lsvm -lvppinfra -lpthread -lm -lrt -ldl
+

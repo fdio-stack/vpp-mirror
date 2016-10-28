@@ -1,4 +1,5 @@
 AC_INIT(uriclient, 1.0)
+
 LT_INIT
 AM_INIT_AUTOMAKE
 
