@@ -8777,6 +8777,9 @@ vl_api_bind_uri_t_handler (vl_api_bind_uri_t * mp)
   u32 segment_name_length;
   int rv;
 
+  _Static_assert(sizeof(u64) * URI_OPTIONS_N_OPTIONS <= sizeof (mp->options),
+                 "Out of options, fix api message definition");
+
   segment_name_length = ARRAY_LEN(segment_name);
 
   memset (a, 0, sizeof (*a));
@@ -8784,14 +8787,12 @@ vl_api_bind_uri_t_handler (vl_api_bind_uri_t * mp)
   a->uri = (char *) mp->uri;
   a->api_client_index = mp->client_index;
   a->accept_cookie = mp->accept_cookie;
-  a->segment_size = mp->segment_size;
+  a->segment_size = mp->initial_segment_size;
   a->options = mp->options;
   a->segment_name = segment_name;
   a->segment_name_length = segment_name_length;
   a->send_session_create_callback = send_session_create_callback;
   a->send_session_clear_callback = send_session_clear_callback;
-
-  a->segment_size = mp->segment_size;
 
   rv = vnet_bind_uri (a);
 
@@ -8799,7 +8800,7 @@ vl_api_bind_uri_t_handler (vl_api_bind_uri_t * mp)
   ({
     rmp->segment_name_length = 0;
     /* $$$$ policy? */
-    rmp->segment_size = mp->segment_size;
+    rmp->segment_size = mp->initial_segment_size;
     if (segment_name_length)
       {
         memcpy (rmp->segment_name, segment_name, segment_name_length);

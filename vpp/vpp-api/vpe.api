@@ -5158,7 +5158,7 @@ define bind_uri {
   u32 client_index;
   u32 context;
   u32 accept_cookie;
-  u32 segment_size;
+  u32 initial_segment_size;
   u8 uri[128];
   /* or some such */
   u64 options[16];

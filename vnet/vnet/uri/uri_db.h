@@ -129,6 +129,13 @@ typedef struct _stream_server
   /** segments mapped by this server */
   u32 * segment_indices;
 
+  /** configured additional segment size, from bind request */
+  u32 add_segment_size;
+
+  /** configured fifo sizes, from bind request */
+  u32 rx_fifo_size;
+  u32 tx_fifo_size;
+
   /** Server listens for events on this svm queue */
   unix_shared_memory_queue_t *event_queue;
 

@@ -758,8 +758,11 @@ void uri_udp_test (uri_udp_test_main_t * utm)
   bmp->_vl_msg_id = ntohs (VL_API_BIND_URI);
   bmp->client_index = utm->my_client_index;
   bmp->context = ntohl(0xfeedface);
-  bmp->segment_size = 2<<30;
+  bmp->initial_segment_size = 64<<20;    /* size of initial segment */
   bmp->options[URI_OPTIONS_FLAGS] = URI_OPTIONS_FLAGS_USE_FIFO;
+  bmp->options[URI_OPTIONS_RX_FIFO_SIZE] = 16<<10;
+  bmp->options[URI_OPTIONS_TX_FIFO_SIZE] = 16<<10;
+  bmp->options[URI_OPTIONS_ADD_SEGMENT_SIZE] = 128<<20;
   memcpy (bmp->uri, utm->uri, vec_len (utm->uri));
   vl_msg_api_send_shmem (utm->vl_input_queue, (u8 *)&bmp);
 

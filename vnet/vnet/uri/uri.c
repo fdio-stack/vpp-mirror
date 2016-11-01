@@ -183,6 +183,7 @@ stream_session_create (u32 transport_session_index, u32 my_thread_index, u8 sst)
   unix_shared_memory_queue_t * vpp_event_queue;
   u64 value;
   transport_session_t *ts;
+  u32 fifo_size;
 
   ts = tp_vfts[sst].get_session(transport_session_index, my_thread_index);
 
@@ -206,13 +207,16 @@ stream_session_create (u32 transport_session_index, u32 my_thread_index, u8 sst)
   fifo_segment_index = ss->segment_indices[vec_len(ss->segment_indices) - 1];
   fifo_segment = svm_fifo_get_segment (fifo_segment_index);
 
-  /* $$$ size policy */
-  server_rx_fifo = svm_fifo_segment_alloc_fifo (fifo_segment, 8192);
+  fifo_size = ss->rx_fifo_size;
+  fifo_size = (fifo_size == 0) ? 8192 : fifo_size;
+  server_rx_fifo = svm_fifo_segment_alloc_fifo (fifo_segment, fifo_size);
 
   /* $$$ callback to map another segment */
   ASSERT(server_rx_fifo);
 
-  server_tx_fifo = svm_fifo_segment_alloc_fifo (fifo_segment, 8192);
+  fifo_size = ss->tx_fifo_size;
+  fifo_size = (fifo_size == 0) ? 8192 : fifo_size;
+  server_tx_fifo = svm_fifo_segment_alloc_fifo (fifo_segment, fifo_size);
 
   ASSERT(server_tx_fifo);
 
@@ -560,6 +564,9 @@ vnet_bind_uri (vnet_bind_uri_args_t *a)
       ss->builtin_server_rx_callback = a->builtin_server_rx_callback;
       ss->api_client_index = a->api_client_index;
       ss->flags = a->options[URI_OPTIONS_FLAGS];
+      ss->add_segment_size = a->options [URI_OPTIONS_ADD_SEGMENT_SIZE];
+      ss->rx_fifo_size = a->options [URI_OPTIONS_RX_FIFO_SIZE];
+      ss->tx_fifo_size = a->options [URI_OPTIONS_TX_FIFO_SIZE];
 
       vec_add1(ss->segment_indices, ca->new_segment_index);
 

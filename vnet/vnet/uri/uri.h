@@ -87,6 +87,9 @@ typedef struct
 typedef enum
 {
   URI_OPTIONS_FLAGS,
+  URI_OPTIONS_ADD_SEGMENT_SIZE,
+  URI_OPTIONS_RX_FIFO_SIZE,
+  URI_OPTIONS_TX_FIFO_SIZE,
   URI_OPTIONS_N_OPTIONS
 } uri_options_index_t;
 
