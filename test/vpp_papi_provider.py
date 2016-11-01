@@ -1,6 +1,18 @@
-import vpp_papi
+import os
 from logging import error
 from hook import Hook
+
+do_import = True
+try:
+    no_vpp_papi = os.getenv("NO_VPP_PAPI")
+    if no_vpp_papi == "1":
+        do_import = False
+except:
+    pass
+
+if do_import:
+    import vpp_papi
+
 
 # from vnet/vnet/mpls/mpls_types.h
 MPLS_IETF_MAX_LABEL = 0xfffff
@@ -16,7 +28,7 @@ class VppPapiProvider(object):
     """
 
     def __init__(self, name, shm_prefix):
-        self.hook = Hook()
+        self.hook = Hook("vpp-papi-provider")
         self.name = name
         self.shm_prefix = shm_prefix
 
@@ -130,7 +142,6 @@ class VppPapiProvider(object):
                          default_router, max_interval, min_interval,
                          lifetime, initial_count, initial_interval, async))
 
-
     def vxlan_add_del_tunnel(
             self,
             src_addr,
@@ -177,7 +188,7 @@ class VppPapiProvider(object):
         :param rx_sw_if_index: Software interface index of Rx interface.
         :param tx_sw_if_index: Software interface index of Tx interface.
         :param enable: Create cross-connect if equal to 1, delete cross-connect
-        if equal to 0.
+                       if equal to 0.
         :type rx_sw_if_index: str or int
         :type rx_sw_if_index: str or int
         :type enable: int
@@ -258,6 +269,8 @@ class VppPapiProvider(object):
             resolve_if_needed=0,
             is_add=1,
             is_drop=0,
+            is_unreach=0,
+            is_prohibit=0,
             is_ipv6=0,
             is_local=0,
             is_classify=0,
@@ -303,6 +316,8 @@ class VppPapiProvider(object):
              resolve_if_needed,
              is_add,
              is_drop,
+             is_unreach,
+             is_prohibit,
              is_ipv6,
              is_local,
              is_classify,

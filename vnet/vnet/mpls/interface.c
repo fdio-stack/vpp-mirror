@@ -277,7 +277,7 @@ mpls_sw_interface_enable_disable (mpls_main_t * mm,
                                   u8 is_enable)
 {
   vlib_main_t * vm = vlib_get_main();
-  ip_config_main_t * cm = &mm->feature_config_mains[VNET_IP_RX_UNICAST_FEAT];
+  vnet_feature_config_main_t * cm = &mm->feature_config_mains[VNET_IP_RX_UNICAST_FEAT];
   vnet_config_main_t * vcm = &cm->config_main;
   u32 lookup_feature_index;
   fib_node_index_t lfib_index;
@@ -941,7 +941,7 @@ int vnet_mpls_ethernet_add_del_policy_tunnel (u8 *dst,
           dpo_set(&dpo,
                   DPO_CLASSIFY,
                   DPO_PROTO_IP4,
-                  classify_dpo_create(FIB_PROTOCOL_IP4,
+                  classify_dpo_create(DPO_PROTO_IP4,
                                       classify_table_index));
 
           tp->fei = fib_table_entry_special_dpo_add(tp->inner_fib_index,
