@@ -168,6 +168,39 @@ stream_session_lookup6 (ip6_address_t * lcl, ip6_address_t * rmt, u16 lcl_port,
   return kv6.value;
 }
 
+int vnet_uri_add_segment (stream_server_main_t *ssm, stream_server_t * ss)
+{
+  u8 * segment_name;
+  svm_fifo_segment_create_args_t _ca, *ca = &_ca;
+  int rv;
+
+  memset (ca, 0, sizeof (*ca));
+  
+  segment_name = format (0, "%d-%d%c", getpid(), 
+                         ssm->unique_segment_name_counter++, 0);
+  
+  ca->segment_name = (char *)segment_name;
+  ca->segment_size = ss->add_segment_size ? ss->add_segment_size : 128<<10;
+
+  rv = svm_fifo_segment_create (ca);
+  if (rv)
+    {
+      clib_warning("sm_fifo_segment_create ('%s', %d) failed",
+                   ca->segment_name, ca->segment_size);
+      vec_free (segment_name);
+      return VNET_API_ERROR_URI_FIFO_CREATE_FAILED;
+    }
+
+  ASSERT(ss->add_segment_callback);
+
+  vec_add1(ss->segment_indices, ca->new_segment_index);
+
+  /* Send an API message to the external server, to map the new segment */
+  if (ss->add_segment_callback (ss, ca->segment_name, ca->segment_size))
+    return VNET_API_ERROR_URI_FIFO_CREATE_FAILED;
+  return 0;
+}
+
 /** Create a session, ping the server by callback */
 int
 stream_session_create (u32 transport_session_index, u32 my_thread_index, u8 sst)
@@ -175,7 +208,7 @@ stream_session_create (u32 transport_session_index, u32 my_thread_index, u8 sst)
   stream_server_main_t * ssm = &stream_server_main;
   stream_server_t * ss;
   u16 i0;
-  svm_fifo_t * server_rx_fifo, *server_tx_fifo;
+  svm_fifo_t * server_rx_fifo = 0, *server_tx_fifo = 0;
   svm_fifo_segment_private_t * fifo_segment;
   stream_session_t * s;
   u32 pool_index;
@@ -184,6 +217,8 @@ stream_session_create (u32 transport_session_index, u32 my_thread_index, u8 sst)
   u64 value;
   transport_session_t *ts;
   u32 fifo_size;
+  int added_a_segment = 0;
+  int i, rv;
 
   ts = tp_vfts[sst].get_session(transport_session_index, my_thread_index);
 
@@ -201,24 +236,65 @@ stream_session_create (u32 transport_session_index, u32 my_thread_index, u8 sst)
     return URI_INPUT_ERROR_API_QUEUE_FULL;
 
   /* Create the session */
-
-  /* $$$ better allocation policy? */
   ASSERT(vec_len(ss->segment_indices));
-  fifo_segment_index = ss->segment_indices[vec_len(ss->segment_indices) - 1];
-  fifo_segment = svm_fifo_get_segment (fifo_segment_index);
 
-  fifo_size = ss->rx_fifo_size;
-  fifo_size = (fifo_size == 0) ? 8192 : fifo_size;
-  server_rx_fifo = svm_fifo_segment_alloc_fifo (fifo_segment, fifo_size);
+ again:
+  for (i = 0; i < vec_len (ss->segment_indices); i++)
+    {
+      fifo_segment_index = ss->segment_indices[i];
+      fifo_segment = svm_fifo_get_segment (fifo_segment_index);
 
-  /* $$$ callback to map another segment */
-  ASSERT(server_rx_fifo);
+      fifo_size = ss->rx_fifo_size;
+      fifo_size = (fifo_size == 0) ? 8192 : fifo_size;
+      server_rx_fifo = svm_fifo_segment_alloc_fifo (fifo_segment, fifo_size);
 
-  fifo_size = ss->tx_fifo_size;
-  fifo_size = (fifo_size == 0) ? 8192 : fifo_size;
-  server_tx_fifo = svm_fifo_segment_alloc_fifo (fifo_segment, fifo_size);
 
-  ASSERT(server_tx_fifo);
+      fifo_size = ss->tx_fifo_size;
+      fifo_size = (fifo_size == 0) ? 8192 : fifo_size;
+      server_tx_fifo = svm_fifo_segment_alloc_fifo (fifo_segment, fifo_size);
+
+      if (server_rx_fifo == 0)
+        {
+          /* This would be very odd, but handle it... */
+          if (server_tx_fifo != 0)
+            {
+              svm_fifo_segment_free_fifo (fifo_segment, server_tx_fifo); 
+              server_tx_fifo = 0;
+            }
+          continue;
+        }
+      if (server_tx_fifo == 0)
+        {
+          if (server_rx_fifo != 0)
+            {
+              svm_fifo_segment_free_fifo (fifo_segment, server_rx_fifo); 
+              server_rx_fifo = 0;
+            }
+          continue;
+        }
+      break;
+    }
+
+  /* See if we're supposed to create another segment */
+  if (server_rx_fifo == 0)
+    {
+      if (ss->flags & URI_OPTIONS_FLAGS_ADD_SEGMENT)
+        {
+          if (added_a_segment)
+            {
+              clib_warning ("added a segment, still cant allocate a fifo");
+              return URI_INPUT_ERROR_NEW_SEG_NO_SPACE;
+            }
+          
+          rv = vnet_uri_add_segment (ssm, ss);
+          if (rv)
+            return rv;
+          added_a_segment = 1;
+          goto again;
+        }
+      else
+        return URI_INPUT_ERROR_NO_SPACE;
+    }
 
   pool_get(ssm->sessions[my_thread_index], s);
   memset (s, 0, sizeof(*s));
@@ -512,7 +588,8 @@ vnet_bind_uri (vnet_bind_uri_args_t *a)
    */
 
   /* Unique segment name, per vpp instance */
-  segment_name = format (0, "%d-%s%c", getpid(), a->uri, 0);
+  segment_name = format (0, "%d-%d%c", getpid(), 
+                         ssm->unique_segment_name_counter++, 0);
   ASSERT (vec_len(segment_name) <= 128);
   a->segment_name_length = vec_len(segment_name);
   memcpy (a->segment_name, segment_name, a->segment_name_length);
@@ -527,6 +604,7 @@ vnet_bind_uri (vnet_bind_uri_args_t *a)
         {
           clib_warning("sm_fifo_segment_create ('%s', %d) failed",
                        a->segment_name, a->segment_size);
+          vec_free (segment_name);
           return VNET_API_ERROR_URI_FIFO_CREATE_FAILED;
         }
 
@@ -562,6 +640,7 @@ vnet_bind_uri (vnet_bind_uri_args_t *a)
       ss->session_delete_callback = stream_session_delete;
       ss->session_clear_callback = a->send_session_clear_callback;
       ss->builtin_server_rx_callback = a->builtin_server_rx_callback;
+      ss->add_segment_callback = a->add_segment_callback;
       ss->api_client_index = a->api_client_index;
       ss->flags = a->options[URI_OPTIONS_FLAGS];
       ss->add_segment_size = a->options [URI_OPTIONS_ADD_SEGMENT_SIZE];

@@ -387,7 +387,7 @@ vl_api_bind_uri_reply_t_handler (vl_api_bind_uri_reply_t * mp)
   rv = svm_fifo_segment_attach (a);
   if (rv)
     {
-      clib_warning ("sm_fifo_segment_create ('%s') failed",
+      clib_warning ("svm_fifo_segment_attach ('%s') failed",
                     mp->segment_name);
       return;
     }
@@ -397,6 +397,26 @@ vl_api_bind_uri_reply_t_handler (vl_api_bind_uri_reply_t * mp)
 
   utm->state = STATE_READY;
 }
+
+static void
+vl_api_map_another_segment_t_handler (vl_api_map_another_segment_t *mp)
+{
+  svm_fifo_segment_create_args_t _a, *a = &_a;
+  int rv;
+
+  a->segment_name = (char *) mp->segment_name;
+  a->segment_size = mp->segment_size;
+  /* Attach to the segment vpp created */
+  rv = svm_fifo_segment_attach (a);
+  if (rv)
+    {
+      clib_warning ("svm_fifo_segment_attach ('%s') failed",
+                    mp->segment_name);
+      return;
+    }
+  clib_warning ("Mapped new segment '%s' size %d", mp->segment_name,
+                mp->segment_size);
+}  
 
 static void
 vl_api_connect_uri_t_handler (vl_api_connect_uri_t * mp)
@@ -634,7 +654,8 @@ _(CONNECT_URI, connect_uri)                     \
 _(CONNECT_URI_REPLY, connect_uri_reply)         \
 _(UNBIND_URI_REPLY, unbind_uri_reply)           \
 _(ACCEPT_SESSION, accept_session)		\
-_(DISCONNECT_SESSION, disconnect_session)
+_(DISCONNECT_SESSION, disconnect_session)	\
+_(MAP_ANOTHER_SEGMENT, map_another_segment)
 
 void
 uri_api_hookup (uri_udp_test_main_t * utm)
@@ -758,8 +779,9 @@ void uri_udp_test (uri_udp_test_main_t * utm)
   bmp->_vl_msg_id = ntohs (VL_API_BIND_URI);
   bmp->client_index = utm->my_client_index;
   bmp->context = ntohl(0xfeedface);
-  bmp->initial_segment_size = 64<<20;    /* size of initial segment */
-  bmp->options[URI_OPTIONS_FLAGS] = URI_OPTIONS_FLAGS_USE_FIFO;
+  bmp->initial_segment_size = 256<<20;    /* size of initial segment */
+  bmp->options[URI_OPTIONS_FLAGS] = 
+    URI_OPTIONS_FLAGS_USE_FIFO | URI_OPTIONS_FLAGS_ADD_SEGMENT;
   bmp->options[URI_OPTIONS_RX_FIFO_SIZE] = 16<<10;
   bmp->options[URI_OPTIONS_TX_FIFO_SIZE] = 16<<10;
   bmp->options[URI_OPTIONS_ADD_SEGMENT_SIZE] = 128<<20;

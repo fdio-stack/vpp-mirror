@@ -32,7 +32,7 @@ typedef struct
 
 typedef struct 
 {
-  /* segments */
+  /** pool of segments */
   svm_fifo_segment_private_t * segments;
   /* Where to put the next one */
   u64 next_baseva;

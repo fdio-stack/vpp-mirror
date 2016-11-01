@@ -5301,6 +5301,7 @@ define sw_interface_set_dpdk_hqos_subport_reply {
 define map_another_segment {
     u32 client_index;
     u32 context;
+    u32 segment_size;
     u8 segment_name[128];
 };
 

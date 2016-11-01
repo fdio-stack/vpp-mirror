@@ -160,6 +160,9 @@ typedef struct _stream_server
   void (*builtin_server_rx_callback)(struct _stream_server_main *ssm,
                                      struct _stream_server *server,
                                      stream_session_t *session);
+  int (*add_segment_callback)(struct _stream_server *server,
+                              char * segment_name, u32 segment_size);
+
 } stream_server_t;
 
 typedef struct _stream_server_main

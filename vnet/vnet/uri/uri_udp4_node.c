@@ -47,32 +47,16 @@ static u8 * format_udp4_uri_input_trace (u8 * s, va_list * args)
   return s;
 }
 
-#define foreach_udp4_uri_input_error                                    \
-_(NO_SESSION, "No session drops")                                       \
-_(NO_LISTENER, "No listener for dst port drops")                        \
-_(ENQUEUED, "Packets pushed into rx fifo")                              \
-_(NOT_READY, "Session not ready packets")                               \
-_(FIFO_FULL, "Packets dropped for lack of rx fifo space")               \
-_(EVENT_FIFO_FULL, "Events not sent for lack of event fifo space")      \
-_(API_QUEUE_FULL, "Sessions not created for lack of API queue space")
-
-typedef enum {
-#define _(sym,str) UDP4_URI_INPUT_ERROR_##sym,
-  foreach_udp4_uri_input_error
-#undef _
-  UDP4_URI_INPUT_N_ERROR,
-} udp4_uri_input_error_t;
-
-static char * udp4_uri_input_error_strings[] = {
-#define _(sym,string) string,
-  foreach_udp4_uri_input_error
-#undef _
-};
-
 typedef enum {
   UDP4_URI_INPUT_NEXT_DROP,
   UDP4_URI_INPUT_N_NEXT,
 } udp4_uri_input_next_t;
+
+static char * udp4_uri_input_error_strings[] = {
+#define _(sym,string) string,
+  foreach_uri_input_error
+#undef _
+};
 
 static uword
 udp4_uri_input_node_fn (vlib_main_t * vm,
@@ -184,7 +168,7 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
           u32 bi0;
 	  vlib_buffer_t * b0;
           u32 next0 = UDP4_URI_INPUT_NEXT_DROP;
-          u32 error0 = UDP4_URI_INPUT_ERROR_ENQUEUED;
+          u32 error0 = URI_INPUT_ERROR_ENQUEUED;
           udp_header_t * udp0;
           ip4_header_t * ip0;
           stream_session_t * s0;
@@ -227,7 +211,7 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
               
               if (PREDICT_FALSE(s0->session_state != SESSION_STATE_READY))
                 {
-                  error0 = UDP4_URI_INPUT_ERROR_NOT_READY;
+                  error0 = URI_INPUT_ERROR_NOT_READY;
                   goto trace0;
                 }
 
@@ -235,7 +219,7 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
 
               if (PREDICT_FALSE(udp_len0 > svm_fifo_max_enqueue (f0)))
                 {
-                  error0 = UDP4_URI_INPUT_ERROR_FIFO_FULL;
+                  error0 = URI_INPUT_ERROR_FIFO_FULL;
                   goto trace0;
                 }
 
@@ -243,7 +227,7 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
                                         udp_len0 - sizeof(*udp0), 
                                         (u8 *)(udp0+1));
 
-              b0->error = node->errors[UDP4_URI_INPUT_ERROR_ENQUEUED];
+              b0->error = node->errors[URI_INPUT_ERROR_ENQUEUED];
 
               /* We need to send an RX event on this fifo */
               if(s0->enqueue_epoch != my_enqueue_epoch)
@@ -260,7 +244,7 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
               udp_session_t *us;
               int rv;
 
-              error0 = UDP4_URI_INPUT_ERROR_NOT_READY;
+              error0 = URI_INPUT_ERROR_NOT_READY;
 
               /*
                * create udp transport session
@@ -355,7 +339,7 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
       else
         {
           vlib_node_increment_counter (vm, udp4_uri_input_node.index,
-                                       UDP4_URI_INPUT_ERROR_FIFO_FULL, 1);
+                                       URI_INPUT_ERROR_FIFO_FULL, 1);
         }
       if (1)
         {

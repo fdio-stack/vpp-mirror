@@ -8682,6 +8682,29 @@ int send_session_create_callback (stream_server_t * ss, stream_session_t * s,
   return 0;
 }
 
+int send_add_segment_callback (stream_server_t * ss, u8 * segment_name,
+                               u32 segment_size)
+{
+  vl_api_map_another_segment_t * mp;
+  unix_shared_memory_queue_t * q;
+  
+  q = vl_api_client_index_to_input_queue (ss->api_client_index);
+
+  if (!q)
+    return -1;
+  
+  mp = vl_msg_api_alloc (sizeof (*mp));
+  memset(mp, 0, sizeof (*mp));
+  mp->_vl_msg_id = clib_host_to_net_u16 (VL_API_MAP_ANOTHER_SEGMENT);
+  mp->segment_size = segment_size;
+  strncpy ((char *)mp->segment_name, (char *)segment_name,
+           sizeof (mp->segment_name)-1);
+  
+  vl_msg_api_send_shmem (q, (u8 *) & mp);
+
+  return 0;
+}
+
 int send_session_clear_callback (stream_server_main_t * ssm, 
                                  stream_server_t * ss, 
                                  stream_session_t * s)
@@ -8793,6 +8816,7 @@ vl_api_bind_uri_t_handler (vl_api_bind_uri_t * mp)
   a->segment_name_length = segment_name_length;
   a->send_session_create_callback = send_session_create_callback;
   a->send_session_clear_callback = send_session_clear_callback;
+  a->add_segment_callback = send_add_segment_callback;
 
   rv = vnet_bind_uri (a);
 

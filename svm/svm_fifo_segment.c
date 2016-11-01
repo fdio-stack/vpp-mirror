@@ -29,8 +29,7 @@ svm_fifo_segment_create (svm_fifo_segment_create_args_t * a)
   void * oldheap;
 
   /* Allocate a fresh segment */
-  vec_add2 (sm->segments, s, 1);
-
+  pool_get (sm->segments, s);
   memset (s, 0, sizeof (*s));
 
   s->ssvm.ssvm_size = a->segment_size;
@@ -82,7 +81,7 @@ svm_fifo_segment_attach (svm_fifo_segment_create_args_t * a)
   svm_fifo_segment_header_t * fsh;
 
   /* Allocate a fresh segment */
-  vec_add2 (sm->segments, s, 1);
+  pool_get (sm->segments, s);
 
   memset (s, 0, sizeof (*s));
 
@@ -110,7 +109,9 @@ svm_fifo_segment_attach (svm_fifo_segment_create_args_t * a)
 
 void svm_fifo_segment_delete (svm_fifo_segment_private_t * s)
 {
+  svm_fifo_segment_main_t * sm = &svm_fifo_segment_main;
   ssvm_delete (&s->ssvm);
+  pool_put (sm->segments, s);
 }
 
 svm_fifo_t *

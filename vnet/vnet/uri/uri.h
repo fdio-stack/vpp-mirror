@@ -27,7 +27,9 @@ _(ENQUEUED, "Packets pushed into rx fifo")                              \
 _(NOT_READY, "Session not ready packets")                               \
 _(FIFO_FULL, "Packets dropped for lack of rx fifo space")               \
 _(EVENT_FIFO_FULL, "Events not sent for lack of event fifo space")      \
-_(API_QUEUE_FULL, "Sessions not created for lack of API queue space")
+_(API_QUEUE_FULL, "Sessions not created for lack of API queue space")   \
+_(NEW_SEG_NO_SPACE, "Created segment, couldn't allocate a fifo pair")	\
+_(NO_SPACE, "Couldn't allocate a fifo pair")
 
 typedef enum {
 #define _(sym,str) URI_INPUT_ERROR_##sym,
@@ -71,6 +73,7 @@ typedef struct
   void * send_session_create_callback;
   void * send_session_delete_callback;
   void * send_session_clear_callback;
+  void * add_segment_callback;
   void * builtin_server_rx_callback;
 
   /** segment name (result) */
@@ -93,7 +96,11 @@ typedef enum
   URI_OPTIONS_N_OPTIONS
 } uri_options_index_t;
 
+/** Server can handle delegated connect requests from local clients */
 #define URI_OPTIONS_FLAGS_USE_FIFO	(1<<0)
+
+/** Server wants vpp to add segments when out of memory for fifos */
+#define URI_OPTIONS_FLAGS_ADD_SEGMENT   (1<<1)
 
 #define VNET_CONNECT_URI_REDIRECTED	123
 
