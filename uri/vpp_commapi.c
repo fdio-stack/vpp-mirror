@@ -1,8 +1,4 @@
 /*
- *
- */
-
-/*
  * VPP API typedefs etc
  */
 
@@ -257,7 +253,8 @@ do { \
  *
  */
 
-#define VPP_COMMAPI_FD_OFFSET 64000
+#define VPP_COMMAPI_FD_SOCKET_OFFSET 1024
+#define VPP_COMMAPI_FD_SESSIONS 128
 
 
 /* This limit is to avoid broadcast sendto() needing to stat too many
@@ -298,11 +295,54 @@ typedef struct
   svm_fifo_t *server_tx_fifo;
 } session_t;
 
+typedef enum
+{
+  STATE_START,
+  STATE_READY,
+  STATE_DISCONNECTING,
+} connection_state_t;
+
 typedef struct socket_info
 {
-  unsigned int refcount;
+  /* For deadman timers */
+  clib_time_t clib_time;
 
-  int next_free;
+  /* The URI we're playing with */
+  u8 *uri;
+
+  /* Hash table for disconnect processing */
+  uword *session_index_by_vpp_handles;
+
+  /* fifo segment */
+  svm_fifo_segment_private_t *seg;
+
+  /* intermediate rx buffer */
+  u8 *rx_buf;
+
+  /* URI for connect */
+  u8 *connect_uri;
+  u32 connect_uri_len;
+  //alagalah - need sockadd_in ?
+
+  /* $$$$ hack: cut-through session index */
+  volatile u32 cut_through_session_index;
+
+  /* unique segment name counter */
+  u32 unique_segment_index;
+
+  pid_t my_pid;
+
+  /* pthread handle */
+  pthread_t cut_through_thread_handle;
+
+
+  /* State of the connection, shared between msg RX thread and main thread */
+  volatile connection_state_t state;
+
+
+  u32 configured_segment_size;
+
+  unsigned int refcount;
 
   //FIFO
   session_t *sessions;
@@ -414,12 +454,6 @@ swrap_constructor (void)
 #endif
 
 
-typedef enum
-{
-  STATE_START,
-  STATE_READY,
-  STATE_DISCONNECTING,
-} connection_state_t;
 
 
 typedef struct
@@ -438,56 +472,18 @@ typedef struct
   // hack to be removed if my_client_index better
   int vpp_connected;
 
-  /* The URI we're playing with */
-  u8 *uri;
-
-  /* Session pool */
-  socket_info_t *sockets;
-
-  /* Hash table for disconnect processing */
-  uword *session_index_by_vpp_handles;
-
-  /* fifo segment */
-  svm_fifo_segment_private_t *seg;
-
-  /* intermediate rx buffer */
-  u8 *rx_buf;
-
-  /* URI for connect */
-  u8 *connect_uri;
-  u32 connect_uri_len;
-  //alagalah - need sockadd_in ?
-
-  int i_am_master;
-
-
-  /* $$$$ hack: cut-through session index */
-  volatile u32 cut_through_session_index;
-
-  /* unique segment name counter */
-  u32 unique_segment_index;
-
-  pid_t my_pid;
-
-  /* pthread handle */
-  pthread_t cut_through_thread_handle;
-
-  /* For deadman timers */
-  clib_time_t clib_time;
-
-  /* State of the connection, shared between msg RX thread and main thread */
-  volatile connection_state_t state;
-
-  volatile int time_to_stop;
-  volatile int time_to_print_stats;
-
-  u32 configured_segment_size;
-
-  /* VNET_API_ERROR_FOO -> "Foo" hash table */
+    /* VNET_API_ERROR_FOO -> "Foo" hash table */
   uword *error_string_by_error_number;
 
   /* convenience */
   svm_fifo_segment_main_t *segment_main;
+
+  volatile int time_to_stop;
+  volatile int time_to_print_stats;
+
+  /* sockets */
+  socket_info_t *sockets;
+
 
 } vpp_commapi_main_t;
 
@@ -542,19 +538,19 @@ format_api_error (u8 * s, va_list * args)
 }
 
 int
-wait_for_state_change (vpp_commapi_main_t * vcm, connection_state_t state)
+wait_for_state_change (socket_info_t * si, connection_state_t state)
 {
 #if CLIB_DEBUG > 0
-#define TIMEOUT 600.0
+#define TIMEOUT 60000000.0
 #else
-#define TIMEOUT 600.0
+#define TIMEOUT 60000000.0
 #endif
 
-  f64 timeout = clib_time_now (&vcm->clib_time) + TIMEOUT;
+  f64 timeout = clib_time_now (&si->clib_time) + TIMEOUT;
 
-  while (clib_time_now (&vcm->clib_time) < timeout)
+  while (clib_time_now (&si->clib_time) < timeout)
     {
-      if (vcm->state == state)
+      if (si->state == state)
 	return 0;
     }
   return -1;
@@ -574,11 +570,11 @@ cut_through_thread_fn (void *arg)
   int rv;
   u32 buffer_offset;
 
-  while (vcm->cut_through_session_index == ~0)
+  while (vcm->sockets[0].cut_through_session_index == ~0)
     ;
 
   // alagalah HACK for build but sockets[fd] should be the trick here
-  s = pool_elt_at_index (vcm->sockets[0].sessions, vcm->cut_through_session_index);
+  s = pool_elt_at_index (vcm->sockets[0].sessions, vcm->sockets[0].cut_through_session_index);
 
   rx_fifo = s->server_rx_fifo;
   tx_fifo = s->server_tx_fifo;
@@ -740,6 +736,7 @@ static void
 vl_api_bind_uri_reply_t_handler (vl_api_bind_uri_reply_t * mp)
 {
   vpp_commapi_main_t *vcm = &vpp_commapi_main;
+  socket_info_t *si = vcm->sockets; //alagalah
   svm_fifo_segment_create_args_t _a, *a = &_a;
   int rv;
 
@@ -752,7 +749,14 @@ vl_api_bind_uri_reply_t_handler (vl_api_bind_uri_reply_t * mp)
   a->segment_name = (char *) mp->segment_name;
   a->segment_size = mp->segment_size;
 
-  ASSERT (mp->server_event_queue_address);
+  if (mp->server_event_queue_address)
+    {
+      vcm->our_event_queue = (unix_shared_memory_queue_t *) mp->server_event_queue_address;
+    }
+  else
+    {
+      clib_warning ("mp->server_event_queue_address was zero... dilligaf");
+    }
 
   /* Attach to the segment vpp created */
   rv = svm_fifo_segment_attach (a);
@@ -762,10 +766,8 @@ vl_api_bind_uri_reply_t_handler (vl_api_bind_uri_reply_t * mp)
       return;
     }
 
-  vcm->our_event_queue = (unix_shared_memory_queue_t *)
-    mp->server_event_queue_address;
 
-  vcm->state = STATE_READY;
+  si->state = STATE_READY;
 }
 
 static void
@@ -773,6 +775,7 @@ vl_api_connect_uri_t_handler (vl_api_connect_uri_t * mp)
 {
   u32 segment_index;
   vpp_commapi_main_t *vcm = &vpp_commapi_main;
+  socket_info_t *si = vcm->sockets; //alagalah - hack
   svm_fifo_segment_main_t *sm = &svm_fifo_segment_main;
   svm_fifo_segment_create_args_t _a, *a = &_a;
   svm_fifo_segment_private_t *seg;
@@ -782,9 +785,9 @@ vl_api_connect_uri_t_handler (vl_api_connect_uri_t * mp)
   int rv = 0;
 
   /* Create the segment */
-  a->segment_name = (char *) format (0, "%d:segment%d%c", vcm->my_pid,
-				     vcm->unique_segment_index++, 0);
-  a->segment_size = vcm->configured_segment_size;
+  a->segment_name = (char *) format (0, "%d:segment%d%c", si->my_pid,
+				     si->unique_segment_index++, 0);
+  a->segment_size = si->configured_segment_size;
 
   rv = svm_fifo_segment_create (a);
   if (rv)
@@ -794,34 +797,34 @@ vl_api_connect_uri_t_handler (vl_api_connect_uri_t * mp)
       goto send_reply;
     }
 
-  vec_add2 (vcm->seg, seg, 1);
+  vec_add2 (si->seg, seg, 1);
 
   segment_index = vec_len (sm->segments) - 1;
 
-  memcpy (seg, sm->segments + segment_index, sizeof (vcm->seg[0]));
+  memcpy (seg, sm->segments + segment_index, sizeof (si->seg[0]));
 
   //alagalah This is a hack.. should be sockets[fd]->sessions
-  pool_get (vcm->sockets[0].sessions, session);
+  pool_get (si->sessions, session);
 
   /*
    * By construction the master's idea of the rx fifo ends up in
    * fsh->fifos[0], and the master's idea of the tx fifo ends up in
    * fsh->fifos[1].
    */
-  session->server_rx_fifo = svm_fifo_segment_alloc_fifo (vcm->seg,
+  session->server_rx_fifo = svm_fifo_segment_alloc_fifo (si->seg,
 							 128 * 1024);
   ASSERT (session->server_rx_fifo);
 
-  session->server_tx_fifo = svm_fifo_segment_alloc_fifo (vcm->seg,
+  session->server_tx_fifo = svm_fifo_segment_alloc_fifo (si->seg,
 							 128 * 1024);
   ASSERT (session->server_tx_fifo);
 
   // alagalah sockets[0] is hack... should be sockets[fd]
-  session->server_rx_fifo->server_session_index = session - vcm->sockets[0].sessions;
-  session->server_tx_fifo->server_session_index = session - vcm->sockets[0].sessions;
-  vcm->cut_through_session_index = session - vcm->sockets[0].sessions;
+  session->server_rx_fifo->server_session_index = session - si->sessions;
+  session->server_tx_fifo->server_session_index = session - si->sessions;
+  si->cut_through_session_index = session - si->sessions;
 
-  rv = pthread_create (&vcm->cut_through_thread_handle,
+  rv = pthread_create (&si->cut_through_thread_handle,
 		       NULL /*attr */ , cut_through_thread_fn, 0);
   if (rv)
     {
@@ -849,17 +852,19 @@ static void
 vl_api_unbind_uri_reply_t_handler (vl_api_unbind_uri_reply_t * mp)
 {
   vpp_commapi_main_t *vcm = &vpp_commapi_main;
+  socket_info_t *si = vcm->sockets; //alagalah
 
   if (mp->retval != 0)
     clib_warning ("returned %d", ntohl (mp->retval));
 
-  vcm->state = STATE_START;
+  si->state = STATE_START;
 }
 
 static void
 vl_api_accept_session_t_handler (vl_api_accept_session_t * mp)
 {
   vpp_commapi_main_t *vcm = &vpp_commapi_main;
+  socket_info_t *si = vcm->sockets; //alagalah
   vl_api_accept_session_reply_t *rmp;
   svm_fifo_t *rx_fifo, *tx_fifo;
   session_t *session;
@@ -867,35 +872,35 @@ vl_api_accept_session_t_handler (vl_api_accept_session_t * mp)
   u64 key;
 
   if (start_time == 0.0)
-    start_time = clib_time_now (&vcm->clib_time);
+    start_time = clib_time_now (&si->clib_time);
 
   vcm->vpp_event_queue = (unix_shared_memory_queue_t *)
     mp->vpp_event_queue_address;
 
   //alagalah sockets[0] hack
-  pool_get (vcm->sockets[0].sessions, session);
+  pool_get (si->sessions, session);
 
   rx_fifo = (svm_fifo_t *) mp->server_rx_fifo;
-  rx_fifo->client_session_index = session - vcm->sockets[0].sessions;
+  rx_fifo->client_session_index = session - si->sessions;
   tx_fifo = (svm_fifo_t *) mp->server_tx_fifo;
-  tx_fifo->client_session_index = session - vcm->sockets[0].sessions;
+  tx_fifo->client_session_index = session - si->sessions;
 
   session->server_rx_fifo = rx_fifo;
   session->server_tx_fifo = tx_fifo;
 
   key = (((u64) mp->session_thread_index) << 32) | (u64) mp->session_index;
 
-  hash_set (vcm->session_index_by_vpp_handles, key, session - vcm->sockets[0].sessions);
+  hash_set (si->session_index_by_vpp_handles, key, session - si->sessions);
 
-  vcm->state = STATE_READY;
+  si->state = STATE_READY;
 
-  if (pool_elts (vcm->sockets[0].sessions) && (pool_elts (vcm->sockets[0].sessions) % 20000) == 0)
-    {
-      f64 now = clib_time_now (&vcm->clib_time);
-      fformat (stdout, "%d active sessions in %.2f seconds, %.2f/sec...\n",
-	       pool_elts (vcm->sockets[0].sessions), now - start_time,
-	       (f64) pool_elts (vcm->sockets[0].sessions) / (now - start_time));
-    }
+  /* if (pool_elts (si->sessions) && (pool_elts (si->sessions) % 20000) == 0) */
+  /*   { */
+  /*     f64 now = clib_time_now (&vcm->clib_time); */
+  /*     fformat (stdout, "%d active sessions in %.2f seconds, %.2f/sec...\n", */
+  /* 	       pool_elts (vcm->sockets[0].sessions), now - start_time, */
+  /* 	       (f64) pool_elts (vcm->sockets[0].sessions) / (now - start_time)); */
+  /*   } */
 
   rmp = vl_msg_api_alloc (sizeof (*rmp));
   memset (rmp, 0, sizeof (*rmp));
@@ -910,6 +915,7 @@ static void
 vl_api_disconnect_session_t_handler (vl_api_disconnect_session_t * mp)
 {
   vpp_commapi_main_t *vcm = &vpp_commapi_main;
+  socket_info_t *si = vcm->sockets; //alagalah
   session_t *session;
   vl_api_disconnect_session_reply_t *rmp;
   uword *p;
@@ -918,13 +924,13 @@ vl_api_disconnect_session_t_handler (vl_api_disconnect_session_t * mp)
 
   key = (((u64) mp->session_thread_index) << 32) | (u64) mp->session_index;
 
-  p = hash_get (vcm->session_index_by_vpp_handles, key);
+  p = hash_get (si->session_index_by_vpp_handles, key);
 
   if (p)
     {
-      session = pool_elt_at_index (vcm->sockets[0].sessions, p[0]);
-      hash_unset (vcm->session_index_by_vpp_handles, key);
-      pool_put (vcm->sockets[0].sessions, session);
+      session = pool_elt_at_index (si->sessions, p[0]);
+      hash_unset (si->session_index_by_vpp_handles, key);
+      pool_put (si->sessions, session);
     }
   else
     {
@@ -946,6 +952,7 @@ vl_api_connect_uri_reply_t_handler (vl_api_connect_uri_reply_t * mp)
 {
   svm_fifo_segment_main_t *sm = &svm_fifo_segment_main;
   vpp_commapi_main_t *vcm = &vpp_commapi_main;
+  socket_info_t *si = vcm->sockets; //alagalah
   svm_fifo_segment_create_args_t _a, *a = &_a;
   ssvm_shared_header_t *sh;
   svm_fifo_segment_private_t *seg;
@@ -954,7 +961,7 @@ vl_api_connect_uri_reply_t_handler (vl_api_connect_uri_reply_t * mp)
   u32 segment_index;
   int rv;
 
-  ASSERT (vcm->i_am_master == 0);
+  ASSERT (si->is_server == 0);
 
   if (mp->segment_name_length == 0)
     {
@@ -977,7 +984,7 @@ vl_api_connect_uri_reply_t_handler (vl_api_connect_uri_reply_t * mp)
 
   segment_index = vec_len (sm->segments) - 1;
 
-  vec_add2 (vcm->seg, seg, 1);
+  vec_add2 (si->seg, seg, 1);
 
   memcpy (seg, sm->segments + segment_index, sizeof (*seg));
   sh = seg->ssvm.sh;
@@ -986,8 +993,8 @@ vl_api_connect_uri_reply_t_handler (vl_api_connect_uri_reply_t * mp)
   while (vec_len (fsh->fifos) < 2)
     sleep (1);
 
-  pool_get (vcm->sockets[0].sessions, session);
-  vcm->cut_through_session_index = session - vcm->sockets[0].sessions;
+  pool_get (si->sessions, session);
+  si->cut_through_session_index = session - si->sessions;
 
   session->server_rx_fifo = (svm_fifo_t *) fsh->fifos[0];
   ASSERT (session->server_rx_fifo);
@@ -996,7 +1003,7 @@ vl_api_connect_uri_reply_t_handler (vl_api_connect_uri_reply_t * mp)
 
   /* security: could unlink /dev/shm/<mp->segment_name> here, maybe */
 
-  vcm->state = STATE_READY;
+  si->state = STATE_READY;
 }
 
 #define foreach_uri_msg                         \
@@ -1056,29 +1063,33 @@ init_error_string_table (vpp_commapi_main_t * vcm)
 }
 
 void
-handle_fifo_event_server_rx (vpp_commapi_main_t * vcm, fifo_event_t * e)
+handle_fifo_event_server_rx (socket_info_t *si, fifo_event_t * e)
 {
   svm_fifo_t *rx_fifo, *tx_fifo;
+  vpp_commapi_main_t * vcm = &vpp_commapi_main;
   int nbytes;
 
   fifo_event_t evt;
   unix_shared_memory_queue_t *q;
-  int rv;
+  //int rv;
 
   rx_fifo = e->fifo;
-  tx_fifo = vcm->sockets[0].sessions[rx_fifo->client_session_index].server_tx_fifo;
+  tx_fifo = si->sessions[rx_fifo->client_session_index].server_tx_fifo;
 
+  //recv
   do
     {
       nbytes = svm_fifo_dequeue_nowait2 (rx_fifo, 0,
-					 vec_len (vcm->rx_buf), vcm->rx_buf);
+					 vec_len (si->rx_buf), si->rx_buf);
     }
   while (nbytes <= 0);
-  do
-    {
-      rv = svm_fifo_enqueue_nowait2 (tx_fifo, 0, nbytes, vcm->rx_buf);
-    }
-  while (rv == -2);
+
+  //alagalah send
+  /* do */
+  /*   { */
+  /*     rv = svm_fifo_enqueue_nowait2 (tx_fifo, 0, nbytes, vcm->rx_buf); */
+  /*   } */
+  /* while (rv == -2); */
 
   /* Fabricate TX event, send to vpp */
   evt.fifo = tx_fifo;
@@ -1094,7 +1105,7 @@ void
 handle_event_queue (vpp_commapi_main_t * vcm)
 {
   fifo_event_t _e, *e = &_e;;
-
+  socket_info_t *si = vcm->sockets; //alagalah
   while (1)
     {
       unix_shared_memory_queue_sub (vcm->our_event_queue, (u8 *) e,
@@ -1102,7 +1113,7 @@ handle_event_queue (vpp_commapi_main_t * vcm)
       switch (e->event_type)
 	{
 	case FIFO_EVENT_SERVER_RX:
-	  handle_fifo_event_server_rx (vcm, e);
+	  handle_fifo_event_server_rx (si, e);
 	  break;
 
 	case FIFO_EVENT_SERVER_EXIT:
@@ -1117,51 +1128,101 @@ handle_event_queue (vpp_commapi_main_t * vcm)
       if (PREDICT_FALSE (vcm->time_to_print_stats == 1))
 	{
 	  vcm->time_to_print_stats = 0;
-	  fformat (stdout, "%d connections\n", pool_elts (vcm->sockets[0].sessions));
+	  fformat (stdout, "%d connections\n", pool_elts (si->sessions));
 	}
     }
 }
 
-void
-uri_udp_test (vpp_commapi_main_t * vcm)
+/* void */
+/* uri_udp_test (vpp_commapi_main_t * vcm) */
+/* { */
+/*   vl_api_bind_uri_t *bmp; */
+/*   vl_api_unbind_uri_t *ump; */
+
+/*   bmp = vl_msg_api_alloc (sizeof (*bmp)); */
+/*   memset (bmp, 0, sizeof (*bmp)); */
+
+/*   bmp->_vl_msg_id = ntohs (VL_API_BIND_URI); */
+/*   bmp->client_index = vcm->my_client_index; */
+/*   bmp->context = ntohl (0xfeedface); */
+/*   bmp->segment_size = 2 << 30; */
+/*   bmp->options[URI_OPTIONS_FLAGS] = URI_OPTIONS_FLAGS_USE_FIFO; */
+/*   memcpy (bmp->uri, vcm->uri, vec_len (vcm->uri)); */
+/*   vl_msg_api_send_shmem (vcm->vl_input_queue, (u8 *) & bmp); */
+
+/*   if (wait_for_state_change (vcm, STATE_READY)) */
+/*     { */
+/*       clib_warning ("timeout waiting for STATE_READY"); */
+/*       return; */
+/*     } */
+
+/*   handle_event_queue (vcm); */
+
+/*   ump = vl_msg_api_alloc (sizeof (*ump)); */
+/*   memset (ump, 0, sizeof (*ump)); */
+
+/*   ump->_vl_msg_id = ntohs (VL_API_UNBIND_URI); */
+/*   ump->client_index = vcm->my_client_index; */
+/*   memcpy (ump->uri, vcm->uri, vec_len (vcm->uri)); */
+/*   vl_msg_api_send_shmem (vcm->vl_input_queue, (u8 *) & ump); */
+
+/*   if (wait_for_state_change (vcm, STATE_START)) */
+/*     { */
+/*       clib_warning ("timeout waiting for STATE_START"); */
+/*       return; */
+/*     } */
+
+/*   fformat (stdout, "Test complete...\n"); */
+/* } */
+
+int
+vpp_bind_api(socket_info_t *si)
 {
+  vpp_commapi_main_t *vcm = &vpp_commapi_main;
   vl_api_bind_uri_t *bmp;
-  vl_api_unbind_uri_t *ump;
 
   bmp = vl_msg_api_alloc (sizeof (*bmp));
   memset (bmp, 0, sizeof (*bmp));
 
   bmp->_vl_msg_id = ntohs (VL_API_BIND_URI);
   bmp->client_index = vcm->my_client_index;
-  bmp->context = ntohl (0xfeedface);
-  bmp->segment_size = 2 << 30;
-  bmp->options[URI_OPTIONS_FLAGS] = URI_OPTIONS_FLAGS_USE_FIFO;
-  memcpy (bmp->uri, vcm->uri, vec_len (vcm->uri));
-  vl_msg_api_send_shmem (vcm->vl_input_queue, (u8 *) & bmp);
+  bmp->context = ntohl(0xfeedface);
+  bmp->initial_segment_size = 256<<20;    /* size of initial segment */
+  bmp->options[URI_OPTIONS_FLAGS] =
+    URI_OPTIONS_FLAGS_USE_FIFO | URI_OPTIONS_FLAGS_ADD_SEGMENT;
+  bmp->options[URI_OPTIONS_RX_FIFO_SIZE] = 16<<10;
+  bmp->options[URI_OPTIONS_TX_FIFO_SIZE] = 16<<10;
+  bmp->options[URI_OPTIONS_ADD_SEGMENT_SIZE] = 128<<20;
+  memcpy (bmp->uri, si->uri, vec_len (si->uri));
+  vl_msg_api_send_shmem (vcm->vl_input_queue, (u8 *)&bmp);
 
-  if (wait_for_state_change (vcm, STATE_READY))
+  if (wait_for_state_change (si, STATE_READY))
     {
       clib_warning ("timeout waiting for STATE_READY");
-      return;
+      return VNET_API_ERROR_URI_FIFO_CREATE_FAILED;
     }
 
-  handle_event_queue (vcm);
+  return 0;
+}
 
-  ump = vl_msg_api_alloc (sizeof (*ump));
-  memset (ump, 0, sizeof (*ump));
+int
+vpp_calc_fd_from_indexes (int socket_idx, int session_idx)
+{
+  int fd;
+  fd = socket_idx * VPP_COMMAPI_FD_SESSIONS ;
+  fd += session_idx + 1;
+  fd += VPP_COMMAPI_FD_SOCKET_OFFSET;
 
-  ump->_vl_msg_id = ntohs (VL_API_UNBIND_URI);
-  ump->client_index = vcm->my_client_index;
-  memcpy (ump->uri, vcm->uri, vec_len (vcm->uri));
-  vl_msg_api_send_shmem (vcm->vl_input_queue, (u8 *) & ump);
+  return fd;
+}
 
-  if (wait_for_state_change (vcm, STATE_START))
-    {
-      clib_warning ("timeout waiting for STATE_START");
-      return;
-    }
+void
+vpp_calc_indexes_from_fd (int fd, int *socket_idx, int *session_idx)
+{
 
-  fformat (stdout, "Test complete...\n");
+  *socket_idx = (fd - VPP_COMMAPI_FD_SOCKET_OFFSET) / VPP_COMMAPI_FD_SESSIONS;
+  *session_idx = (*socket_idx % VPP_COMMAPI_FD_SESSIONS) - 1;
+
 }
 
 int
@@ -1170,9 +1231,12 @@ vpp_init (vpp_commapi_main_t * vcm)
 
   u8 *heap;
   mheap_t *h;
+  char *client_name;
   session_t *session;
+  socket_info_t *si;
   int i;
-  int i_am_master = 1;
+  int my_pid = getpid();
+
 
   if (vcm->vpp_connected)
     return 0;
@@ -1185,29 +1249,20 @@ vpp_init (vpp_commapi_main_t * vcm)
   /* make the main heap thread-safe */
   h->flags |= MHEAP_FLAG_THREAD_SAFE;
 
-  vec_validate (vcm->rx_buf, 8192);
+  vcm->segment_main = &svm_fifo_segment_main;
 
-  vcm->session_index_by_vpp_handles = hash_create (0, sizeof (uword));
 
-  vcm->my_pid = getpid ();
-  vcm->configured_segment_size = 1 << 20;
 
-  clib_time_init (&vcm->clib_time);
   init_error_string_table (vcm);
   svm_fifo_segment_init (0x200000000ULL, 20);
 
-  vcm->cut_through_session_index = ~0;
-  // We don't know this yet vcm->uri = format (0, "%s%c", bind_name, 0);
-  // We don't know this yet, its just a socket open.  vcm->i_am_master = i_am_master;
-  vcm->segment_main = &svm_fifo_segment_main;
-
-  //we don't know the bind yet either.
-  vcm->connect_uri = 0;
 
   setup_signal_handlers ();
 
   uri_api_hookup (vcm);
-  if (connect_to_vpp (i_am_master ? "uri_udp_master" : "uri_udp_slave") < 0)
+
+  client_name = (char *) format (0, "vpp_commapi-%d%c", my_pid, 0);
+  if (connect_to_vpp (client_name) < 0)
     {
       svm_region_exit ();
       fformat (stderr, "Couldn't connect to vpe, exiting...\n");
@@ -1216,14 +1271,25 @@ vpp_init (vpp_commapi_main_t * vcm)
 
   vcm->vpp_connected = 1;
 
+  vec_add2 (vcm->sockets, si, 1);
+  memset (si, 0, sizeof (*si));
+  vec_validate (si->rx_buf, 8192);
+  si->session_index_by_vpp_handles = hash_create (0, sizeof (uword));
+  si->my_pid = my_pid;
+  si->configured_segment_size = 1 << 20;
+  si->cut_through_session_index = ~0;
+  si->connect_uri = 0;
+  clib_time_init (&si->clib_time);
+  si->parent_index = ~0;
+
   /* $$$$ hack preallocation */
-  for (i = 0; i < 200000; i++)
+  for (i = 0; i < 2; i++)
     {
-      pool_get (vcm->sockets[0].sessions, session);
+      pool_get (si->sessions, session);
       memset (session, 0, sizeof (*session));
     }
-  for (i = 0; i < 200000; i++)
-    pool_put_index (vcm->sockets[0].sessions, i);
+  for (i = 0; i < 2; i++)
+    pool_put_index (si->sessions, i);
 
   return 0;
 
@@ -1243,16 +1309,6 @@ is_vpp_init(vpp_commapi_main_t * vcm)
     }
 }
 
-int
-vpp_bind (vpp_commapi_main_t * vcm, u8 * connect_uri)
-{
-  if (vcm->connect_uri)
-    return -1;
-
-  vcm->connect_uri = format (0, (const char *) connect_uri, 0);
-  vcm->uri = format (0, "%s%c", connect_uri, 0);
-  return 0;
-}
 
 #undef vl_api_version
 #define vl_api_version(n,v) static u32 vpe_api_version = v;
@@ -2061,7 +2117,7 @@ done:
 static void
 socket_wrapper_init_sockets (void)
 {
-  size_t i;
+  //  size_t i;
 
   if (sockets != NULL)
     {
@@ -2081,12 +2137,12 @@ socket_wrapper_init_sockets (void)
 
   first_free = 0;
 
-  for (i = 0; i < max_sockets; i++)
-    {
-      sockets[i].next_free = i + 1;
-    }
+  /* for (i = 0; i < max_sockets; i++) */
+  /*   { */
+  /*     sockets[i].next_free = i + 1; */
+  /*   } */
 
-  sockets[max_sockets - 1].next_free = -1;
+  /* sockets[max_sockets - 1].next_free = -1; */
 }
 
 bool
@@ -2130,16 +2186,15 @@ socket_wrapper_default_iface (void)
 static int
 socket_wrapper_first_free_index (void)
 {
-  int next_free;
 
   if (first_free == -1)
     {
       return -1;
     }
 
-  next_free = sockets[first_free].next_free;
+  //  next_free = sockets[first_free].next_free;
   ZERO_STRUCT (sockets[first_free]);
-  sockets[first_free].next_free = next_free;
+  //  sockets[first_free].next_free = next_free;
 
   return first_free;
 }
@@ -2588,30 +2643,25 @@ find_socket_info_fd (int fd)
   return NULL;
 }
 
-static int
-find_socket_info_index (int fd)
-{
-  struct socket_info_fd *fi = find_socket_info_fd (fd);
+/* static int */
+/* find_socket_info_index (int fd) */
+/* { */
+/*   struct socket_info_fd *fi = find_socket_info_fd (fd); */
 
-  if (fi == NULL)
-    {
-      return -1;
-    }
+/*   if (fi == NULL) */
+/*     { */
+/*       return -1; */
+/*     } */
 
-  return fi->si_index;
-}
+/*   return fi->si_index; */
+/* } */
 
 static struct socket_info *
 find_socket_info (int fd)
 {
-  int idx = find_socket_info_index (fd);
+  vpp_commapi_main_t *vcm =  &vpp_commapi_main;
 
-  if (idx == -1)
-    {
-      return NULL;
-    }
-
-  return &sockets[idx];
+  return vcm->sockets + (fd - VPP_COMMAPI_FD_SOCKET_OFFSET);
 }
 
 #if 0				/* FIXME */
@@ -2751,7 +2801,6 @@ swrap_remove_stale (int fd)
       unlink (si->un_addr.sun_path);
     }
 
-  si->next_free = first_free;
   first_free = si_index;
 }
 
@@ -3856,8 +3905,8 @@ swrap_socket (int family, int type, int protocol)
     }
 
   si->refcount = 1;
-  first_free = si->next_free;
-  si->next_free = 0;
+  //  first_free = si->next_free;
+  //  si->next_free = 0;
 
   fi->fd = fd;
   fi->si_index = idx;
@@ -3958,7 +4007,8 @@ vpp_socket (int family, int type, int protocol)
   real_type &= ~SOCK_CLOEXEC;
   real_type &= ~SOCK_NONBLOCK;
 
-  pool_get (vcm->sockets, si);
+  //  pool_get (vcm->sockets, si);
+  si = vcm->sockets;
   memset (si, 0, sizeof (*si));
 
   si->family = family;
@@ -3996,7 +4046,8 @@ vpp_socket (int family, int type, int protocol)
       return -1;
     }
 
-  return (si - vcm->sockets);
+  /* Use vector index as FD index from FD base */
+  return (si - vcm->sockets) + VPP_COMMAPI_FD_SOCKET_OFFSET;
 
 }
 
@@ -4004,7 +4055,9 @@ vpp_socket (int family, int type, int protocol)
 int
 socket (int family, int type, int protocol)
 {
-  return swrap_socket (family, type, protocol);
+  //  return swrap_socket (family, type, protocol);
+  return vpp_socket (family, type, protocol);
+  (void) swrap_socket (family, type, protocol);
 }
 
 /****************************************************************************
@@ -4088,27 +4141,47 @@ pipe (int pipefd[2])
  ***************************************************************************/
 
 static int
-swrap_accept (int s, struct sockaddr *addr, socklen_t * addrlen, int flags)
+vpp_accept (int s, struct sockaddr *addr, socklen_t * addrlen, int flags)
 {
-  struct socket_info *parent_si, *child_si;
-  struct socket_info_fd *child_fi;
-  int fd;
-  int idx;
-  struct swrap_address un_addr = {
-    .sa_socklen = sizeof (struct sockaddr_un),
-  };
-  struct swrap_address un_my_addr = {
-    .sa_socklen = sizeof (struct sockaddr_un),
-  };
+  socket_info_t *parent_si, *child_si;
+  session_t *session;
+  int parent_idx, session_idx;
+  //  int child_idx; // alagalah : should keep a vec of these in parent for cleanup
+  vpp_commapi_main_t *vcm = &vpp_commapi_main;
+  int fd = s;
+
+
   struct swrap_address in_addr = {
     .sa_socklen = sizeof (struct sockaddr_storage),
   };
   struct swrap_address in_my_addr = {
     .sa_socklen = sizeof (struct sockaddr_storage),
   };
-  int ret;
 
-  parent_si = find_socket_info (s);
+
+
+  /*
+     VPP_COMMAPI_FD_SOCKET_OFFSET 1024
+     VPP_COMMAPI_FD_SESSIONs 128
+     ie
+     fd value 1024 is sockets[0]
+     fd value 1025 is sockets[0] but will be session 0 (1 -1 )
+     fd value 1154 is:
+     : remove offset = 130
+     : / 128 = 1 => sockets[1]
+     : % 128 = 2 => sockets[1].sessions[2]
+     Note that the socket for "s" should not have any sessions as this
+     accept() makes children.
+  */
+
+  vpp_calc_indexes_from_fd(fd, &parent_idx, &session_idx);
+
+  // Parent socket won't have sessions.
+  if (session_idx != 0)
+    return -1;
+
+  parent_si = vcm->sockets + parent_idx;
+
   if (!parent_si)
     {
 #ifdef HAVE_ACCEPT4
@@ -4130,54 +4203,10 @@ swrap_accept (int s, struct sockaddr *addr, socklen_t * addrlen, int flags)
       return -1;
     }
 
-#ifdef HAVE_ACCEPT4
-  ret = libc_accept4 (s, &un_addr.sa.s, &un_addr.sa_socklen, flags);
-#else
-  UNUSED (flags);
-  ret = libc_accept (s, &un_addr.sa.s, &un_addr.sa_socklen);
-#endif
-  if (ret == -1)
-    {
-      if (errno == ENOTSOCK)
-	{
-	  /* Remove stale fds */
-	  swrap_remove_stale (s);
-	}
-      return ret;
-    }
+  vec_add2(vcm->sockets, child_si, 1);
 
-  fd = ret;
-
-  ret = sockaddr_convert_from_un (parent_si,
-				  &un_addr.sa.un,
-				  un_addr.sa_socklen,
-				  parent_si->family,
-				  &in_addr.sa.s, &in_addr.sa_socklen);
-  if (ret == -1)
-    {
-      close (fd);
-      return ret;
-    }
-
-  idx = socket_wrapper_first_free_index ();
-  if (idx == -1)
-    {
-      errno = ENOMEM;
-      return -1;
-    }
-
-  child_si = &sockets[idx];
-
-  child_fi =
-    (struct socket_info_fd *) calloc (1, sizeof (struct socket_info_fd));
-  if (child_fi == NULL)
-    {
-      close (fd);
-      errno = ENOMEM;
-      return -1;
-    }
-
-  child_fi->fd = fd;
+  pool_get (child_si->sessions, session);
+  memset (session, 0, sizeof (*session));
 
   child_si->family = parent_si->family;
   child_si->type = parent_si->type;
@@ -4185,6 +4214,8 @@ swrap_accept (int s, struct sockaddr *addr, socklen_t * addrlen, int flags)
   child_si->bound = 1;
   child_si->is_server = 1;
   child_si->connected = 1;
+  child_si->parent_index = parent_idx;
+  child_si->refcount = 1;
 
   child_si->peername = (struct swrap_address)
   {
@@ -4201,51 +4232,28 @@ swrap_accept (int s, struct sockaddr *addr, socklen_t * addrlen, int flags)
       *addrlen = in_addr.sa_socklen;
     }
 
-  ret = libc_getsockname (fd, &un_my_addr.sa.s, &un_my_addr.sa_socklen);
-  if (ret == -1)
-    {
-      free (child_fi);
-      close (fd);
-      return ret;
-    }
+  /* ret = libc_getsockname (fd, &un_my_addr.sa.s, &un_my_addr.sa_socklen); */
+  /* if (ret == -1) */
+  /*   { */
+  /*     free (child_fi); */
+  /*     close (fd); */
+  /*     return ret; */
+  /*   } */
 
-  ret = sockaddr_convert_from_un (child_si,
-				  &un_my_addr.sa.un,
-				  un_my_addr.sa_socklen,
-				  child_si->family,
-				  &in_my_addr.sa.s, &in_my_addr.sa_socklen);
-  if (ret == -1)
-    {
-      free (child_fi);
-      close (fd);
-      return ret;
-    }
-
-  SWRAP_LOG (SWRAP_LOG_TRACE,
-	     "accept() path=%s, fd=%d", un_my_addr.sa.un.sun_path, s);
 
   child_si->myname = (struct swrap_address)
   {
   .sa_socklen = in_my_addr.sa_socklen,};
   memcpy (&child_si->myname.sa.ss, &in_my_addr.sa.ss, in_my_addr.sa_socklen);
 
-  child_si->refcount = 1;
-  first_free = child_si->next_free;
-  child_si->next_free = 0;
+  // Calculate an FD ie
+  // index into vcm->sockets * 128 gives chunks of 128 sessions we can use per socket
 
-  child_fi->si_index = idx;
-
-  SWRAP_DLIST_ADD (socket_fds, child_fi);
-
-  if (addr != NULL)
-    {
-      swrap_pcap_dump_packet (child_si, addr, SWRAP_ACCEPT_SEND, NULL, 0);
-      swrap_pcap_dump_packet (child_si, addr, SWRAP_ACCEPT_RECV, NULL, 0);
-      swrap_pcap_dump_packet (child_si, addr, SWRAP_ACCEPT_ACK, NULL, 0);
-    }
+  fd = vpp_calc_fd_from_indexes (child_si - vcm->sockets, session_idx);
 
   return fd;
 }
+
 
 #ifdef HAVE_ACCEPT4
 int
@@ -4263,7 +4271,7 @@ int
 accept (int s, struct sockaddr *addr, socklen_t * addrlen)
 #endif
 {
-  return swrap_accept (s, addr, (socklen_t *) addrlen, 0);
+  return vpp_accept (s, addr, (socklen_t *) addrlen, 0);
 }
 
 static int autobind_start_init;
@@ -4613,7 +4621,7 @@ swrap_bind (int s, const struct sockaddr *myaddr, socklen_t addrlen)
   si->myname.sa_socklen = addrlen;
   memcpy (&si->myname.sa.ss, myaddr, addrlen);
 
-  // vpp_bind to FIFO here....  and thiis is the FD we use
+  // vpp_bind to FIFO here....  and this is the FD we use
 
   ret = sockaddr_convert_to_un (si,
 				myaddr,
@@ -4637,10 +4645,103 @@ swrap_bind (int s, const struct sockaddr *myaddr, socklen_t addrlen)
   return ret;
 }
 
+static int
+vpp_bind (int s, const struct sockaddr *myaddr, socklen_t addrlen)
+{
+  socket_info_t *si = find_socket_info (s);
+  //  session_t *session;
+  int bind_error = 0;
+
+  if (!si)
+    {
+      return libc_bind (s, myaddr, addrlen);
+    }
+
+  switch (si->family)
+    {
+    case AF_INET:
+      {
+	const struct sockaddr_in *sin;
+	if (addrlen < sizeof (struct sockaddr_in))
+	  {
+	    bind_error = EINVAL;
+	    break;
+	  }
+
+	sin = (const struct sockaddr_in *) (const void *) myaddr;
+
+	if (sin->sin_family != AF_INET)
+	  {
+	    bind_error = EAFNOSUPPORT;
+	  }
+
+	/* special case for AF_UNSPEC */
+	if (sin->sin_family == AF_UNSPEC &&
+	    (sin->sin_addr.s_addr == htonl (INADDR_ANY)))
+	  {
+	    bind_error = 0;
+	  }
+
+	break;
+      }
+    case AF_INET6:
+      {
+	const struct sockaddr_in6 *sin6;
+	if (addrlen < sizeof (struct sockaddr_in6))
+	  {
+	    bind_error = EINVAL;
+	    break;
+	  }
+
+	sin6 = (const struct sockaddr_in6 *) (const void *) myaddr;
+
+	if (sin6->sin6_family != AF_INET6)
+	  {
+	    bind_error = EAFNOSUPPORT;
+	  }
+
+	break;
+      }
+    default:
+      bind_error = EINVAL;
+      break;
+    }
+
+  if (bind_error != 0)
+    {
+      errno = bind_error;
+      return -1;
+    }
+
+  si->myname.sa_socklen = addrlen;
+  memcpy (&si->myname.sa.ss, myaddr, addrlen);
+
+  if (si->connect_uri)
+    return -1;
+
+  // alagalah: This needs to be in something "uri_decode()" in
+  // vnet/vnet/uri/uri.c can grok...
+  //si->connect_uri = format (0, (const char *) myaddr, 0);
+  //si->uri = format (0, "%s%c", myaddr, 0);
+  si->uri = format (0, "%s%c", "udp4:1234", 0);
+
+
+  // Call VPP bind API
+  bind_error = vpp_bind_api(si);
+
+  if (bind_error)
+    return bind_error;
+
+  si->bound = 1;
+
+  return 0;
+}
+
 int
 bind (int s, const struct sockaddr *myaddr, socklen_t addrlen)
 {
-  return swrap_bind (s, myaddr, addrlen);
+  (void) swrap_bind (s, myaddr, addrlen);
+  return vpp_bind (s, myaddr, addrlen);
 }
 
 /****************************************************************************
@@ -6847,7 +6948,6 @@ swrap_close (int fd)
       unlink (si->un_addr.sun_path);
     }
 
-  si->next_free = first_free;
   first_free = si_index;
 
   return ret;
