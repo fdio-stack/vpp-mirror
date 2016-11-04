@@ -44,6 +44,7 @@ nobase_include_HEADERS +=			\
   vnet/api_errno.h				\
   vnet/buffer.h					\
   vnet/config.h					\
+  vnet/devices/devices.h			\
   vnet/global_funcs.h				\
   vnet/handoff.h				\
   vnet/interface.h				\
@@ -638,7 +639,6 @@ libvnet_la_SOURCES +=				\
   vnet/lawful-intercept/node.c
 
 nobase_include_HEADERS += 			\
-  vnet/dpdk_replication.h			\
   vnet/lawful-intercept/lawful_intercept.h
 
 ########################################
