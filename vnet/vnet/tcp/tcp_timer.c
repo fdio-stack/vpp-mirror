@@ -15,13 +15,6 @@
 
 #include "tcp_timer.h"
 
-u32 oingoes;
-
-void oingo (void)
-{
-  oingoes++;
-}
-
 /** construct a stop-timer handle */
 static inline u32 
 make_stop_timer_handle (u32 ring, u32 ring_offset, u32 index_in_slot)
@@ -64,9 +57,6 @@ u32 tcp_timer_start (tcp_timer_wheel_t * tw, u32 pool_index, u32 timer_id,
   u32 rv;
 
   ASSERT(interval);
-
-  if (pool_index == 862)
-    oingo();
 
   fast_ring_offset = interval & TW_RING_MASK;
   fast_ring_offset += tw->current_index[TW_RING_FAST];
@@ -275,8 +265,6 @@ void tcp_timer_expire_timers (tcp_timer_wheel_t *tw, f64 now)
                */
               fast_ring_offset = tw->demoted_timer_offsets [j];
               timer_handle = tw->demoted_timer_handles[j];
-              if ((timer_handle & 0x0FFFFFFF) == 862)
-                oingo();
 
               ts = &tw->w[TW_RING_FAST][fast_ring_offset];
 
