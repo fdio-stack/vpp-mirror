@@ -400,10 +400,12 @@ endif
 libvnet_la_SOURCES +=							\
  vnet/tcp/tcp_format.c							\
  vnet/tcp/tcp_init.c							\
+ vnet/tcp/tcp_timer.c							\
  vnet/tcp/tcp.c
 
 nobase_include_HEADERS +=						\
  vnet/tcp/tcp_packet.h							\
+ vnet/tcp/tcp_timer.c							\
  vnet/tcp/tcp.h
 
 ########################################
