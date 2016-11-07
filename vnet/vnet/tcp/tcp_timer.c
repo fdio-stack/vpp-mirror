@@ -334,6 +334,10 @@ typedef struct
 {
   tcp_timer_test_elt_t * test_elts;
   tcp_timer_wheel_t wheel;
+  u32 seed;
+  u32 ntimers;
+  u32 niter;
+  u32 ticks_per_iter;
 } tcp_timer_test_main_t;
   
 tcp_timer_test_main_t tcp_timer_test_main;
@@ -392,19 +396,129 @@ new_stop_timer_handle_callback (new_stop_timer_callback_args_t *a_vec)
       e = pool_elt_at_index (tm->test_elts, a->pool_index);
       ASSERT (a->timer_id == 3);
       e->stop_timer_handle = a->new_stop_timer_handle;
-
-      if (0 && i == 3)
-        {
-          tcp_timer_stop (&tm->wheel, e - tm->test_elts, 3 /* timer id*/,
-                          e->stop_timer_handle);
-        }
     }
 }
 
-#define NTIMERS 200000
 
-static void
-test1 (tcp_timer_test_main_t *tm)
+static clib_error_t * 
+test2 (vlib_main_t * vm, tcp_timer_test_main_t *tm)
+{
+  u32 i, j;
+  tcp_timer_test_elt_t * e;
+  u32 initial_wheel_offset;
+  u32 expiration_time;
+  u32 max_expiration_time = 0;
+  u32 * deleted_indices = 0;
+  u32 adds = 0, deletes = 0;
+  f64 before, after;
+
+  tcp_timer_wheel_init (&tm->wheel, expired_timer_callback,
+                        new_stop_timer_handle_callback);
+
+  /* Prime offset */
+  initial_wheel_offset = 757; 
+
+  run_wheel(&tm->wheel, initial_wheel_offset);
+  
+  vlib_cli_output (vm, "test %d timers, %d iter, %d ticks per iter, 0x%x seed",
+                   tm->ntimers, tm->niter, tm->ticks_per_iter, tm->seed);
+
+  before = vlib_time_now (vm);
+
+  /* Prime the pump */
+  for (i = 0; i < tm->ntimers; i++)
+    {
+      pool_get (tm->test_elts, e);
+      memset (e, 0, sizeof (*e));
+
+      do {
+        expiration_time = random_u32 (&tm->seed) & ((1<<17) - 1);
+      } while (expiration_time == 0);
+
+      if (expiration_time > max_expiration_time)
+        max_expiration_time = expiration_time;
+
+      e->expected_to_expire = expiration_time + initial_wheel_offset;
+      e->stop_timer_handle = tcp_timer_start (&tm->wheel, 
+                                              e - tm->test_elts, 
+                                              3 /* timer id */,
+                                              expiration_time);
+    }
+
+  adds += i;
+
+  for (i = 0; i < tm->niter; i++)
+    {
+      run_wheel (&tm->wheel, tm->ticks_per_iter);
+
+      j = 0;
+      vec_reset_length (deleted_indices);
+      pool_foreach (e, tm->test_elts,
+      ({
+        tcp_timer_stop (&tm->wheel, e - tm->test_elts, 3 /* timer id*/,
+                        e->stop_timer_handle);
+        vec_add1 (deleted_indices, e - tm->test_elts);
+        if (++j >= tm->ntimers/4)
+          goto del_and_re_add;
+      }));
+
+    del_and_re_add:
+      for (j = 0; j < vec_len (deleted_indices); j++)
+        pool_put_index (tm->test_elts, deleted_indices[j]);
+      
+      deletes += j;
+
+      for (j = 0; j < tm->ntimers/4; j++)
+        {
+          pool_get (tm->test_elts, e);
+          memset (e, 0, sizeof (*e));
+          
+          do {
+            expiration_time = random_u32 (&tm->seed) & ((1<<17) - 1);
+          } while (expiration_time == 0);
+          
+          if (expiration_time > max_expiration_time)
+            max_expiration_time = expiration_time;
+          
+          e->expected_to_expire = expiration_time + tm->wheel.current_tick;
+          e->stop_timer_handle = tcp_timer_start (&tm->wheel, 
+                                                  e - tm->test_elts, 
+                                                  3 /* timer id */,
+                                                  expiration_time);
+        }
+      adds += j;
+    }
+
+  vec_free (deleted_indices);
+
+  run_wheel (&tm->wheel, max_expiration_time + 1);
+
+  after = vlib_time_now (vm);
+
+  vlib_cli_output (vm, "%d adds, %d deletes, %d ticks", adds, deletes,
+                   tm->wheel.current_tick);
+  vlib_cli_output (vm, "test ran %.2f seconds, %.2f ops/second", 
+                   (after - before), 
+                   ((f64)adds + (f64) deletes + (f64)tm->wheel.current_tick)
+                   / (after - before));
+
+  if (pool_elts (tm->test_elts))
+    vlib_cli_output (vm, "Note: %d elements remain in pool\n",
+             pool_elts (tm->test_elts));
+
+  pool_foreach (e, tm->test_elts,
+  ({
+    vlib_cli_output (vm, "[%d] expected to expire %d\n", e - tm->test_elts,
+             e->expected_to_expire);
+  }));
+                  
+  pool_free (tm->test_elts);
+  tcp_timer_wheel_free (&tm->wheel);
+  return 0;
+}
+
+static clib_error_t *
+test1 (vlib_main_t * vm, tcp_timer_test_main_t *tm)
 {
   u32 i;
   tcp_timer_test_elt_t * e;
@@ -418,11 +532,12 @@ test1 (tcp_timer_test_main_t *tm)
 
   run_wheel(&tm->wheel, offset);
   
-  fformat (stdout, "initial wheel time %d, slow index %d fast index %d\n",
-           tm->wheel.current_tick, tm->wheel.current_index[TW_RING_SLOW],
-           tm->wheel.current_index [TW_RING_FAST]);
+  vlib_cli_output 
+    (vm, "initial wheel time %d, slow index %d fast index %d\n",
+     tm->wheel.current_tick, tm->wheel.current_index[TW_RING_SLOW],
+     tm->wheel.current_index [TW_RING_FAST]);
 
-  for (i = 0; i < NTIMERS; i++)
+  for (i = 0; i < tm->ntimers; i++)
     {
       pool_get (tm->test_elts, e);
       memset (e, 0, sizeof (*e));
@@ -432,25 +547,31 @@ test1 (tcp_timer_test_main_t *tm)
                                               3 /* timer id */,
                                               i+1 /* expiration time */);
     }
-  run_wheel (&tm->wheel, NTIMERS+3);
+  run_wheel (&tm->wheel, tm->ntimers+3);
 
   if (pool_elts (tm->test_elts))
-    fformat (stdout, "Note: %d elements remain in pool\n",
+    vlib_cli_output (vm, "Note: %d elements remain in pool\n",
              pool_elts (tm->test_elts));
 
   pool_foreach (e, tm->test_elts,
   ({
-    fformat (stdout, "[%d] expected to expire %d\n", e - tm->test_elts,
-             e->expected_to_expire);
+    vlib_cli_output (vm, "[%d] expected to expire %d\n", e - tm->test_elts,
+                     e->expected_to_expire);
   }));
                   
-  fformat (stdout, "final wheel time %d, slow index %d fast index %d\n",
-           tm->wheel.current_tick, tm->wheel.current_index[TW_RING_SLOW],
-           tm->wheel.current_index [TW_RING_FAST]);
+  vlib_cli_output 
+    (vm, "final wheel time %d, slow index %d fast index %d\n",
+     tm->wheel.current_tick, tm->wheel.current_index[TW_RING_SLOW],
+     tm->wheel.current_index [TW_RING_FAST]);
 
   pool_free (tm->test_elts);
   tcp_timer_wheel_free (&tm->wheel);
+  return 0;
 }
+
+
+
+
 
 static clib_error_t *
 timer_test_command_fn (vlib_main_t * vm,
@@ -458,7 +579,40 @@ timer_test_command_fn (vlib_main_t * vm,
 		 vlib_cli_command_t * cmd)
 {
 
-  test1 (&tcp_timer_test_main);
+  tcp_timer_test_main_t *tm = &tcp_timer_test_main;
+  int is_test1 = 0;
+  int is_test2 = 0;
+
+  memset (tm, 0, sizeof(*tm));
+  /* Default values */
+  tm->ntimers = 100000;
+  tm->seed = 0xDEADDABE;
+  tm->niter = 1000;
+  tm->ticks_per_iter = 727;
+
+  while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
+    {
+      if (unformat (input, "seed %d", &tm->seed))
+        ;
+      else if (unformat (input, "test1"))
+        is_test1 = 1;
+      else if (unformat (input, "test2"))
+        is_test2 = 1;
+      else if (unformat (input, "ntimers %d", &tm->ntimers))
+        ;
+      else if (unformat (input, "niter %d", &tm->niter))
+        ;
+      else if (unformat (input, "ticks_per_iter %d", &tm->ticks_per_iter))
+        ;
+    }
+
+  if (is_test1 + is_test2 == 0)
+    return clib_error_return (0, "No test specified [test1..n]");
+
+  if (is_test1)
+    return test1 (vm, &tcp_timer_test_main);
+  if (is_test2)
+    return test2 (vm, &tcp_timer_test_main);
 
   return 0;
 }
