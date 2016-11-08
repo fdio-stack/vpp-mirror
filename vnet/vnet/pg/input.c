@@ -40,6 +40,8 @@
 #include <vlib/vlib.h>
 #include <vnet/pg/pg.h>
 #include <vnet/vnet.h>
+#include <vnet/feature/feature.h>
+#include <vnet/devices/devices.h>
 
 #if DPDK==1
 #include <vnet/devices/dpdk/dpdk.h>
@@ -192,7 +194,7 @@ do_set_fixed (pg_main_t * pg,
 	      u32 n_bits,
 	      u32 byte_offset, u32 is_net_byte_order, u64 v_min, u64 v_max)
 {
-  vlib_main_t *vm = pg->vlib_main;
+  vlib_main_t *vm = vlib_get_main ();
 
   while (n_buffers >= 4)
     {
@@ -245,7 +247,7 @@ do_set_increment (pg_main_t * pg,
 		  u32 is_net_byte_order,
 		  u32 want_sum, u64 * sum_result, u64 v_min, u64 v_max, u64 v)
 {
-  vlib_main_t *vm = pg->vlib_main;
+  vlib_main_t *vm = vlib_get_main ();
   u64 sum = 0;
 
   ASSERT (v >= v_min && v <= v_max);
@@ -340,7 +342,7 @@ do_set_random (pg_main_t * pg,
 	       u32 is_net_byte_order,
 	       u32 want_sum, u64 * sum_result, u64 v_min, u64 v_max)
 {
-  vlib_main_t *vm = pg->vlib_main;
+  vlib_main_t *vm = vlib_get_main ();
   u64 v_diff = v_max - v_min + 1;
   u64 r_mask = max_pow2 (v_diff) - 1;
   u64 v0, v1;
@@ -531,7 +533,7 @@ do_setbits_fixed (pg_main_t * pg,
 		  u32 n_bits,
 		  u32 byte_offset, u64 v_min, u64 v_max, u64 mask, u32 shift)
 {
-  vlib_main_t *vm = pg->vlib_main;
+  vlib_main_t *vm = vlib_get_main ();
 
   while (n_buffers >= 4)
     {
@@ -584,7 +586,7 @@ do_setbits_increment (pg_main_t * pg,
 		      u32 byte_offset,
 		      u64 v_min, u64 v_max, u64 v, u64 mask, u32 shift)
 {
-  vlib_main_t *vm = pg->vlib_main;
+  vlib_main_t *vm = vlib_get_main ();
 
   ASSERT (v >= v_min && v <= v_max);
 
@@ -662,7 +664,7 @@ do_setbits_random (pg_main_t * pg,
 		   u32 n_bits,
 		   u32 byte_offset, u64 v_min, u64 v_max, u64 mask, u32 shift)
 {
-  vlib_main_t *vm = pg->vlib_main;
+  vlib_main_t *vm = vlib_get_main ();
   u64 v_diff = v_max - v_min + 1;
   u64 r_mask = max_pow2 (v_diff) - 1;
   u64 v0, v1;
@@ -936,7 +938,7 @@ pg_generate_fix_multi_buffer_lengths (pg_main_t * pg,
 				      pg_stream_t * s,
 				      u32 * buffers, u32 n_buffers)
 {
-  vlib_main_t *vm = pg->vlib_main;
+  vlib_main_t *vm = vlib_get_main ();
   pg_buffer_index_t *pbi;
   uword n_bytes_left;
   static u32 *unused_buffers = 0;
@@ -1044,7 +1046,7 @@ pg_set_next_buffer_pointers (pg_main_t * pg,
 			     pg_stream_t * s,
 			     u32 * buffers, u32 * next_buffers, u32 n_buffers)
 {
-  vlib_main_t *vm = pg->vlib_main;
+  vlib_main_t *vm = vlib_get_main ();
 
   while (n_buffers >= 4)
     {
@@ -1235,7 +1237,7 @@ pg_stream_fill_helper (pg_main_t * pg,
 		       pg_buffer_index_t * bi,
 		       u32 * buffers, u32 * next_buffers, u32 n_alloc)
 {
-  vlib_main_t *vm = pg->vlib_main;
+  vlib_main_t *vm = vlib_get_main ();
   vlib_buffer_free_list_t *f;
   uword is_start_of_packet = bi == s->buffer_indices;
   u32 n_allocated;
@@ -1475,7 +1477,7 @@ pg_input_trace (pg_main_t * pg,
 		vlib_node_runtime_t * node,
 		pg_stream_t * s, u32 * buffers, u32 n_buffers)
 {
-  vlib_main_t *vm = pg->vlib_main;
+  vlib_main_t *vm = vlib_get_main ();
   u32 *b, n_left, stream_index, next_index;
 
   n_left = n_buffers;
@@ -1546,10 +1548,17 @@ pg_generate_packets (vlib_node_runtime_t * node,
 		     pg_main_t * pg,
 		     pg_stream_t * s, uword n_packets_to_generate)
 {
-  vlib_main_t *vm = pg->vlib_main;
+  vlib_main_t *vm = vlib_get_main ();
   u32 *to_next, n_this_frame, n_left, n_trace, n_packets_in_fifo;
   uword n_packets_generated;
   pg_buffer_index_t *bi, *bi0;
+  u32 next_index = s->next_index;
+  vnet_feature_main_t *fm = &feature_main;
+  vnet_feature_config_main_t *cm;
+  u8 feature_arc_index = fm->device_input_feature_arc_index;
+  cm = &fm->feature_config_mains[feature_arc_index];
+  u32 current_config_index = ~(u32) 0;
+  int i;
 
   bi0 = s->buffer_indices;
 
@@ -1557,11 +1566,20 @@ pg_generate_packets (vlib_node_runtime_t * node,
   n_packets_to_generate = clib_min (n_packets_in_fifo, n_packets_to_generate);
   n_packets_generated = 0;
 
+  if (PREDICT_FALSE
+      (vnet_have_features (feature_arc_index, s->sw_if_index[VLIB_RX])))
+    {
+      current_config_index =
+	vec_elt (cm->config_index_by_sw_if_index, s->sw_if_index[VLIB_RX]);
+      vnet_get_config_data (&cm->config_main, &current_config_index,
+			    &next_index, 0);
+    }
+
   while (n_packets_to_generate > 0)
     {
       u32 *head, *start, *end;
 
-      vlib_get_next_frame (vm, node, s->next_index, to_next, n_left);
+      vlib_get_next_frame (vm, node, next_index, to_next, n_left);
 
       n_this_frame = n_packets_to_generate;
       if (n_this_frame > n_left)
@@ -1583,6 +1601,18 @@ pg_generate_packets (vlib_node_runtime_t * node,
       vec_foreach (bi, s->buffer_indices)
 	clib_fifo_advance_head (bi->buffer_fifo, n_this_frame);
 
+      if (current_config_index != ~(u32) 0)
+	for (i = 0; i < n_this_frame; i++)
+	  {
+	    vlib_buffer_t *b;
+	    b = vlib_get_buffer (vm, to_next[i]);
+	    vnet_buffer (b)->device_input_feat.saved_next_index =
+	      s->next_index;
+	    vnet_buffer (b)->device_input_feat.buffer_advance = 0;
+	    b->current_config_index = current_config_index;
+	    b->feature_arc_index = feature_arc_index;
+	  }
+
       n_trace = vlib_get_trace_count (vm, node);
       if (n_trace > 0)
 	{
@@ -1593,7 +1623,7 @@ pg_generate_packets (vlib_node_runtime_t * node,
       n_packets_to_generate -= n_this_frame;
       n_packets_generated += n_this_frame;
       n_left -= n_this_frame;
-      vlib_put_next_frame (vm, node, s->next_index, n_left);
+      vlib_put_next_frame (vm, node, next_index, n_left);
     }
 
   return n_packets_generated;
@@ -1602,7 +1632,7 @@ pg_generate_packets (vlib_node_runtime_t * node,
 static uword
 pg_input_stream (vlib_node_runtime_t * node, pg_main_t * pg, pg_stream_t * s)
 {
-  vlib_main_t *vm = pg->vlib_main;
+  vlib_main_t *vm = vlib_get_main ();
   uword n_packets;
   f64 time_now, dt;
 
@@ -1653,10 +1683,15 @@ pg_input (vlib_main_t * vm, vlib_node_runtime_t * node, vlib_frame_t * frame)
   uword i;
   pg_main_t *pg = &pg_main;
   uword n_packets = 0;
+  u32 num_workers = vlib_num_workers ();
+  u32 cpu_index = os_get_cpu_number ();
 
   /* *INDENT-OFF* */
   clib_bitmap_foreach (i, pg->enabled_streams, ({
-    n_packets += pg_input_stream (node, pg, vec_elt_at_index (pg->streams, i));
+    pg_stream_t *s = vec_elt_at_index (pg->streams, i);
+    if (num_workers == 0 ||
+	vlib_get_worker_cpu_index (s->worker_index) == cpu_index)
+      n_packets += pg_input_stream (node, pg, s);
   }));
   /* *INDENT-ON* */
 
@@ -1673,6 +1708,8 @@ VLIB_REGISTER_NODE (pg_input_node) = {
 
   /* Input node will be left disabled until a stream is active. */
   .state = VLIB_NODE_STATE_DISABLED,
+  .n_next_nodes = VNET_DEVICE_INPUT_N_NEXT_NODES,
+  .next_nodes = VNET_DEVICE_INPUT_NEXT_NODES,
 };
 /* *INDENT-ON* */
 
