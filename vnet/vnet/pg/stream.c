@@ -42,6 +42,7 @@
 #include <vnet/ethernet/ethernet.h>
 #include <vnet/ip/ip.h>
 #include <vnet/mpls/mpls.h>
+#include <vnet/devices/devices.h>
 
 /* Mark stream active or inactive. */
 void
@@ -65,8 +66,10 @@ pg_stream_enable_disable (pg_main_t * pg, pg_stream_t * s, int want_enabled)
 
   ASSERT (!pool_is_free (pg->streams, s));
 
-  pg->enabled_streams
-    = clib_bitmap_set (pg->enabled_streams, s - pg->streams, want_enabled);
+  vec_validate (pg->enabled_streams, s->worker_index);
+  pg->enabled_streams[s->worker_index] =
+    clib_bitmap_set (pg->enabled_streams[s->worker_index], s - pg->streams,
+		     want_enabled);
 
   if (want_enabled)
     {
@@ -83,7 +86,8 @@ pg_stream_enable_disable (pg_main_t * pg, pg_stream_t * s, int want_enabled)
     vm = vlib_get_main ();
 
   vlib_node_set_state (vm, pg_input_node.index,
-		       (clib_bitmap_is_zero (pg->enabled_streams) ?
+		       (clib_bitmap_is_zero
+			(pg->enabled_streams[s->worker_index]) ?
 			VLIB_NODE_STATE_DISABLED : VLIB_NODE_STATE_POLLING));
 
   s->packet_accumulator = 0;
@@ -456,7 +460,8 @@ pg_stream_add (pg_main_t * pg, pg_stream_t * s_init)
   }
 
   /* Connect the graph. */
-  s->next_index = vlib_node_add_next (vm, pg_input_node.index, s->node_index);
+  s->next_index = vlib_node_add_next (vm, device_input_node.index,
+				      s->node_index);
 }
 
 void
