@@ -18,6 +18,8 @@
 #include <vnet/ip/ip.h>
 #include <vnet/tcp/tcp_packet.h>
 
+extern vlib_node_registration_t tcp4_input_node;
+
 static clib_error_t *
 tcp_init (vlib_main_t * vm)
 {
@@ -33,8 +35,10 @@ tcp_init (vlib_main_t * vm)
       if (pi == 0)
           return clib_error_return (0, "TCP protocol info AWOL");
       pi->format_header = format_tcp_header;
-      //pi->unformat_pg_edit = unformat_pg_tcp_header;
+      pi->unformat_pg_edit = unformat_pg_tcp_header;
     }
+
+  ip4_register_protocol (IP_PROTOCOL_TCP, tcp4_input_node.index);
 
   return 0;
 }

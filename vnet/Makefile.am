@@ -293,6 +293,7 @@ libvnet_la_SOURCES +=				\
  vnet/ip/lookup.c				\
  vnet/ip/ping.c					\
  vnet/ip/punt.c					\
+ vnet/ip/tcp_pg.c				\
  vnet/ip/udp_format.c				\
  vnet/ip/udp_init.c				\
  vnet/ip/udp_local.c				\
@@ -401,6 +402,7 @@ endif
 libvnet_la_SOURCES +=							\
  vnet/tcp/tcp_format.c							\
  vnet/tcp/tcp_init.c							\
+ vnet/tcp/tcp_syn_filter4.c						\
  vnet/tcp/tcp_timer.c							\
  vnet/tcp/tcp.c
 

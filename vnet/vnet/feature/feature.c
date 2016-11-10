@@ -73,6 +73,7 @@ vnet_feature_init (vlib_main_t * vm)
       freg = freg->next;
     }
 
+  areg = fm->next_arc;
   while (areg)
     {
       clib_error_t *error;
@@ -163,7 +164,7 @@ vnet_get_feature_index (u8 arc, const char *s)
   return reg->feature_index_u32;
 }
 
-void
+int
 vnet_feature_enable_disable (const char *arc_name, const char *node_name,
 			     u32 sw_if_index, int enable_disable,
 			     void *feature_config, u32 n_feature_config_bytes)
@@ -176,13 +177,14 @@ vnet_feature_enable_disable (const char *arc_name, const char *node_name,
   arc_index = vnet_get_feature_arc_index (arc_name);
 
   if (arc_index == (u8) ~ 0)
-    return;
+    return VNET_API_ERROR_INVALID_VALUE;
 
   cm = &fm->feature_config_mains[arc_index];
   vec_validate_init_empty (cm->config_index_by_sw_if_index, sw_if_index, ~0);
   feature_index = vnet_get_feature_index (arc_index, node_name);
   if (feature_index == ~0)
-    return;
+    return VNET_API_ERROR_INVALID_VALUE_2;
+  
   ci = cm->config_index_by_sw_if_index[sw_if_index];
 
   ci = (enable_disable
@@ -195,6 +197,7 @@ vnet_feature_enable_disable (const char *arc_name, const char *node_name,
   vnet_config_update_feature_count (fm, arc_index, sw_if_index,
 				    enable_disable);
 
+  return 0;
 }
 
 

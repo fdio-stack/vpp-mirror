@@ -275,7 +275,6 @@ tcp46_input_inline (vlib_main_t * vm,
                     int is_ip4)
 {
   __attribute__((unused)) u32 n_left_from, next_index, * from, * to_next;
-  __attribute__ ((unused)) word n_no_listener = 0;
 
   from = vlib_frame_vector_args (from_frame);
   n_left_from = from_frame->n_vectors;
@@ -359,7 +358,8 @@ tcp46_input_inline (vlib_main_t * vm,
           b0 = vlib_get_buffer (vm, bi0);
 
           /* FIXME DO STUFF */
-          next0 = 0;
+          next0 = TCP_INPUT_NEXT_DROP;
+          b0->error = node->errors[TCP_ERROR_NO_LISTENER];
 
           if (PREDICT_FALSE(b0->flags & VLIB_BUFFER_IS_TRACED))
             {
@@ -373,7 +373,6 @@ tcp46_input_inline (vlib_main_t * vm,
       vlib_put_next_frame (vm, node, next_index, n_left_to_next);
     }
 
-  vlib_error_count(vm, node->node_index, TCP_ERROR_NO_LISTENER, n_no_listener);
   return from_frame->n_vectors;
 }
 
