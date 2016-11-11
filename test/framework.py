@@ -1,7 +1,5 @@
 #!/usr/bin/env python
 
-from abc import *
-import os
 import subprocess
 import unittest
 import tempfile
@@ -13,6 +11,7 @@ from threading import Thread
 from inspect import getdoc
 from hook import StepHook, PollHook
 from vpp_pg_interface import VppPGInterface
+from vpp_lo_interface import VppLoInterface
 from vpp_papi_provider import VppPapiProvider
 from scapy.packet import Raw
 from log import *
@@ -277,11 +276,11 @@ class VppTestCase(unittest.TestCase):
     def tearDown(self):
         """ Show various debug prints after each test """
         if not self.vpp_dead:
-            self.logger.info(self.vapi.cli("show int"))
-            self.logger.info(self.vapi.cli("show trace"))
-            self.logger.info(self.vapi.cli("show hardware"))
-            self.logger.info(self.vapi.cli("show error"))
-            self.logger.info(self.vapi.cli("show run"))
+            self.logger.info(self.vapi.ppcli("show int"))
+            self.logger.debug(self.vapi.cli("show trace"))
+            self.logger.info(self.vapi.ppcli("show hardware"))
+            self.logger.info(self.vapi.ppcli("show error"))
+            self.logger.info(self.vapi.ppcli("show run"))
 
     def setUp(self):
         """ Clear trace before running each test"""
@@ -328,6 +327,22 @@ class VppTestCase(unittest.TestCase):
             setattr(cls, intf.name, intf)
             result.append(intf)
         cls.pg_interfaces = result
+        return result
+
+    @classmethod
+    def create_loopback_interfaces(cls, interfaces):
+        """
+        Create loopback interfaces
+
+        :param interfaces: iterable indexes of the interfaces
+
+        """
+        result = []
+        for i in interfaces:
+            intf = VppLoInterface(cls, i)
+            setattr(cls, intf.name, intf)
+            result.append(intf)
+        cls.lo_interfaces = result
         return result
 
     @staticmethod
