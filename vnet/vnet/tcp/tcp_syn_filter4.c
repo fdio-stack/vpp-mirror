@@ -18,9 +18,21 @@
 #include <vnet/pg/pg.h>
 #include <vppinfra/error.h>
 #include <vnet/feature/feature.h>
+#include <vnet/ip/ip.h>
+#include <vppinfra/xxhash.h>
 
-typedef struct {
+typedef struct
+{
+  f64 next_reset;
+  f64 reset_interval;
+  u8 * syn_counts;
+} syn_filter4_runtime_t;
+
+typedef struct 
+{
   u32 next_index;
+  int not_a_syn;
+  u8 filter_value;
 } syn_filter4_trace_t;
 
 /* packet trace format function */
@@ -30,16 +42,20 @@ static u8 * format_syn_filter4_trace (u8 * s, va_list * args)
   CLIB_UNUSED (vlib_node_t * node) = va_arg (*args, vlib_node_t *);
   syn_filter4_trace_t * t = va_arg (*args, syn_filter4_trace_t *);
   
-  s = format (s, "SYN_FILTER4: next index %d\n",
-              t->next_index);
+  s = format (s, "SYN_FILTER4: next index %d, %s",
+              t->next_index, t->not_a_syn ? "not a syn" : "syn");
+  if (t->not_a_syn == 0)
+    s = format (s, ", filter value %d\n", t->filter_value);
+  else
+    s = format (s, "\n");
   return s;
 }
 
 static vlib_node_registration_t syn_filter4_node;
 
 #define foreach_syn_filter_error                \
-_(DROPPED, "TCP SYN packets dropped")           \
-_(PROCESSED, "Packets processed")
+_(THROTTLED, "TCP SYN packet throttle drops")   \
+_(OK, "TCP SYN packets passed")
 
 typedef enum {
 #define _(sym,str) SYN_FILTER_ERROR_##sym,
@@ -68,15 +84,22 @@ syn_filter4_node_fn (vlib_main_t * vm,
 {
   u32 n_left_from, * from, * to_next;
   syn_filter_next_t next_index;
-  u32 pkts_processed = 0;
-  u32 pkts_dropped = 0;
+  u32 ok_syn_packets = 0;
   vnet_feature_main_t *fm = &feature_main;
   u8 arc_index = vnet_feat_arc_ip4_local.feature_arc_index;
   vnet_feature_config_main_t *cm = &fm->feature_config_mains[arc_index];
+  syn_filter4_runtime_t * rt = (syn_filter4_runtime_t *)node->runtime_data;
+  f64 now = vlib_time_now(vm);
 
   from = vlib_frame_vector_args (frame);
   n_left_from = frame->n_vectors;
   next_index = node->cached_next_index;
+
+  if (now > rt->next_reset)
+    {
+      memset (rt->syn_counts, 0, vec_len(rt->syn_counts));
+      rt->next_reset = now + rt->reset_interval;
+    }
 
   while (n_left_from > 0)
     {
@@ -85,92 +108,229 @@ syn_filter4_node_fn (vlib_main_t * vm,
       vlib_get_next_frame (vm, node, next_index,
 			   to_next, n_left_to_next);
 
-#if 0
-      while (n_left_from >= 4 && n_left_to_next >= 2)
+      while (n_left_from >= 8 && n_left_to_next >= 4)
 	{
-          u32 next0, next1;
-          u32 sw_if_index0, sw_if_index1;
-          u8 tmp0[6], tmp1[6];
-          ethernet_header_t *en0, *en1;
-          u32 bi0, bi1;
-	  vlib_buffer_t * b0, * b1;
+          u32 bi0, bi1, bi2, bi3;
+	  vlib_buffer_t * b0, * b1, * b2, * b3;
+          u32 next0, next1, next2, next3;
+          ip4_header_t * ip0, * ip1, * ip2, * ip3;
+          tcp_header_t * tcp0, * tcp1, * tcp2, * tcp3;
+          u32 not_a_syn0, not_a_syn1, not_a_syn2, not_a_syn3;
+          u64 hash0, hash1, hash2, hash3;
+          u8 *c0, *c1, *c2, *c3;
+
           
 	  /* Prefetch next iteration. */
 	  {
-	    vlib_buffer_t * p2, * p3;
+	    vlib_buffer_t * p4, * p5, * p6, * p7;
             
-	    p2 = vlib_get_buffer (vm, from[2]);
-	    p3 = vlib_get_buffer (vm, from[3]);
-            
-	    vlib_prefetch_buffer_header (p2, LOAD);
-	    vlib_prefetch_buffer_header (p3, LOAD);
+	    p4 = vlib_get_buffer (vm, from[4]);
+	    p5 = vlib_get_buffer (vm, from[5]);
+	    p6 = vlib_get_buffer (vm, from[6]);
+	    p7 = vlib_get_buffer (vm, from[7]);
 
-	    CLIB_PREFETCH (p2->data, CLIB_CACHE_LINE_BYTES, STORE);
-	    CLIB_PREFETCH (p3->data, CLIB_CACHE_LINE_BYTES, STORE);
+	    vlib_prefetch_buffer_header (p4, LOAD);
+	    vlib_prefetch_buffer_header (p5, LOAD);
+	    vlib_prefetch_buffer_header (p6, LOAD);
+	    vlib_prefetch_buffer_header (p7, LOAD);
+
+	    CLIB_PREFETCH (p4->data, CLIB_CACHE_LINE_BYTES, STORE);
+	    CLIB_PREFETCH (p5->data, CLIB_CACHE_LINE_BYTES, STORE);
+	    CLIB_PREFETCH (p6->data, CLIB_CACHE_LINE_BYTES, STORE);
+	    CLIB_PREFETCH (p7->data, CLIB_CACHE_LINE_BYTES, STORE);
 	  }
 
           /* speculatively enqueue b0 and b1 to the current next frame */
 	  to_next[0] = bi0 = from[0];
 	  to_next[1] = bi1 = from[1];
-	  from += 2;
-	  to_next += 2;
-	  n_left_from -= 2;
-	  n_left_to_next -= 2;
+	  to_next[2] = bi2 = from[2];
+	  to_next[3] = bi3 = from[3];
+	  from += 4;
+	  to_next += 4;
+	  n_left_from -= 4;
+	  n_left_to_next -= 4;
 
 	  b0 = vlib_get_buffer (vm, bi0);
 	  b1 = vlib_get_buffer (vm, bi1);
+	  b2 = vlib_get_buffer (vm, bi2);
+	  b3 = vlib_get_buffer (vm, bi3);
 
-          ASSERT (b0->current_data == 0);
-          ASSERT (b1->current_data == 0);
+          vnet_get_config_data
+              (&cm->config_main, &b0->current_config_index,
+               &next0, 0 /* sizeof (c0[0]) */);
+          vnet_get_config_data
+              (&cm->config_main, &b1->current_config_index,
+               &next1, 0 /* sizeof (c0[0]) */);
+          vnet_get_config_data
+              (&cm->config_main, &b2->current_config_index,
+               &next2, 0 /* sizeof (c0[0]) */);
+          vnet_get_config_data
+              (&cm->config_main, &b3->current_config_index,
+               &next3, 0 /* sizeof (c0[0]) */);
+
+          /* Not TCP? */
+          ip0 = vlib_buffer_get_current (b0);
+          if (ip0->protocol != IP_PROTOCOL_TCP)
+              goto trace00;
           
-          en0 = vlib_buffer_get_current (b0);
-          en1 = vlib_buffer_get_current (b1);
-
-          sw_if_index0 = vnet_buffer(b0)->sw_if_index[VLIB_RX];
-          sw_if_index1 = vnet_buffer(b1)->sw_if_index[VLIB_RX];
-
-          /* Send pkt back out the RX interface */
-          vnet_buffer(b0)->sw_if_index[VLIB_TX] = sw_if_index0;
-          vnet_buffer(b1)->sw_if_index[VLIB_TX] = sw_if_index1;
-
-          pkts_swapped += 2;
-
-          if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE)))
+          tcp0 = ip4_next_header (ip0);
+          /* 
+           * Not a SYN? 
+           * $$$$ hack: the TCP bitfield flags seem not to compile
+           * correct code.
+           */
+          if (PREDICT_TRUE (!(tcp0->flags & 0x2)))
+              goto trace00;
+          
+          not_a_syn0 = 0;
+          hash0 = clib_xxhash ((u64) ip0->src_address.as_u32);
+          c0 = &rt->syn_counts[hash0 & (_vec_len(rt->syn_counts)-1)];
+          if (PREDICT_FALSE (*c0 >= 0x80))
             {
-              if (b0->flags & VLIB_BUFFER_IS_TRACED) 
-                {
-                    syn_filter4_trace_t *t = 
-                      vlib_add_trace (vm, node, b0, sizeof (*t));
-                    t->next_index = next0;
-                    clib_memcpy (t->new_src_mac, en0->src_address,
-                                 sizeof (t->new_src_mac));
-                    clib_memcpy (t->new_dst_mac, en0->dst_address,
-                                 sizeof (t->new_dst_mac));
-                  }
-                if (b1->flags & VLIB_BUFFER_IS_TRACED) 
-                  {
-                    syn_filter4_trace_t *t = 
-                      vlib_add_trace (vm, node, b1, sizeof (*t));
-                    t->next_index = next1;
-                    clib_memcpy (t->new_src_mac, en1->src_address,
-                                 sizeof (t->new_src_mac));
-                    clib_memcpy (t->new_dst_mac, en1->dst_address,
-                                 sizeof (t->new_dst_mac));
-                  }
-              }
-            
-            /* verify speculative enqueues, maybe switch current next frame */
-            vlib_validate_buffer_enqueue_x2 (vm, node, next_index,
-                                             to_next, n_left_to_next,
-                                             bi0, bi1, next0, next1);
+              next0 = SYN_FILTER_NEXT_DROP;
+              b0->error = node->errors[SYN_FILTER_ERROR_THROTTLED];
+              goto trace00;
+            }
+          *c0 += 1;
+          ok_syn_packets++;
+
+        trace00:
+          if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) 
+                            && (b0->flags & VLIB_BUFFER_IS_TRACED))) 
+          {
+              syn_filter4_trace_t *t = 
+                  vlib_add_trace (vm, node, b0, sizeof (*t));
+              t->not_a_syn = not_a_syn0;
+              t->next_index = next0;
+              t->filter_value = not_a_syn0 ? 0 : *c0;
+          }
+
+          /* Not TCP? */
+          ip1 = vlib_buffer_get_current (b1);
+          if (ip1->protocol != IP_PROTOCOL_TCP)
+              goto trace01;
+          
+          tcp1 = ip4_next_header (ip1);
+          /* 
+           * Not a SYN? 
+           * $$$$ hack: the TCP bitfield flags seem not to compile
+           * correct code.
+           */
+          if (PREDICT_TRUE (!(tcp1->flags & 0x2)))
+              goto trace01;
+          
+          not_a_syn1 = 0;
+          hash1 = clib_xxhash ((u64) ip1->src_address.as_u32);
+          c1 = &rt->syn_counts[hash1 & (_vec_len(rt->syn_counts)-1)];
+          if (PREDICT_FALSE (*c1 >= 0x80))
+            {
+              next1 = SYN_FILTER_NEXT_DROP;
+              b1->error = node->errors[SYN_FILTER_ERROR_THROTTLED];
+              goto trace01;
+            }
+          *c1 += 1;
+          ok_syn_packets++;
+
+        trace01:
+          if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) 
+                            && (b1->flags & VLIB_BUFFER_IS_TRACED))) 
+          {
+              syn_filter4_trace_t *t = 
+                  vlib_add_trace (vm, node, b1, sizeof (*t));
+              t->not_a_syn = not_a_syn1;
+              t->next_index = next1;
+              t->filter_value = not_a_syn1 ? 0 : *c1;
+          }
+
+          /* Not TCP? */
+          ip2 = vlib_buffer_get_current (b2);
+          if (ip2->protocol != IP_PROTOCOL_TCP)
+              goto trace02;
+          
+          tcp2 = ip4_next_header (ip2);
+          /* 
+           * Not a SYN? 
+           * $$$$ hack: the TCP bitfield flags seem not to compile
+           * correct code.
+           */
+          if (PREDICT_TRUE (!(tcp2->flags & 0x2)))
+              goto trace02;
+          
+          not_a_syn2 = 0;
+          hash2 = clib_xxhash ((u64) ip2->src_address.as_u32);
+          c2 = &rt->syn_counts[hash2 & (_vec_len(rt->syn_counts)-1)];
+          if (PREDICT_FALSE (*c2 >= 0x80))
+            {
+              next2 = SYN_FILTER_NEXT_DROP;
+              b2->error = node->errors[SYN_FILTER_ERROR_THROTTLED];
+              goto trace02;
+            }
+          *c2 += 1;
+          ok_syn_packets++;
+
+        trace02:
+          if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) 
+                            && (b2->flags & VLIB_BUFFER_IS_TRACED))) 
+          {
+              syn_filter4_trace_t *t = 
+                  vlib_add_trace (vm, node, b2, sizeof (*t));
+              t->not_a_syn = not_a_syn2;
+              t->next_index = next2;
+              t->filter_value = not_a_syn2 ? 0 : *c2;
+          }
+
+          /* Not TCP? */
+          ip3 = vlib_buffer_get_current (b3);
+          if (ip3->protocol != IP_PROTOCOL_TCP)
+              goto trace03;
+          
+          tcp3 = ip4_next_header (ip3);
+          /* 
+           * Not a SYN? 
+           * $$$$ hack: the TCP bitfield flags seem not to compile
+           * correct code.
+           */
+          if (PREDICT_TRUE (!(tcp3->flags & 0x2)))
+              goto trace03;
+          
+          not_a_syn3 = 0;
+          hash3 = clib_xxhash ((u64) ip3->src_address.as_u32);
+          c3 = &rt->syn_counts[hash3 & (_vec_len(rt->syn_counts)-1)];
+          if (PREDICT_FALSE (*c3 >= 0x80))
+            {
+              next3 = SYN_FILTER_NEXT_DROP;
+              b3->error = node->errors[SYN_FILTER_ERROR_THROTTLED];
+              goto trace03;
+            }
+          *c3 += 1;
+          ok_syn_packets++;
+
+        trace03:
+          if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) 
+                            && (b3->flags & VLIB_BUFFER_IS_TRACED))) 
+          {
+              syn_filter4_trace_t *t = 
+                  vlib_add_trace (vm, node, b3, sizeof (*t));
+              t->not_a_syn = not_a_syn3;
+              t->next_index = next3;
+              t->filter_value = not_a_syn3 ? 0 : *c3;
+          }
+	  vlib_validate_buffer_enqueue_x4 (vm, node, next_index,
+					   to_next, n_left_to_next,
+					   bi0, bi1, bi2, bi3,
+                                           next0, next1, next2, next3);
         }
-#endif 
 
       while (n_left_from > 0 && n_left_to_next > 0)
 	{
           u32 bi0;
 	  vlib_buffer_t * b0;
           u32 next0;
+          ip4_header_t * ip0;
+          tcp_header_t * tcp0;
+          u32 not_a_syn0 = 1;
+          u32 hash0;
+          u8 *c0;
 
           /* speculatively enqueue b0 to the current next frame */
 	  bi0 = from[0];
@@ -186,17 +346,43 @@ syn_filter4_node_fn (vlib_main_t * vm,
               (&cm->config_main, &b0->current_config_index,
                &next0, 0 /* sizeof (c0[0]) */);
 
-          /* $$$ syn filter right here */
+          /* Not TCP? */
+          ip0 = vlib_buffer_get_current (b0);
+          if (ip0->protocol != IP_PROTOCOL_TCP)
+              goto trace0;
+          
+          tcp0 = ip4_next_header (ip0);
+          /* 
+           * Not a SYN? 
+           * $$$$ hack: the TCP bitfield flags seem not to compile
+           * correct code.
+           */
+          if (PREDICT_TRUE (!(tcp0->flags & 0x2)))
+              goto trace0;
+          
+          not_a_syn0 = 0;
+          hash0 = clib_xxhash ((u64) ip0->src_address.as_u32);
+          c0 = &rt->syn_counts[hash0 & (_vec_len(rt->syn_counts)-1)];
+          if (PREDICT_FALSE (*c0 >= 0x80))
+            {
+              next0 = SYN_FILTER_NEXT_DROP;
+              b0->error = node->errors[SYN_FILTER_ERROR_THROTTLED];
+              goto trace0;
+            }
+          *c0 += 1;
+          ok_syn_packets++;
+
+        trace0:
 
           if (PREDICT_FALSE((node->flags & VLIB_NODE_FLAG_TRACE) 
                             && (b0->flags & VLIB_BUFFER_IS_TRACED))) 
           {
               syn_filter4_trace_t *t = 
                   vlib_add_trace (vm, node, b0, sizeof (*t));
+              t->not_a_syn = not_a_syn0;
               t->next_index = next0;
+              t->filter_value = not_a_syn0 ? 0 : *c0;
           }
-            
-          pkts_processed += 1;
 
           /* verify speculative enqueue, maybe switch current next frame */
 	  vlib_validate_buffer_enqueue_x1 (vm, node, next_index,
@@ -208,9 +394,7 @@ syn_filter4_node_fn (vlib_main_t * vm,
     }
 
   vlib_node_increment_counter (vm, syn_filter4_node.index, 
-                               SYN_FILTER_ERROR_PROCESSED, pkts_processed);
-  vlib_node_increment_counter (vm, syn_filter4_node.index, 
-                               SYN_FILTER_ERROR_DROPPED, pkts_dropped);
+                               SYN_FILTER_ERROR_OK, ok_syn_packets);
   return frame->n_vectors;
 }
 
@@ -221,6 +405,7 @@ VLIB_REGISTER_NODE (syn_filter4_node, static) = {
   .format_trace = format_syn_filter4_trace,
   .type = VLIB_NODE_TYPE_INTERNAL,
   
+  .runtime_data_bytes = sizeof (syn_filter4_runtime_t),
   .n_errors = ARRAY_LEN(syn_filter4_error_strings),
   .error_strings = syn_filter4_error_strings,
 
@@ -231,6 +416,8 @@ VLIB_REGISTER_NODE (syn_filter4_node, static) = {
     [SYN_FILTER_NEXT_DROP] = "error-drop",
   },
 };
+
+VLIB_NODE_FUNCTION_MULTIARCH (syn_filter4_node, syn_filter4_node_fn);
 
 VNET_FEATURE_INIT (syn_filter_4, static) = {
   .arc_name = "ip4-local",
@@ -254,6 +441,22 @@ int syn_filter_enable_disable (u32 sw_if_index, int enable_disable)
   if (sw->type != VNET_SW_INTERFACE_TYPE_HARDWARE)
     return VNET_API_ERROR_INVALID_SW_IF_INDEX;
   
+  if (enable_disable)
+    {
+      vlib_main_t * vm = vlib_get_main();
+      syn_filter4_runtime_t * rt;
+
+      rt = vlib_node_get_runtime_data (vm, syn_filter4_node.index);
+      vec_validate (rt->syn_counts, 1023);
+      /* 
+       * Given perfect disperson / optimal hashing results:
+       * Allow 128k (successful) syns/sec. 1024, buckets each of which
+       * absorb 128 syns before filtering. Reset table once a second.
+       * Reality bites, lets try resetting once every 100ms.
+       */
+      rt->reset_interval = 0.1; /* reset interval in seconds */
+    }
+
   rv = vnet_feature_enable_disable ("ip4-local", "syn-filter-4",
                                     sw_if_index, enable_disable, 0, 0);
 
