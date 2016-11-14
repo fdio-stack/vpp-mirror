@@ -90,6 +90,8 @@ syn_filter4_node_fn (vlib_main_t * vm,
   vnet_feature_config_main_t *cm = &fm->feature_config_mains[arc_index];
   syn_filter4_runtime_t * rt = (syn_filter4_runtime_t *)node->runtime_data;
   f64 now = vlib_time_now(vm);
+  /* Shut up spurious gcc warnings. */
+  u8 *c0=0, *c1=0, *c2=0, *c3=0;
 
   from = vlib_frame_vector_args (frame);
   n_left_from = frame->n_vectors;
@@ -115,11 +117,9 @@ syn_filter4_node_fn (vlib_main_t * vm,
           u32 next0, next1, next2, next3;
           ip4_header_t * ip0, * ip1, * ip2, * ip3;
           tcp_header_t * tcp0, * tcp1, * tcp2, * tcp3;
-          u32 not_a_syn0, not_a_syn1, not_a_syn2, not_a_syn3;
+          u32 not_a_syn0 = 1, not_a_syn1 = 1, not_a_syn2 = 1, not_a_syn3 = 1;
           u64 hash0, hash1, hash2, hash3;
-          u8 *c0, *c1, *c2, *c3;
 
-          
 	  /* Prefetch next iteration. */
 	  {
 	    vlib_buffer_t * p4, * p5, * p6, * p7;
