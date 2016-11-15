@@ -20,7 +20,7 @@
  */
 
 /** construct a stop-timer handle */
-static inline u32 
+static inline u32
 make_stop_timer_handle (u32 ring, u32 ring_offset, u32 index_in_slot)
 {
   u32 handle;
@@ -28,7 +28,7 @@ make_stop_timer_handle (u32 ring, u32 ring_offset, u32 index_in_slot)
   ASSERT (ring < TW_N_RINGS);
   ASSERT (ring_offset < TW_SLOTS_PER_RING);
   ASSERT (index_in_slot < (1<<23));
-  
+
   /* handle: 1 bit ring id | 9 bit ring_offset | 22 bit index_in_slot */
 
   handle = (ring<<31) | (ring_offset << 22) | index_in_slot;
@@ -43,7 +43,7 @@ make_internal_timer_handle (u32 pool_index, u32 timer_id)
 
   ASSERT (timer_id < 16);
   ASSERT (pool_index < (1<<28));
-  
+
   handle = (timer_id << 28) | (pool_index);
   return handle;
 }
@@ -86,7 +86,7 @@ u32 tcp_timer_start (tcp_timer_wheel_t * tw, u32 pool_index, u32 timer_id,
       ts = &tw->w[TW_RING_SLOW][slow_ring_offset];
 
       index_in_slot = clib_bitmap_first_clear (ts->busy_slot_bitmap);
-      ts->busy_slot_bitmap = 
+      ts->busy_slot_bitmap =
         clib_bitmap_set (ts->busy_slot_bitmap, index_in_slot, 1);
 
       timer_handle = make_internal_timer_handle (pool_index, timer_id);
@@ -95,14 +95,14 @@ u32 tcp_timer_start (tcp_timer_wheel_t * tw, u32 pool_index, u32 timer_id,
       vec_validate (ts->fast_ring_offsets, index_in_slot);
 
       ts->timer_handles[index_in_slot] = timer_handle;
-      /* 
+      /*
        * Remember the fast ring offset, needed when we demote
        * the timer to the fast wheel
        */
       ts->fast_ring_offsets[index_in_slot] = fast_ring_offset;
 
       /* Return the user timer-cancellation handle */
-      rv = make_stop_timer_handle (TW_RING_SLOW, slow_ring_offset, 
+      rv = make_stop_timer_handle (TW_RING_SLOW, slow_ring_offset,
                                    index_in_slot);
       return rv;
     }
@@ -112,19 +112,19 @@ u32 tcp_timer_start (tcp_timer_wheel_t * tw, u32 pool_index, u32 timer_id,
 
   /* Allocate a handle element vector slot */
   index_in_slot = clib_bitmap_first_clear (ts->busy_slot_bitmap);
-  ts->busy_slot_bitmap = 
+  ts->busy_slot_bitmap =
     clib_bitmap_set (ts->busy_slot_bitmap, index_in_slot, 1);
 
   timer_handle = make_internal_timer_handle (pool_index, timer_id);
 
   vec_validate (ts->timer_handles, index_in_slot);
-  
+
   ts->timer_handles[index_in_slot] = timer_handle;
 
   /* Give the user a handle to cancel the timer */
-  rv = make_stop_timer_handle (TW_RING_FAST, fast_ring_offset, 
+  rv = make_stop_timer_handle (TW_RING_FAST, fast_ring_offset,
                                    index_in_slot);
-  
+
   return rv;
 }
 
@@ -150,13 +150,13 @@ void tcp_timer_stop (tcp_timer_wheel_t * tw, u32 pool_index, u32 timer_id,
 
   /* slot must be busy */
   ASSERT(clib_bitmap_get (ts->busy_slot_bitmap, index_in_slot) != 0);
-  
+
   /* handle must match */
   ASSERT(ts->timer_handles[index_in_slot]
          == make_internal_timer_handle (pool_index, timer_id));
 
   /* Cancel the timer */
-  ts->busy_slot_bitmap 
+  ts->busy_slot_bitmap
     = clib_bitmap_set (ts->busy_slot_bitmap, index_in_slot, 0);
 
 #if CLIB_DEBUG > 0
@@ -171,14 +171,14 @@ void tcp_timer_stop (tcp_timer_wheel_t * tw, u32 pool_index, u32 timer_id,
  * @brief Initialize a tcp timer wheel
  * @param tcp_timer_wheel_t * tw timer wheel object pointer
  * @param void * expired_timer_callback. Passed a u32 * vector of
- *   expired timer handles. 
+ *   expired timer handles.
  * @param void * new_stop_timer_handle_callback. Passed a vector of
- *   new_stop_timer_callback_args_t handles, corresponding to 
+ *   new_stop_timer_callback_args_t handles, corresponding to
  *   timers moved from the slow ring to the fast ring. Called approximately
  *   once every 51 seconds.
  */
-void 
-tcp_timer_wheel_init (tcp_timer_wheel_t * tw, 
+void
+tcp_timer_wheel_init (tcp_timer_wheel_t * tw,
                       void * expired_timer_callback,
                       void * new_stop_timer_handle_callback)
 {
@@ -239,7 +239,7 @@ void tcp_timer_expire_timers (tcp_timer_wheel_t *tw, f64 now)
   nticks = (now - tw->last_run_time) * 10.0;
   if (nticks == 0)
     return;
-  
+
   /* Remember when we ran, compute next runtime */
   tw->next_run_time = (now + 0.1);
   tw->last_run_time = now;
@@ -248,10 +248,10 @@ void tcp_timer_expire_timers (tcp_timer_wheel_t *tw, f64 now)
     {
       fast_wheel_index = tw->current_index[TW_RING_FAST];
 
-      /* 
+      /*
        * If we've been around the fast ring once,
        * process one slot in the slow ring before we handle
-       * the fast ring. 
+       * the fast ring.
        */
       if (PREDICT_FALSE(fast_wheel_index == TW_SLOTS_PER_RING))
         {
@@ -267,7 +267,7 @@ void tcp_timer_expire_timers (tcp_timer_wheel_t *tw, f64 now)
           vec_reset_length (tw->demoted_timer_offsets);
 
           clib_bitmap_foreach (timer_index, ts->busy_slot_bitmap,
-          ({                     
+          ({
             timer_handle = ts->timer_handles[timer_index];
             fast_ring_offset = ts->fast_ring_offsets[timer_index];
             vec_add1 (tw->demoted_timer_handles, timer_handle);
@@ -283,7 +283,7 @@ void tcp_timer_expire_timers (tcp_timer_wheel_t *tw, f64 now)
             ts->busy_slot_bitmap[j] = 0;
           vec_reset_length (ts->busy_slot_bitmap);
 
-          /* 
+          /*
            * Deal slow-ring elements into the fast ring.
            * Hand out new timer-cancellation handles
            */
@@ -291,8 +291,8 @@ void tcp_timer_expire_timers (tcp_timer_wheel_t *tw, f64 now)
           for (j = 0; j < vec_len (tw->demoted_timer_offsets); j++)
             {
               new_stop_timer_callback_args_t *a;
-              /* 
-               * By construction, the fast ring is processing slot 0 
+              /*
+               * By construction, the fast ring is processing slot 0
                */
               fast_ring_offset = tw->demoted_timer_offsets [j];
               timer_handle = tw->demoted_timer_handles[j];
@@ -301,7 +301,7 @@ void tcp_timer_expire_timers (tcp_timer_wheel_t *tw, f64 now)
 
               /* Allocate a fast-ring handle slot */
               index_in_slot = clib_bitmap_first_clear (ts->busy_slot_bitmap);
-              ts->busy_slot_bitmap = 
+              ts->busy_slot_bitmap =
                 clib_bitmap_set (ts->busy_slot_bitmap, index_in_slot, 1);
 
               vec_validate (ts->timer_handles, index_in_slot);
@@ -310,10 +310,10 @@ void tcp_timer_expire_timers (tcp_timer_wheel_t *tw, f64 now)
               ts->timer_handles[index_in_slot] = timer_handle;
 
               /* But the user's stop-timer handle must change */
-              new_stop_timer_handle = 
+              new_stop_timer_handle =
                 make_stop_timer_handle (TW_RING_FAST, fast_ring_offset,
                                         index_in_slot);
-              
+
               vec_add2 (tw->stop_timer_callback_args, a, 1);
               a->pool_index = timer_handle & 0x0FFFFFFF;
               a->timer_id = timer_handle >> 28;
@@ -329,7 +329,7 @@ void tcp_timer_expire_timers (tcp_timer_wheel_t *tw, f64 now)
 
       ts = &tw->w[TW_RING_FAST][fast_wheel_index];
       clib_bitmap_foreach (timer_index, ts->busy_slot_bitmap,
-      ({                     
+      ({
         timer_handle = ts->timer_handles[timer_index];
 #if CLIB_DEBUG > 0
         /* Poison the slot */
@@ -342,7 +342,7 @@ void tcp_timer_expire_timers (tcp_timer_wheel_t *tw, f64 now)
       for (j = 0; j < vec_len (ts->busy_slot_bitmap); j++)
         ts->busy_slot_bitmap[j] = 0;
       vec_reset_length (ts->busy_slot_bitmap);
-      
+
       /* If any timers expired, tell the user */
       if (vec_len (tw->expired_timer_handles))
         tw->expired_timer_callback (tw->expired_timer_handles);
@@ -355,7 +355,7 @@ void tcp_timer_expire_timers (tcp_timer_wheel_t *tw, f64 now)
 
 #if TCP_TIMER_TEST > 0
 
-typedef struct 
+typedef struct
 {
   /** Handle returned from tcp_start_timer */
   u32 stop_timer_handle;
@@ -380,11 +380,11 @@ typedef struct
 
   /** number of "churn" iterations */
   u32 niter;
-  
+
   /** number of clock ticks per churn iteration */
   u32 ticks_per_iter;
 } tcp_timer_test_main_t;
-  
+
 tcp_timer_test_main_t tcp_timer_test_main;
 
 static void
@@ -433,7 +433,7 @@ static void expired_timer_callback (u32 * expired_timers)
  * Real applications can just about steal this callback verbatim.
  * Change tcp_timer_test_elt_t to <whatever>, and off you go
  */
-static void 
+static void
 new_stop_timer_handle_callback (new_stop_timer_callback_args_t *a_vec)
 {
   int i;
@@ -451,7 +451,7 @@ new_stop_timer_handle_callback (new_stop_timer_callback_args_t *a_vec)
     }
 }
 
-static clib_error_t * 
+static clib_error_t *
 test2 (vlib_main_t * vm, tcp_timer_test_main_t *tm)
 {
   u32 i, j;
@@ -467,10 +467,10 @@ test2 (vlib_main_t * vm, tcp_timer_test_main_t *tm)
                         new_stop_timer_handle_callback);
 
   /* Prime offset */
-  initial_wheel_offset = 757; 
+  initial_wheel_offset = 757;
 
   run_wheel(&tm->wheel, initial_wheel_offset);
-  
+
   vlib_cli_output (vm, "test %d timers, %d iter, %d ticks per iter, 0x%x seed",
                    tm->ntimers, tm->niter, tm->ticks_per_iter, tm->seed);
 
@@ -490,8 +490,8 @@ test2 (vlib_main_t * vm, tcp_timer_test_main_t *tm)
         max_expiration_time = expiration_time;
 
       e->expected_to_expire = expiration_time + initial_wheel_offset;
-      e->stop_timer_handle = tcp_timer_start (&tm->wheel, 
-                                              e - tm->test_elts, 
+      e->stop_timer_handle = tcp_timer_start (&tm->wheel,
+                                              e - tm->test_elts,
                                               3 /* timer id */,
                                               expiration_time);
     }
@@ -516,24 +516,24 @@ test2 (vlib_main_t * vm, tcp_timer_test_main_t *tm)
     del_and_re_add:
       for (j = 0; j < vec_len (deleted_indices); j++)
         pool_put_index (tm->test_elts, deleted_indices[j]);
-      
+
       deletes += j;
 
       for (j = 0; j < tm->ntimers/4; j++)
         {
           pool_get (tm->test_elts, e);
           memset (e, 0, sizeof (*e));
-          
+
           do {
             expiration_time = random_u32 (&tm->seed) & ((1<<17) - 1);
           } while (expiration_time == 0);
-          
+
           if (expiration_time > max_expiration_time)
             max_expiration_time = expiration_time;
-          
+
           e->expected_to_expire = expiration_time + tm->wheel.current_tick;
-          e->stop_timer_handle = tcp_timer_start (&tm->wheel, 
-                                                  e - tm->test_elts, 
+          e->stop_timer_handle = tcp_timer_start (&tm->wheel,
+                                                  e - tm->test_elts,
                                                   3 /* timer id */,
                                                   expiration_time);
         }
@@ -548,8 +548,8 @@ test2 (vlib_main_t * vm, tcp_timer_test_main_t *tm)
 
   vlib_cli_output (vm, "%d adds, %d deletes, %d ticks", adds, deletes,
                    tm->wheel.current_tick);
-  vlib_cli_output (vm, "test ran %.2f seconds, %.2f ops/second", 
-                   (after - before), 
+  vlib_cli_output (vm, "test ran %.2f seconds, %.2f ops/second",
+                   (after - before),
                    ((f64)adds + (f64) deletes + (f64)tm->wheel.current_tick)
                    / (after - before));
 
@@ -562,7 +562,7 @@ test2 (vlib_main_t * vm, tcp_timer_test_main_t *tm)
     vlib_cli_output (vm, "[%d] expected to expire %d\n", e - tm->test_elts,
              e->expected_to_expire);
   }));
-                  
+
   pool_free (tm->test_elts);
   tcp_timer_wheel_free (&tm->wheel);
   return 0;
@@ -578,15 +578,15 @@ test1 (vlib_main_t * vm, tcp_timer_test_main_t *tm)
   tcp_timer_wheel_init (&tm->wheel, expired_timer_callback,
                         new_stop_timer_handle_callback);
 
-  /* 
+  /*
    * Prime offset, to make sure that the wheel starts in a
    * non-trivial position
    */
-  offset = 227989; 
+  offset = 227989;
 
   run_wheel(&tm->wheel, offset);
-  
-  vlib_cli_output 
+
+  vlib_cli_output
     (vm, "initial wheel time %d, slow index %d fast index %d\n",
      tm->wheel.current_tick, tm->wheel.current_index[TW_RING_SLOW],
      tm->wheel.current_index [TW_RING_FAST]);
@@ -596,8 +596,8 @@ test1 (vlib_main_t * vm, tcp_timer_test_main_t *tm)
       pool_get (tm->test_elts, e);
       memset (e, 0, sizeof (*e));
       e->expected_to_expire = i+offset+1;
-      e->stop_timer_handle = tcp_timer_start (&tm->wheel, 
-                                              e - tm->test_elts, 
+      e->stop_timer_handle = tcp_timer_start (&tm->wheel,
+                                              e - tm->test_elts,
                                               3 /* timer id */,
                                               i+1 /* expiration time */);
     }
@@ -612,8 +612,8 @@ test1 (vlib_main_t * vm, tcp_timer_test_main_t *tm)
     vlib_cli_output (vm, "[%d] expected to expire %d\n", e - tm->test_elts,
                      e->expected_to_expire);
   }));
-                  
-  vlib_cli_output 
+
+  vlib_cli_output
     (vm, "final wheel time %d, slow index %d fast index %d\n",
      tm->wheel.current_tick, tm->wheel.current_index[TW_RING_SLOW],
      tm->wheel.current_index [TW_RING_FAST]);
@@ -668,7 +668,7 @@ timer_test_command_fn (vlib_main_t * vm,
 }
 
 /* *INDENT-OFF* */
-VLIB_CLI_COMMAND (timer_test_command, static) = 
+VLIB_CLI_COMMAND (timer_test_command, static) =
 {
   .path = "tcp timer test",
   .short_help = "tcp timer test",

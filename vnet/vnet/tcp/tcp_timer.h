@@ -22,7 +22,7 @@
  *
  * Design parameters:
  *  granularity: 100ms
- *  required max period: 2.5 hours => 150 minutes => 90,000 ticks 
+ *  required max period: 2.5 hours => 150 minutes => 90,000 ticks
  *  Rounding up to 256k ticks yields a two-level 512 slot-per-level
  *  wheel, resulting in a 7-hour max period.
  */
@@ -92,7 +92,7 @@ typedef struct
   /** vector of timers to move from the slow wheel to the fast wheel */
   u32 * demoted_timer_handles;
 
-  /** vector of fast wheel offsets, used during move from 
+  /** vector of fast wheel offsets, used during move from
       slow wheel to the fast wheel */
   u32 * demoted_timer_offsets;
 
@@ -109,8 +109,8 @@ void tcp_timer_stop (tcp_timer_wheel_t * tw, u32 pool_index, u32 timer_id,
                      u32 handle);
 
 /** Initialize a tcp timer wheel */
-void 
-tcp_timer_wheel_init (tcp_timer_wheel_t * tw, 
+void
+tcp_timer_wheel_init (tcp_timer_wheel_t * tw,
                       void * expired_timer_callback,
                       void * new_stop_timer_handle_callback);
 
@@ -119,7 +119,7 @@ void
 tcp_timer_wheel_free (tcp_timer_wheel_t * tw);
 
 /** run the tcp timer wheel. Call every 100ms. */
-void 
+void
 tcp_timer_expire_timers (tcp_timer_wheel_t *tw, f64 now);
 
 #endif /* __included_tcp_timer_h__ */
