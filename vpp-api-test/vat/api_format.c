@@ -48,6 +48,7 @@
 #include <vnet/ip/ip6_hop_by_hop.h>
 #include <vnet/ip/ip_source_and_port_range_check.h>
 #include <vnet/policer/xlate.h>
+#include <vnet/span/span.h>
 #include <vnet/policer/policer.h>
 #include <vnet/policer/police.h>
 
@@ -3567,6 +3568,7 @@ _(set_ipfix_exporter_reply)                             \
 _(set_ipfix_classify_stream_reply)                      \
 _(ipfix_classify_table_add_del_reply)                   \
 _(flow_classify_set_interface_reply)                    \
+_(sw_interface_span_enable_disable_reply)               \
 _(pg_capture_reply)                                     \
 _(pg_enable_disable_reply)                              \
 _(ip_source_and_port_range_check_add_del_reply)         \
@@ -3799,6 +3801,8 @@ _(IPFIX_CLASSIFY_TABLE_ADD_DEL_REPLY, ipfix_classify_table_add_del_reply) \
 _(IPFIX_CLASSIFY_TABLE_DETAILS, ipfix_classify_table_details)           \
 _(FLOW_CLASSIFY_SET_INTERFACE_REPLY, flow_classify_set_interface_reply) \
 _(FLOW_CLASSIFY_DETAILS, flow_classify_details)                         \
+_(SW_INTERFACE_SPAN_ENABLE_DISABLE_REPLY, sw_interface_span_enable_disable_reply) \
+_(SW_INTERFACE_SPAN_DETAILS, sw_interface_span_details)                 \
 _(GET_NEXT_INDEX_REPLY, get_next_index_reply)                           \
 _(PG_CREATE_INTERFACE_REPLY, pg_create_interface_reply)                 \
 _(PG_CAPTURE_REPLY, pg_capture_reply)                                   \
@@ -3811,7 +3815,9 @@ _(IPSEC_GRE_ADD_DEL_TUNNEL_REPLY, ipsec_gre_add_del_tunnel_reply)       \
 _(IPSEC_GRE_TUNNEL_DETAILS, ipsec_gre_tunnel_details)                   \
 _(DELETE_SUBIF_REPLY, delete_subif_reply)                               \
 _(L2_INTERFACE_PBB_TAG_REWRITE_REPLY, l2_interface_pbb_tag_rewrite_reply) \
-_(PUNT_REPLY, punt_reply)
+_(PUNT_REPLY, punt_reply)                                               \
+_(IP_FIB_DETAILS, ip_fib_details)                                       \
+_(IP6_FIB_DETAILS, ip6_fib_details)
 
 /* M: construct, but don't yet send a message */
 
@@ -14853,21 +14859,43 @@ api_mpls_fib_encap_dump (vat_main_t * vam)
   W;
 }
 
+#define vl_api_mpls_fib_details_t_endian vl_noop_handler
+#define vl_api_mpls_fib_details_t_print vl_noop_handler
+
 static void
 vl_api_mpls_fib_details_t_handler (vl_api_mpls_fib_details_t * mp)
 {
   vat_main_t *vam = &vat_main;
+  int count = ntohl (mp->count);
+  vl_api_fib_path_t *fp;
+  int i;
 
   fformat (vam->ofp,
 	   "table-id %d, label %u, ess_bit %u\n",
 	   ntohl (mp->table_id), ntohl (mp->label), mp->eos_bit);
+  fp = mp->path;
+  for (i = 0; i < count; i++)
+    {
+      fformat (vam->ofp,
+	       "  weight %d, sw_if_index %d, is_local %d, is_drop %d, is_unreach %d, "
+	       "is_prohitbit %d, afi %d, next_hop %U\n", ntohl (fp->weight),
+	       ntohl (fp->sw_if_index), fp->is_local, fp->is_drop,
+	       fp->is_unreach, fp->is_prohibit, fp->afi, format_ip46_address,
+	       fp->next_hop, fp->afi);
+      fp++;
+    }
 }
 
 static void vl_api_mpls_fib_details_t_handler_json
   (vl_api_mpls_fib_details_t * mp)
 {
   vat_main_t *vam = &vat_main;
+  int count = ntohl (mp->count);
   vat_json_node_t *node = NULL;
+  struct in_addr ip4;
+  struct in6_addr ip6;
+  vl_api_fib_path_t *fp;
+  int i;
 
   if (VAT_JSON_ARRAY != vam->json_tree.type)
     {
@@ -14880,6 +14908,28 @@ static void vl_api_mpls_fib_details_t_handler_json
   vat_json_object_add_uint (node, "table", ntohl (mp->table_id));
   vat_json_object_add_uint (node, "s_bit", mp->eos_bit);
   vat_json_object_add_uint (node, "label", ntohl (mp->label));
+  vat_json_object_add_uint (node, "path_count", count);
+  fp = mp->path;
+  for (i = 0; i < count; i++)
+    {
+      vat_json_object_add_uint (node, "weight", ntohl (fp->weight));
+      vat_json_object_add_uint (node, "sw_if_index", ntohl (fp->sw_if_index));
+      vat_json_object_add_uint (node, "is_local", fp->is_local);
+      vat_json_object_add_uint (node, "is_drop", fp->is_drop);
+      vat_json_object_add_uint (node, "is_unreach", fp->is_unreach);
+      vat_json_object_add_uint (node, "is_prohibit", fp->is_prohibit);
+      vat_json_object_add_uint (node, "next_hop_afi", fp->afi);
+      if (fp->afi == IP46_TYPE_IP4)
+	{
+	  clib_memcpy (&ip4, &fp->next_hop, sizeof (ip4));
+	  vat_json_object_add_ip4 (node, "next_hop", ip4);
+	}
+      else if (fp->afi == IP46_TYPE_IP6)
+	{
+	  clib_memcpy (&ip6, &fp->next_hop, sizeof (ip6));
+	  vat_json_object_add_ip6 (node, "next_hop", ip6);
+	}
+    }
 }
 
 static int
@@ -14889,6 +14939,192 @@ api_mpls_fib_dump (vat_main_t * vam)
   f64 timeout;
 
   M (MPLS_FIB_DUMP, mpls_fib_dump);
+  S;
+
+  /* Use a control ping for synchronization */
+  {
+    vl_api_control_ping_t *mp;
+    M (CONTROL_PING, control_ping);
+    S;
+  }
+  W;
+}
+
+#define vl_api_ip_fib_details_t_endian vl_noop_handler
+#define vl_api_ip_fib_details_t_print vl_noop_handler
+
+static void
+vl_api_ip_fib_details_t_handler (vl_api_ip_fib_details_t * mp)
+{
+  vat_main_t *vam = &vat_main;
+  int count = ntohl (mp->count);
+  vl_api_fib_path_t *fp;
+  int i;
+
+  fformat (vam->ofp,
+	   "table-id %d, prefix %U/%d\n",
+	   ntohl (mp->table_id), format_ip4_address, mp->address,
+	   mp->address_length);
+  fp = mp->path;
+  for (i = 0; i < count; i++)
+    {
+      fformat (vam->ofp,
+	       "  weight %d, sw_if_index %d, is_local %d, is_drop %d, is_unreach %d, "
+	       "is_prohitbit %d, afi %d, next_hop %U\n", ntohl (fp->weight),
+	       ntohl (fp->sw_if_index), fp->is_local, fp->is_drop,
+	       fp->is_unreach, fp->is_prohibit, fp->afi, format_ip46_address,
+	       fp->next_hop, fp->afi);
+      fp++;
+    }
+}
+
+static void vl_api_ip_fib_details_t_handler_json
+  (vl_api_ip_fib_details_t * mp)
+{
+  vat_main_t *vam = &vat_main;
+  int count = ntohl (mp->count);
+  vat_json_node_t *node = NULL;
+  struct in_addr ip4;
+  struct in6_addr ip6;
+  vl_api_fib_path_t *fp;
+  int i;
+
+  if (VAT_JSON_ARRAY != vam->json_tree.type)
+    {
+      ASSERT (VAT_JSON_NONE == vam->json_tree.type);
+      vat_json_init_array (&vam->json_tree);
+    }
+  node = vat_json_array_add (&vam->json_tree);
+
+  vat_json_init_object (node);
+  vat_json_object_add_uint (node, "table", ntohl (mp->table_id));
+  clib_memcpy (&ip4, &mp->address, sizeof (ip4));
+  vat_json_object_add_ip4 (node, "prefix", ip4);
+  vat_json_object_add_uint (node, "mask_length", mp->address_length);
+  vat_json_object_add_uint (node, "path_count", count);
+  fp = mp->path;
+  for (i = 0; i < count; i++)
+    {
+      vat_json_object_add_uint (node, "weight", ntohl (fp->weight));
+      vat_json_object_add_uint (node, "sw_if_index", ntohl (fp->sw_if_index));
+      vat_json_object_add_uint (node, "is_local", fp->is_local);
+      vat_json_object_add_uint (node, "is_drop", fp->is_drop);
+      vat_json_object_add_uint (node, "is_unreach", fp->is_unreach);
+      vat_json_object_add_uint (node, "is_prohibit", fp->is_prohibit);
+      vat_json_object_add_uint (node, "next_hop_afi", fp->afi);
+      if (fp->afi == IP46_TYPE_IP4)
+	{
+	  clib_memcpy (&ip4, &fp->next_hop, sizeof (ip4));
+	  vat_json_object_add_ip4 (node, "next_hop", ip4);
+	}
+      else if (fp->afi == IP46_TYPE_IP6)
+	{
+	  clib_memcpy (&ip6, &fp->next_hop, sizeof (ip6));
+	  vat_json_object_add_ip6 (node, "next_hop", ip6);
+	}
+    }
+}
+
+static int
+api_ip_fib_dump (vat_main_t * vam)
+{
+  vl_api_ip_fib_dump_t *mp;
+  f64 timeout;
+
+  M (IP_FIB_DUMP, ip_fib_dump);
+  S;
+
+  /* Use a control ping for synchronization */
+  {
+    vl_api_control_ping_t *mp;
+    M (CONTROL_PING, control_ping);
+    S;
+  }
+  W;
+}
+
+#define vl_api_ip6_fib_details_t_endian vl_noop_handler
+#define vl_api_ip6_fib_details_t_print vl_noop_handler
+
+static void
+vl_api_ip6_fib_details_t_handler (vl_api_ip6_fib_details_t * mp)
+{
+  vat_main_t *vam = &vat_main;
+  int count = ntohl (mp->count);
+  vl_api_fib_path_t *fp;
+  int i;
+
+  fformat (vam->ofp,
+	   "table-id %d, prefix %U/%d\n",
+	   ntohl (mp->table_id), format_ip6_address, mp->address,
+	   mp->address_length);
+  fp = mp->path;
+  for (i = 0; i < count; i++)
+    {
+      fformat (vam->ofp,
+	       "  weight %d, sw_if_index %d, is_local %d, is_drop %d, is_unreach %d, "
+	       "is_prohitbit %d, afi %d, next_hop %U\n", ntohl (fp->weight),
+	       ntohl (fp->sw_if_index), fp->is_local, fp->is_drop,
+	       fp->is_unreach, fp->is_prohibit, fp->afi, format_ip46_address,
+	       fp->next_hop, fp->afi);
+      fp++;
+    }
+}
+
+static void vl_api_ip6_fib_details_t_handler_json
+  (vl_api_ip6_fib_details_t * mp)
+{
+  vat_main_t *vam = &vat_main;
+  int count = ntohl (mp->count);
+  vat_json_node_t *node = NULL;
+  struct in_addr ip4;
+  struct in6_addr ip6;
+  vl_api_fib_path_t *fp;
+  int i;
+
+  if (VAT_JSON_ARRAY != vam->json_tree.type)
+    {
+      ASSERT (VAT_JSON_NONE == vam->json_tree.type);
+      vat_json_init_array (&vam->json_tree);
+    }
+  node = vat_json_array_add (&vam->json_tree);
+
+  vat_json_init_object (node);
+  vat_json_object_add_uint (node, "table", ntohl (mp->table_id));
+  clib_memcpy (&ip6, &mp->address, sizeof (ip6));
+  vat_json_object_add_ip6 (node, "prefix", ip6);
+  vat_json_object_add_uint (node, "mask_length", mp->address_length);
+  vat_json_object_add_uint (node, "path_count", count);
+  fp = mp->path;
+  for (i = 0; i < count; i++)
+    {
+      vat_json_object_add_uint (node, "weight", ntohl (fp->weight));
+      vat_json_object_add_uint (node, "sw_if_index", ntohl (fp->sw_if_index));
+      vat_json_object_add_uint (node, "is_local", fp->is_local);
+      vat_json_object_add_uint (node, "is_drop", fp->is_drop);
+      vat_json_object_add_uint (node, "is_unreach", fp->is_unreach);
+      vat_json_object_add_uint (node, "is_prohibit", fp->is_prohibit);
+      vat_json_object_add_uint (node, "next_hop_afi", fp->afi);
+      if (fp->afi == IP46_TYPE_IP4)
+	{
+	  clib_memcpy (&ip4, &fp->next_hop, sizeof (ip4));
+	  vat_json_object_add_ip4 (node, "next_hop", ip4);
+	}
+      else if (fp->afi == IP46_TYPE_IP6)
+	{
+	  clib_memcpy (&ip6, &fp->next_hop, sizeof (ip6));
+	  vat_json_object_add_ip6 (node, "next_hop", ip6);
+	}
+    }
+}
+
+static int
+api_ip6_fib_dump (vat_main_t * vam)
+{
+  vl_api_ip6_fib_dump_t *mp;
+  f64 timeout;
+
+  M (IP6_FIB_DUMP, ip6_fib_dump);
   S;
 
   /* Use a control ping for synchronization */
@@ -15183,6 +15419,94 @@ static void
   vat_json_object_add_uint (node, "ip_version", mp->ip_version);
   vat_json_object_add_uint (node, "transport_protocol",
 			    mp->transport_protocol);
+}
+
+static int
+api_sw_interface_span_enable_disable (vat_main_t * vam)
+{
+  unformat_input_t *i = vam->input;
+  vl_api_sw_interface_span_enable_disable_t *mp;
+  f64 timeout;
+  u32 src_sw_if_index = ~0;
+  u32 dst_sw_if_index = ~0;
+  u8 enable = 1;
+
+  while (unformat_check_input (i) != UNFORMAT_END_OF_INPUT)
+    {
+      if (unformat (i, "src %U", unformat_sw_if_index, vam, &src_sw_if_index))
+	;
+      else if (unformat (i, "src_sw_if_index %d", &src_sw_if_index))
+	;
+      else
+	if (unformat
+	    (i, "dst %U", unformat_sw_if_index, vam, &dst_sw_if_index))
+	;
+      else if (unformat (i, "dst_sw_if_index %d", &dst_sw_if_index))
+	;
+      else if (unformat (i, "disable"))
+	enable = 0;
+      else
+	break;
+    }
+
+  M (SW_INTERFACE_SPAN_ENABLE_DISABLE, sw_interface_span_enable_disable);
+
+  mp->sw_if_index_from = htonl (src_sw_if_index);
+  mp->sw_if_index_to = htonl (dst_sw_if_index);
+  mp->enable = enable;
+
+  S;
+  W;
+  /* NOTREACHED */
+  return 0;
+}
+
+static void
+vl_api_sw_interface_span_details_t_handler (vl_api_sw_interface_span_details_t
+					    * mp)
+{
+  vat_main_t *vam = &vat_main;
+
+  fformat (vam->ofp, "%u => %u\n",
+	   ntohl (mp->sw_if_index_from), ntohl (mp->sw_if_index_to));
+}
+
+static void
+  vl_api_sw_interface_span_details_t_handler_json
+  (vl_api_sw_interface_span_details_t * mp)
+{
+  vat_main_t *vam = &vat_main;
+  vat_json_node_t *node = NULL;
+
+  if (VAT_JSON_ARRAY != vam->json_tree.type)
+    {
+      ASSERT (VAT_JSON_NONE == vam->json_tree.type);
+      vat_json_init_array (&vam->json_tree);
+    }
+  node = vat_json_array_add (&vam->json_tree);
+
+  vat_json_init_object (node);
+  vat_json_object_add_uint (node, "src-if-index",
+			    ntohl (mp->sw_if_index_from));
+  vat_json_object_add_uint (node, "dst-if-index", ntohl (mp->sw_if_index_to));
+}
+
+static int
+api_sw_interface_span_dump (vat_main_t * vam)
+{
+  vl_api_sw_interface_span_dump_t *mp;
+  f64 timeout;
+
+  M (SW_INTERFACE_SPAN_DUMP, sw_interface_span_dump);
+  S;
+
+  /* Use a control ping for synchronization */
+  {
+    vl_api_control_ping_t *mp;
+    M (CONTROL_PING, control_ping);
+    S;
+  }
+  W;
 }
 
 int
@@ -15703,6 +16027,8 @@ api_delete_subif (vat_main_t * vam)
 
   while (unformat_check_input (i) != UNFORMAT_END_OF_INPUT)
     {
+      if (unformat (i, "%U", unformat_sw_if_index, vam, &sw_if_index))
+	;
       if (unformat (i, "sw_if_index %d", &sw_if_index))
 	;
       else
@@ -16483,6 +16809,8 @@ _(set_ipfix_classify_stream, "[domain <domain-id>] [src_port <src-port>]") \
 _(ipfix_classify_stream_dump, "")                                       \
 _(ipfix_classify_table_add_del, "table <table-index> ip4|ip6 [tcp|udp]")\
 _(ipfix_classify_table_dump, "")                                        \
+_(sw_interface_span_enable_disable, "[src <intfc> | src_sw_if_index <id>] [[dst <intfc> | dst_sw_if_index <id>] | disable]") \
+_(sw_interface_span_dump, "")                                           \
 _(get_next_index, "node-name <node-name> next-node-name <node-name>")   \
 _(pg_create_interface, "if_id <nn>")                                    \
 _(pg_capture, "if_id <nnn> pcap <file_name> count <nnn> [disable]")     \
@@ -16495,7 +16823,7 @@ _(ip_source_and_port_range_check_interface_add_del,                     \
 _(ipsec_gre_add_del_tunnel,                                             \
   "src <addr> dst <addr> local_sa <sa-id> remote_sa <sa-id> [del]")     \
 _(ipsec_gre_tunnel_dump, "[sw_if_index <nn>]")                          \
-_(delete_subif,"sub_sw_if_index <nn> sub_if_id <nn>")                   \
+_(delete_subif,"<intfc> | sw_if_index <nn>")                            \
 _(l2_interface_pbb_tag_rewrite,                                         \
   "<intfc> | sw_if_index <nn> \n"                                       \
   "[disable | push | pop | translate_pbb_stag <outer_tag>] \n"          \
@@ -16503,7 +16831,9 @@ _(l2_interface_pbb_tag_rewrite,                                         \
 _(punt, "protocol <l4-protocol> [ip <ver>] [port <l4-port>] [del]")     \
 _(flow_classify_set_interface,                                          \
   "<intfc> | sw_if_index <nn> [ip4-table <nn>] [ip6-table <nn>] [del]") \
-_(flow_classify_dump, "type [ip4|ip6]")
+_(flow_classify_dump, "type [ip4|ip6]")                                 \
+_(ip_fib_dump, "")                                                      \
+_(ip6_fib_dump, "")
 
 /* List of command functions, CLI names map directly to functions */
 #define foreach_cli_function                                    \

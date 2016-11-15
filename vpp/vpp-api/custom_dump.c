@@ -2056,6 +2056,26 @@ static void *vl_api_mpls_fib_dump_t_print
   FINISH;
 }
 
+static void *vl_api_ip_fib_dump_t_print
+  (vl_api_ip_fib_dump_t * mp, void *handle)
+{
+  u8 *s;
+
+  s = format (0, "SCRIPT: ip_fib_dump ");
+
+  FINISH;
+}
+
+static void *vl_api_ip6_fib_dump_t_print
+  (vl_api_ip6_fib_dump_t * mp, void *handle)
+{
+  u8 *s;
+
+  s = format (0, "SCRIPT: ip6_fib_dump ");
+
+  FINISH;
+}
+
 static void *vl_api_classify_table_ids_t_print
   (vl_api_classify_table_ids_t * mp, void *handle)
 {
@@ -2175,6 +2195,31 @@ static void *vl_api_ipfix_classify_table_dump_t_print
   u8 *s;
 
   s = format (0, "SCRIPT: ipfix_classify_table_dump ");
+
+  FINISH;
+}
+
+static void *vl_api_sw_interface_span_enable_disable_t_print
+  (vl_api_sw_interface_span_enable_disable_t * mp, void *handle)
+{
+  u8 *s;
+
+  s = format (0, "SCRIPT: sw_interface_span_enable_disable ");
+  s = format (s, "src_sw_if_index %u ", ntohl (mp->sw_if_index_from));
+  s = format (s, "dst_sw_if_index %u ", ntohl (mp->sw_if_index_to));
+  if (!mp->enable)
+    s = format (s, "disable ");
+
+  FINISH;
+}
+
+static void *
+vl_api_sw_interface_span_dump_t_print (vl_api_sw_interface_span_dump_t * mp,
+				       void *handle)
+{
+  u8 *s;
+
+  s = format (0, "SCRIPT: sw_interface_span_dump ");
 
   FINISH;
 }
@@ -2961,6 +3006,8 @@ _(SET_IPFIX_CLASSIFY_STREAM, set_ipfix_classify_stream)                 \
 _(IPFIX_CLASSIFY_STREAM_DUMP, ipfix_classify_stream_dump)               \
 _(IPFIX_CLASSIFY_TABLE_ADD_DEL, ipfix_classify_table_add_del)           \
 _(IPFIX_CLASSIFY_TABLE_DUMP, ipfix_classify_table_dump)                 \
+_(SW_INTERFACE_SPAN_ENABLE_DISABLE, sw_interface_span_enable_disable)   \
+_(SW_INTERFACE_SPAN_DUMP, sw_interface_span_dump)                       \
 _(GET_NEXT_INDEX, get_next_index)                                       \
 _(PG_CREATE_INTERFACE,pg_create_interface)                              \
 _(PG_CAPTURE, pg_capture)                                               \
@@ -3006,7 +3053,9 @@ _(FLOW_CLASSIFY_SET_INTERFACE, flow_classify_set_interface)             \
 _(FLOW_CLASSIFY_DUMP, flow_classify_dump)				\
 _(GET_FIRST_MSG_ID, get_first_msg_id)                                   \
 _(IOAM_ENABLE, ioam_enable)                                             \
-_(IOAM_DISABLE, ioam_disable)
+_(IOAM_DISABLE, ioam_disable)                                           \
+_(IP_FIB_DUMP, ip_fib_dump)                                             \
+_(IP6_FIB_DUMP, ip6_fib_dump)
   void
 vl_msg_api_custom_dump_configure (api_main_t * am)
 {
