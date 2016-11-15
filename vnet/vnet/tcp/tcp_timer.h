@@ -81,20 +81,20 @@ typedef struct
   tcp_timer_wheel_slot_t w[TW_N_RINGS][TW_SLOTS_PER_RING];
 
   /** expired timer callback, receives a vector of handles */
-  void (*expired_timer_callback)(u32 * expired_timer_handles);
+  void (*expired_timer_callback) (u32 * expired_timer_handles);
 
   /** new stop-timer handle callback, receives a vector */
-  void (*new_stop_timer_handle_callback)(new_stop_timer_callback_args_t *);
+  void (*new_stop_timer_handle_callback) (new_stop_timer_callback_args_t *);
 
   /** vector of expired timers */
-  u32 * expired_timer_handles;
+  u32 *expired_timer_handles;
 
   /** vector of timers to move from the slow wheel to the fast wheel */
-  u32 * demoted_timer_handles;
+  u32 *demoted_timer_handles;
 
   /** vector of fast wheel offsets, used during move from
       slow wheel to the fast wheel */
-  u32 * demoted_timer_offsets;
+  u32 *demoted_timer_offsets;
 
   /** vector of new stop-timer handles, used during move to fast wheel */
   new_stop_timer_callback_args_t *stop_timer_callback_args;
@@ -102,25 +102,23 @@ typedef struct
 
 /** start a tcp timer */
 u32 tcp_timer_start (tcp_timer_wheel_t * tw, u32 pool_index, u32 timer_id,
-                     u32 interval);
+		     u32 interval);
 
 /** Stop a tcp timer */
 void tcp_timer_stop (tcp_timer_wheel_t * tw, u32 pool_index, u32 timer_id,
-                     u32 handle);
+		     u32 handle);
 
 /** Initialize a tcp timer wheel */
 void
 tcp_timer_wheel_init (tcp_timer_wheel_t * tw,
-                      void * expired_timer_callback,
-                      void * new_stop_timer_handle_callback);
+		      void *expired_timer_callback,
+		      void *new_stop_timer_handle_callback);
 
 /** free a tcp timer wheel */
-void
-tcp_timer_wheel_free (tcp_timer_wheel_t * tw);
+void tcp_timer_wheel_free (tcp_timer_wheel_t * tw);
 
 /** run the tcp timer wheel. Call every 100ms. */
-void
-tcp_timer_expire_timers (tcp_timer_wheel_t *tw, f64 now);
+void tcp_timer_expire_timers (tcp_timer_wheel_t * tw, f64 now);
 
 #endif /* __included_tcp_timer_h__ */
 
