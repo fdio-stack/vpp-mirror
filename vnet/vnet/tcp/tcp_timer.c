@@ -15,6 +15,10 @@
 
 #include "tcp_timer.h"
 
+/** @file
+ *  @brief TCP timer implementation
+ */
+
 /** construct a stop-timer handle */
 static inline u32 
 make_stop_timer_handle (u32 ring, u32 ring_offset, u32 index_in_slot)
@@ -45,7 +49,14 @@ make_internal_timer_handle (u32 pool_index, u32 timer_id)
 }
 
 
-/** start a tcp timer */
+/**
+ * @brief Start a Tcp Timer
+ * @param tcp_timer_wheel_t * tw timer wheel object pointer
+ * @param u32 pool_index user pool index, presumably for a tcp session
+ * @param u32 timer_id app-specific timer ID. 4 bits.
+ * @param u32 interval timer interval in 100ms ticks
+ * @returns handle needed to cancel the timer
+ */
 u32 tcp_timer_start (tcp_timer_wheel_t * tw, u32 pool_index, u32 timer_id,
                      u32 interval)
 {
@@ -117,8 +128,12 @@ u32 tcp_timer_start (tcp_timer_wheel_t * tw, u32 pool_index, u32 timer_id,
   return rv;
 }
 
-/** Stop a tcp timer
- * We pass the pool_index and timer_id for consistency-checking only.
+/**
+ * @brief Stop a tcp timer
+ * @param tcp_timer_wheel_t * tw timer wheel object pointer
+ * @param u32 pool_index user pool index, passed for consistency checking only
+ * @param u32 timer_id 4 bit timer ID, passed for consistency checking only
+ * @param u32 handle timer cancellation returned by tcp_timer_start
  */
 
 void tcp_timer_stop (tcp_timer_wheel_t * tw, u32 pool_index, u32 timer_id,
@@ -152,7 +167,16 @@ void tcp_timer_stop (tcp_timer_wheel_t * tw, u32 pool_index, u32 timer_id,
 #endif
 }
 
-/** initialize a tcp timer wheel */
+/**
+ * @brief Initialize a tcp timer wheel
+ * @param tcp_timer_wheel_t * tw timer wheel object pointer
+ * @param void * expired_timer_callback. Passed a u32 * vector of
+ *   expired timer handles. 
+ * @param void * new_stop_timer_handle_callback. Passed a vector of
+ *   new_stop_timer_callback_args_t handles, corresponding to 
+ *   timers moved from the slow ring to the fast ring. Called approximately
+ *   once every 51 seconds.
+ */
 void 
 tcp_timer_wheel_init (tcp_timer_wheel_t * tw, 
                       void * expired_timer_callback,
@@ -163,7 +187,10 @@ tcp_timer_wheel_init (tcp_timer_wheel_t * tw,
   tw->new_stop_timer_handle_callback = new_stop_timer_handle_callback;
 }
 
-/** free a tcp timer wheel */
+/**
+ * @brief Free a tcp timer wheel
+ * @param tcp_timer_wheel_t * tw timer wheel object pointer
+ */
 void
 tcp_timer_wheel_free (tcp_timer_wheel_t * tw)
 {
@@ -187,8 +214,12 @@ tcp_timer_wheel_free (tcp_timer_wheel_t * tw)
   memset (tw, 0, sizeof (*tw));
 }
 
-/** run the tcp timer wheel. Call every 100ms. */
-
+/**
+ * @brief Advance a tcp timer wheel. Calls the expired timer callback
+ * as needed. This routine should be called once every 100ms.
+ * @param tcp_timer_wheel_t * tw timer wheel object pointer
+ * @param f64 now the current time, e.g. from vlib_time_now(vm)
+ */
 void tcp_timer_expire_timers (tcp_timer_wheel_t *tw, f64 now)
 {
   u32 nticks, i, j;
@@ -326,17 +357,31 @@ void tcp_timer_expire_timers (tcp_timer_wheel_t *tw, f64 now)
 
 typedef struct 
 {
+  /** Handle returned from tcp_start_timer */
   u32 stop_timer_handle;
+
+  /** Test item should expire at this clock tick */
   u32 expected_to_expire;
 } tcp_timer_test_elt_t;
 
 typedef struct
 {
+  /** Pool of test objects */
   tcp_timer_test_elt_t * test_elts;
+
+  /** The timer wheel */
   tcp_timer_wheel_t wheel;
+
+  /** random number seed */
   u32 seed;
+
+  /** number of timers */
   u32 ntimers;
+
+  /** number of "churn" iterations */
   u32 niter;
+  
+  /** number of clock ticks per churn iteration */
   u32 ticks_per_iter;
 } tcp_timer_test_main_t;
   
@@ -381,6 +426,13 @@ static void expired_timer_callback (u32 * expired_timers)
     }
 }
 
+/**
+ * @brief Canonical wheel demotion handle reset callback
+ * @param new_stop_timer_callback_args_t * a_vec
+ *
+ * Real applications can just about steal this callback verbatim.
+ * Change tcp_timer_test_elt_t to <whatever>, and off you go
+ */
 static void 
 new_stop_timer_handle_callback (new_stop_timer_callback_args_t *a_vec)
 {
@@ -398,7 +450,6 @@ new_stop_timer_handle_callback (new_stop_timer_callback_args_t *a_vec)
       e->stop_timer_handle = a->new_stop_timer_handle;
     }
 }
-
 
 static clib_error_t * 
 test2 (vlib_main_t * vm, tcp_timer_test_main_t *tm)
@@ -527,7 +578,10 @@ test1 (vlib_main_t * vm, tcp_timer_test_main_t *tm)
   tcp_timer_wheel_init (&tm->wheel, expired_timer_callback,
                         new_stop_timer_handle_callback);
 
-  /* Prime offset */
+  /* 
+   * Prime offset, to make sure that the wheel starts in a
+   * non-trivial position
+   */
   offset = 227989; 
 
   run_wheel(&tm->wheel, offset);
@@ -568,10 +622,6 @@ test1 (vlib_main_t * vm, tcp_timer_test_main_t *tm)
   tcp_timer_wheel_free (&tm->wheel);
   return 0;
 }
-
-
-
-
 
 static clib_error_t *
 timer_test_command_fn (vlib_main_t * vm,

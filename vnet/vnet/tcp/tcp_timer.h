@@ -39,8 +39,11 @@ typedef struct
 
 typedef enum
 {
+  /** Fast timer ring ID */
   TW_RING_FAST,
+  /** Slow timer ring ID */
   TW_RING_SLOW,
+  /** Number of timer rings */
   TW_N_RINGS,
 } tw_ring_index_t;
 
@@ -96,6 +99,28 @@ typedef struct
   /** vector of new stop-timer handles, used during move to fast wheel */
   new_stop_timer_callback_args_t *stop_timer_callback_args;
 } tcp_timer_wheel_t;
+
+/** start a tcp timer */
+u32 tcp_timer_start (tcp_timer_wheel_t * tw, u32 pool_index, u32 timer_id,
+                     u32 interval);
+
+/** Stop a tcp timer */
+void tcp_timer_stop (tcp_timer_wheel_t * tw, u32 pool_index, u32 timer_id,
+                     u32 handle);
+
+/** Initialize a tcp timer wheel */
+void 
+tcp_timer_wheel_init (tcp_timer_wheel_t * tw, 
+                      void * expired_timer_callback,
+                      void * new_stop_timer_handle_callback);
+
+/** free a tcp timer wheel */
+void
+tcp_timer_wheel_free (tcp_timer_wheel_t * tw);
+
+/** run the tcp timer wheel. Call every 100ms. */
+void 
+tcp_timer_expire_timers (tcp_timer_wheel_t *tw, f64 now);
 
 #endif /* __included_tcp_timer_h__ */
 
