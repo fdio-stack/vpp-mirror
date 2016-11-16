@@ -32,6 +32,12 @@ typedef enum
 
 typedef struct
 {
+  u32 fifo_position;
+  u32 length;
+} offset_enqueue_t;
+
+typedef struct
+{
   pthread_mutex_t mutex;	/* 8 bytes */
   pthread_cond_t condvar;	/* 8 bytes */
   u32 owner_pid;
@@ -46,8 +52,9 @@ typedef struct
   CLIB_CACHE_LINE_ALIGN_MARK(end_shared);
   u32 head;
   CLIB_CACHE_LINE_ALIGN_MARK(end_consumer);
-  u32 tail;
   /* producer */
+  u32 tail;
+  offset_enqueue_t *offset_enqueues;
  CLIB_CACHE_LINE_ALIGN_MARK (data);
 } svm_fifo_t;
 
@@ -100,6 +107,10 @@ int svm_fifo_dequeue_nowait (svm_fifo_t * f, int pid, u32 max_bytes,
 
 int svm_fifo_enqueue_nowait2 (svm_fifo_t * f, int pid, u32 max_bytes, 
                              u8 * copy_from_here);
+
+int svm_fifo_enqueue_with_offset2 (svm_fifo_t * f, int pid, 
+                                   u32 offset, u32 required_bytes, 
+                                   u8 * copy_from_here);
 
 int svm_fifo_dequeue_nowait2 (svm_fifo_t * f, int pid, u32 max_bytes, 
                              u8 * copy_here);
