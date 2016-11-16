@@ -2643,21 +2643,34 @@ find_socket_info_fd (int fd)
   return NULL;
 }
 
-/* static int */
-/* find_socket_info_index (int fd) */
-/* { */
-/*   struct socket_info_fd *fi = find_socket_info_fd (fd); */
+static int
+find_socket_info_index (int fd)
+{
+  struct socket_info_fd *fi = find_socket_info_fd (fd);
 
-/*   if (fi == NULL) */
-/*     { */
-/*       return -1; */
-/*     } */
+  if (fi == NULL)
+    {
+      return -1;
+    }
 
-/*   return fi->si_index; */
-/* } */
+  return fi->si_index;
+}
 
 static struct socket_info *
 find_socket_info (int fd)
+{
+  int idx = find_socket_info_index (fd);
+
+  if (idx == -1)
+    {
+      return NULL;
+    }
+
+  return &sockets[idx];
+}
+
+static struct socket_info *
+vpp_find_socket_info (int fd)
 {
   vpp_commapi_main_t *vcm =  &vpp_commapi_main;
 
@@ -4648,7 +4661,7 @@ swrap_bind (int s, const struct sockaddr *myaddr, socklen_t addrlen)
 static int
 vpp_bind (int s, const struct sockaddr *myaddr, socklen_t addrlen)
 {
-  socket_info_t *si = find_socket_info (s);
+  socket_info_t *si = vpp_find_socket_info (s);
   //  session_t *session;
   int bind_error = 0;
 
