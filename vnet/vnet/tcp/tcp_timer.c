@@ -268,33 +268,20 @@ tcp_timer_expire_timers (tcp_timer_wheel_t * tw, f64 now)
 	  vec_reset_length (tw->demoted_timer_handles);
 	  vec_reset_length (tw->demoted_timer_offsets);
 
-	  clib_bitmap_foreach (timer_index, ts->busy_slot_bitmap, (
-								    {
-								    timer_handle
-								    =
-								    ts->timer_handles
-								    [timer_index];
-								    fast_ring_offset
-								    =
-								    ts->fast_ring_offsets
-								    [timer_index];
-								    vec_add1
-								    (tw->demoted_timer_handles,
-								     timer_handle);
-								    vec_add1
-								    (tw->demoted_timer_offsets,
-								     fast_ring_offset);
+          /* *INDENT-OFF* */
+	  clib_bitmap_foreach (timer_index, ts->busy_slot_bitmap,
+          ({
+            timer_handle = ts->timer_handles [timer_index];
+            fast_ring_offset = ts->fast_ring_offsets [timer_index];
+            vec_add1 (tw->demoted_timer_handles, timer_handle);
+            vec_add1 (tw->demoted_timer_offsets, fast_ring_offset);
 #if CLIB_DEBUG > 0
-								    /* Poison the slot */
-								    ts->timer_handles
-								    [timer_index]
-								    = ~0;
-								    ts->fast_ring_offsets
-								    [timer_index]
-								    = ~0;
+            /* Poison the slot */
+            ts->timer_handles [timer_index] = ~0;
+            ts->fast_ring_offsets [timer_index] = ~0;
 #endif
-								    }
-			       ));
+          }));
+          /* *INDENT-ON* */
 	  /* Clear the slow-ring slot busy bitmap */
 	  for (j = 0; j < vec_len (ts->busy_slot_bitmap); j++)
 	    ts->busy_slot_bitmap[j] = 0;
@@ -345,22 +332,17 @@ tcp_timer_expire_timers (tcp_timer_wheel_t * tw, f64 now)
       vec_reset_length (tw->expired_timer_handles);
 
       ts = &tw->w[TW_RING_FAST][fast_wheel_index];
-      clib_bitmap_foreach (timer_index, ts->busy_slot_bitmap, (
-								{
-								timer_handle =
-								ts->timer_handles
-								[timer_index];
+      /* *INDENT-OFF* */
+      clib_bitmap_foreach (timer_index, ts->busy_slot_bitmap,
+      ({
+        timer_handle = ts->timer_handles [timer_index];
 #if CLIB_DEBUG > 0
-								/* Poison the slot */
-								ts->timer_handles
-								[timer_index]
-								= ~0;
+        /* Poison the slot */
+        ts->timer_handles [timer_index] = ~0;
 #endif
-								vec_add1
-								(tw->expired_timer_handles,
-								 timer_handle);
-								}
-			   ));
+        vec_add1 (tw->expired_timer_handles, timer_handle);
+      }));
+      /* *INDENT-ON* */
 
       /* Clear the fast-ring slot busy bitmap */
       for (j = 0; j < vec_len (ts->busy_slot_bitmap); j++)
@@ -532,18 +514,17 @@ test2 (vlib_main_t * vm, tcp_timer_test_main_t * tm)
 
       j = 0;
       vec_reset_length (deleted_indices);
-      pool_foreach (e, tm->test_elts, (
-					{
-					tcp_timer_stop (&tm->wheel,
-							e - tm->test_elts,
-							3 /* timer id */ ,
-							e->stop_timer_handle);
-					vec_add1 (deleted_indices,
-						  e - tm->test_elts);
-					if (++j >=
-					    tm->ntimers /
-					    4) goto del_and_re_add;}
-		    ));
+      /* *INDENT-OFF* */
+      pool_foreach (e, tm->test_elts,
+      ({
+        tcp_timer_stop (&tm->wheel, e - tm->test_elts,
+                        3 /* timer id */,
+                        e->stop_timer_handle);
+        vec_add1 (deleted_indices, e - tm->test_elts);
+        if (++j >= tm->ntimers / 4)
+          goto del_and_re_add;
+      }));
+      /* *INDENT-ON* */
 
     del_and_re_add:
       for (j = 0; j < vec_len (deleted_indices); j++)
@@ -591,14 +572,14 @@ test2 (vlib_main_t * vm, tcp_timer_test_main_t * tm)
     vlib_cli_output (vm, "Note: %d elements remain in pool\n",
 		     pool_elts (tm->test_elts));
 
-  pool_foreach (e, tm->test_elts, (
-				    {
-				    vlib_cli_output (vm,
-						     "[%d] expected to expire %d\n",
-						     e - tm->test_elts,
-						     e->expected_to_expire);
-				    }
-		));
+  /* *INDENT-OFF* */
+  pool_foreach (e, tm->test_elts,
+  ({
+    vlib_cli_output (vm, "[%d] expected to expire %d\n",
+                     e - tm->test_elts,
+                     e->expected_to_expire);
+  }));
+  /* *INDENT-ON* */
 
   pool_free (tm->test_elts);
   tcp_timer_wheel_free (&tm->wheel);
@@ -644,14 +625,15 @@ test1 (vlib_main_t * vm, tcp_timer_test_main_t * tm)
     vlib_cli_output (vm, "Note: %d elements remain in pool\n",
 		     pool_elts (tm->test_elts));
 
-  pool_foreach (e, tm->test_elts, (
-				    {
-				    vlib_cli_output (vm,
-						     "[%d] expected to expire %d\n",
-						     e - tm->test_elts,
-						     e->expected_to_expire);
-				    }
-		));
+  /* *INDENT-OFF* */
+  pool_foreach (e, tm->test_elts,
+  ({
+    vlib_cli_output (vm,
+                     "[%d] expected to expire %d\n",
+                     e - tm->test_elts,
+                     e->expected_to_expire);
+  }));
+  /* *INDENT-ON* */
 
   vlib_cli_output
     (vm, "final wheel time %d, slow index %d fast index %d\n",
