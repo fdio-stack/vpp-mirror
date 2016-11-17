@@ -164,6 +164,66 @@ mempig (int verbose)
   return 0;
 }
 
+clib_error_t *
+offset (int verbose)
+{
+  svm_fifo_segment_create_args_t _a, *a = &_a;
+  svm_fifo_segment_private_t * sp;
+  svm_fifo_t * f;
+  int rv;
+  u32 * test_data = 0;
+  u32 * recovered_data = 0;
+  int i;
+  int pid = getpid();
+
+  memset (a, 0, sizeof (*a));
+
+  a->segment_name = "fifo-test1";
+  a->segment_size = 256<<10;
+
+  rv = svm_fifo_segment_create (a);
+
+  if (rv)
+    return clib_error_return (0, "svm_fifo_segment_create returned %d", rv);
+
+  sp = svm_fifo_get_segment (a->new_segment_index);
+
+  f = svm_fifo_segment_alloc_fifo (sp, 200<<10);
+
+  if (f == 0)
+    return clib_error_return (0, "svm_fifo_segment_alloc_fifo failed");
+
+  for (i = 0; i < (3 * 1024); i++)
+    vec_add1 (test_data, i);
+
+  /* Enqueue the first 1024 u32's */
+  svm_fifo_enqueue_nowait2 (f, pid, 4096 /* bytes to enqueue */, 
+                            (u8 *) test_data);
+
+  /* Enqueue the third 1024 u32's 2048 ahead of the current tail */
+  svm_fifo_enqueue_with_offset2 (f, pid, 4096, 4096, (u8 *) &test_data[2048]);
+
+  /* Enqueue the second 1024 u32's at the current tail */
+  svm_fifo_enqueue_nowait2 (f, pid, 4096 /* bytes to enqueue */, 
+                            (u8 *) &test_data[1024]);
+  
+  vec_validate (recovered_data, (3*1024)-1);
+  
+  svm_fifo_dequeue_nowait2 (f, pid, 3*4096, (u8 *) recovered_data);
+
+  for (i = 0; i < (3*1024); i++)
+    {
+      if (recovered_data[i] != test_data[i])
+        {
+          clib_warning ("[%d] expected %d recovered %d", i,
+                        test_data[i], recovered_data[i]);
+          return clib_error_return (0, "offset test FAILED");
+        }
+    }
+
+  return  clib_error_return (0, "offset test OK");
+}
+
 clib_error_t * 
 slave (int verbose)
 {
@@ -230,6 +290,8 @@ int test_ssvm_fifo1 (unformat_input_t * input)
         test_id = 2;
       else if (unformat (input, "mempig"))
         test_id = 3;
+      else if (unformat (input, "offset"))
+        test_id = 4;
       else
 	{
 	  error = clib_error_create ("unknown input `%U'\n",
@@ -254,6 +316,10 @@ int test_ssvm_fifo1 (unformat_input_t * input)
 
     case 3:
       error = mempig (verbose);
+      break;
+
+    case 4:
+      error = offset (verbose);
       break;
 
     default:
