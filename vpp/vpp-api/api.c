@@ -90,6 +90,7 @@
 #include <vnet/flow/flow_report_classify.h>
 #include <vnet/uri/uri.h>
 #include <vnet/ip/punt.h>
+#include <vnet/feature/feature.h>
 
 #undef BIHASH_TYPE
 #undef __included_bihash_template_h__
@@ -474,7 +475,8 @@ _(IPSEC_SPD_DUMP, ipsec_spd_dump)                                       \
 _(IP_FIB_DUMP, ip_fib_dump)                                             \
 _(IP_FIB_DETAILS, ip_fib_details)                                       \
 _(IP6_FIB_DUMP, ip6_fib_dump)                                           \
-_(IP6_FIB_DETAILS, ip6_fib_details)
+_(IP6_FIB_DETAILS, ip6_fib_details)                                     \
+_(FEATURE_ENABLE_DISABLE, feature_enable_disable)
 
 #define QUOTE_(x) #x
 #define QUOTE(x) QUOTE_(x)
@@ -4334,7 +4336,7 @@ send_ip_address_details (vpe_api_main_t * am,
   else
     {
       u32 *tp = (u32 *) mp->ip;
-      *tp = ntohl (*(u32 *) ip);
+      *tp = *(u32 *) ip;
     }
   mp->prefix_length = prefix_length;
   mp->context = context;
@@ -7612,6 +7614,33 @@ vl_api_mpls_fib_details_t_print (vl_api_mpls_fib_details_t * mp)
   clib_warning ("BUG");
 }
 
+
+static void
+copy_fib_next_hop (fib_route_path_encode_t * api_rpath,
+		   vl_api_fib_path_t * fp)
+{
+  int is_ip4;
+
+  if (api_rpath->rpath.frp_proto == FIB_PROTOCOL_IP4)
+    fp->afi = IP46_TYPE_IP4;
+  else if (api_rpath->rpath.frp_proto == FIB_PROTOCOL_IP6)
+    fp->afi = IP46_TYPE_IP6;
+  else
+    {
+      is_ip4 = ip46_address_is_ip4 (&api_rpath->rpath.frp_addr);
+      if (is_ip4)
+	fp->afi = IP46_TYPE_IP4;
+      else
+	fp->afi = IP46_TYPE_IP6;
+    }
+  if (fp->afi == IP46_TYPE_IP4)
+    memcpy (fp->next_hop, &api_rpath->rpath.frp_addr.ip4,
+	    sizeof (api_rpath->rpath.frp_addr.ip4));
+  else
+    memcpy (fp->next_hop, &api_rpath->rpath.frp_addr.ip6,
+	    sizeof (api_rpath->rpath.frp_addr.ip6));
+}
+
 static void
 send_mpls_fib_details (vpe_api_main_t * am,
 		       unix_shared_memory_queue_t * q,
@@ -7621,7 +7650,7 @@ send_mpls_fib_details (vpe_api_main_t * am,
   vl_api_mpls_fib_details_t *mp;
   fib_route_path_encode_t *api_rpath;
   vl_api_fib_path_t *fp;
-  int is_ip4, path_count;
+  int path_count;
 
   path_count = vec_len (api_rpaths);
   mp = vl_msg_api_alloc (sizeof (*mp) + path_count * sizeof (*fp));
@@ -7642,19 +7671,7 @@ send_mpls_fib_details (vpe_api_main_t * am,
     memset (fp, 0, sizeof (*fp));
     fp->weight = htonl (api_rpath->rpath.frp_weight);
     fp->sw_if_index = htonl (api_rpath->rpath.frp_sw_if_index);
-    memcpy (fp->next_hop, &api_rpath->rpath.frp_addr, sizeof (fp->next_hop));
-    if (api_rpath->rpath.frp_proto == FIB_PROTOCOL_IP4)
-      fp->afi = IP46_TYPE_IP4;
-    else if (api_rpath->rpath.frp_proto == FIB_PROTOCOL_IP6)
-      fp->afi = IP46_TYPE_IP6;
-    else
-      {
-	is_ip4 = ip46_address_is_ip4 (&api_rpath->rpath.frp_addr);
-	if (is_ip4)
-	  fp->afi = IP46_TYPE_IP4;
-	else
-	  fp->afi = IP46_TYPE_IP6;
-      }
+    copy_fib_next_hop (api_rpath, fp);
     fp++;
   }
 
@@ -7734,7 +7751,7 @@ send_ip_fib_details (vpe_api_main_t * am,
   vl_api_ip_fib_details_t *mp;
   fib_route_path_encode_t *api_rpath;
   vl_api_fib_path_t *fp;
-  int is_ip4, path_count;
+  int path_count;
 
   path_count = vec_len(api_rpaths);
   mp = vl_msg_api_alloc (sizeof (*mp) + path_count * sizeof (*fp));
@@ -7782,19 +7799,7 @@ send_ip_fib_details (vpe_api_main_t * am,
       }
     fp->weight = htonl(api_rpath->rpath.frp_weight);
     fp->sw_if_index = htonl(api_rpath->rpath.frp_sw_if_index);
-    memcpy(fp->next_hop, &api_rpath->rpath.frp_addr, sizeof(fp->next_hop));
-    if (api_rpath->rpath.frp_proto == FIB_PROTOCOL_IP4)
-	fp->afi = IP46_TYPE_IP4;
-    else if (api_rpath->rpath.frp_proto == FIB_PROTOCOL_IP6)
-	fp->afi = IP46_TYPE_IP6;
-    else
-      {
-	is_ip4 = ip46_address_is_ip4 (&api_rpath->rpath.frp_addr);
-	if (is_ip4)
-	    fp->afi = IP46_TYPE_IP4;
-	else
-	    fp->afi = IP46_TYPE_IP6;
-      }
+    copy_fib_next_hop (api_rpath, fp);
     fp++;
   }
 
@@ -7878,7 +7883,7 @@ send_ip6_fib_details (vpe_api_main_t * am,
   vl_api_ip6_fib_details_t *mp;
   fib_route_path_encode_t *api_rpath;
   vl_api_fib_path_t *fp;
-  int is_ip4, path_count;
+  int path_count;
 
   path_count = vec_len(api_rpaths);
   mp = vl_msg_api_alloc (sizeof (*mp) + path_count * sizeof (*fp));
@@ -7926,19 +7931,7 @@ send_ip6_fib_details (vpe_api_main_t * am,
       }
     fp->weight = htonl(api_rpath->rpath.frp_weight);
     fp->sw_if_index = htonl(api_rpath->rpath.frp_sw_if_index);
-    memcpy(fp->next_hop, &api_rpath->rpath.frp_addr, sizeof(fp->next_hop));
-    if (api_rpath->rpath.frp_proto == FIB_PROTOCOL_IP4)
-      fp->afi = IP46_TYPE_IP4;
-    else if (api_rpath->rpath.frp_proto == FIB_PROTOCOL_IP6)
-      fp->afi = IP46_TYPE_IP6;
-    else
-      {
-	is_ip4 = ip46_address_is_ip4 (&api_rpath->rpath.frp_addr);
-	if (is_ip4)
-	  fp->afi = IP46_TYPE_IP4;
-	else
-	  fp->afi = IP46_TYPE_IP6;
-      }
+    copy_fib_next_hop (api_rpath, fp);
     fp++;
   }
 
@@ -9507,6 +9500,45 @@ vl_api_ipsec_spd_dump_t_handler (vl_api_ipsec_spd_dump_t * mp)
 #else
   clib_warning ("unimplemented");
 #endif
+}
+
+static void
+vl_api_feature_enable_disable_t_handler (vl_api_feature_enable_disable_t * mp)
+{
+  vl_api_feature_enable_disable_reply_t *rmp;
+  int rv = 0;
+
+  u8 *arc_name = format (0, "%s%c", mp->arc_name, 0);
+  u8 *feature_name = format (0, "%s%c", mp->feature_name, 0);
+  u32 sw_if_index = ntohl (mp->sw_if_index);
+
+  vnet_feature_registration_t *reg;
+  reg =
+    vnet_get_feature_reg ((const char *) arc_name,
+			  (const char *) feature_name);
+  if (reg == 0)
+    rv = VNET_API_ERROR_INVALID_VALUE;
+  else
+    {
+      clib_error_t *error = 0;
+
+      if (reg->enable_disable_cb)
+	error = reg->enable_disable_cb (sw_if_index, mp->enable);
+      if (!error)
+	vnet_feature_enable_disable ((const char *) arc_name,
+				     (const char *) feature_name,
+				     sw_if_index, mp->enable, 0, 0);
+      else
+	{
+	  clib_error_report (error);
+	  rv = VNET_API_ERROR_CANNOT_ENABLE_DISABLE_FEATURE;
+	}
+    }
+
+  vec_free (feature_name);
+  vec_free (arc_name);
+
+  REPLY_MACRO (VL_API_FEATURE_ENABLE_DISABLE_REPLY);
 }
 
 #define BOUNCE_HANDLER(nn)                                              \
