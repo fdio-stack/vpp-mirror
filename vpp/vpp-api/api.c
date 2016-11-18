@@ -1,6 +1,5 @@
 /*
- *------------------------------------------------------------------
- * api.c - message handler registration
+ *------------------------------------------------------------------ * api.c - message handler registration
  *
  * Copyright (c) 2010-2016 Cisco and/or its affiliates.
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -9163,10 +9162,10 @@ vl_api_bind_uri_t_handler (vl_api_bind_uri_t * mp)
 
   a->uri = (char *) mp->uri;
   a->api_client_index = mp->client_index;
-  a->accept_cookie = mp->accept_cookie;
+  a->accept_cookie = mp->accept_cookie; //alagalah : This appears to be unset.
   a->segment_size = mp->initial_segment_size;
   a->options = mp->options;
-  a->segment_name = segment_name;
+  a->segment_name = segment_name; // alagalah : This appears unset. Just a mem alloc ?
   a->segment_name_length = segment_name_length;
   a->send_session_create_callback = send_session_create_callback;
   a->send_session_clear_callback = send_session_clear_callback;
@@ -9291,13 +9290,12 @@ vl_api_accept_session_reply_t_handler (vl_api_accept_session_reply_t * mp)
   switch (s->session_type)
     {
     case SESSION_TYPE_IP4_UDP:
-      /* set fifo states to ready */
-      s->session_state = SESSION_STATE_READY;
-      break;
-
     case SESSION_TYPE_IP4_TCP:
     case SESSION_TYPE_IP6_TCP:
     case SESSION_TYPE_IP6_UDP:
+      /* set fifo states to ready */
+      s->session_state = SESSION_STATE_READY;
+      break;
     default:
       clib_warning ("session type %d unimplemented", s->session_type);
       break;

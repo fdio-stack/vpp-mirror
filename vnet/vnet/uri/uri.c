@@ -632,8 +632,10 @@ vnet_bind_uri (vnet_bind_uri_args_t *a)
               0 /* consumer pid */,
               0 /* (do not) send signal when queue non-empty */);
         }
+
       svm_pop_heap (oldheap);
 
+      // alagalah This is why we get the assert in uri_udp_test2
       a->server_event_queue_address = (u64) ss->event_queue;
 
       ss->session_create_callback = a->send_session_create_callback;

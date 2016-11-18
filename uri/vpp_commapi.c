@@ -344,7 +344,8 @@ typedef struct socket_info
 
   unsigned int refcount;
 
-  //FIFO
+  //FIFO alagalah - change name to "session" as there only
+  // needs to be one.
   session_t *sessions;
 
   // Used for reference in vector between parent/child sockets
