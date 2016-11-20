@@ -41,3 +41,8 @@ lib_LTLIBRARIES = libvpp_commapi.la
 libvpp_commapi_la_SOURCES = vpp_commapi.c
 libvpp_commapi_la_LIBADD =  -lvlibmemoryclient -lvlibapi -lsvm -lvppinfra -lpthread -lm -lrt -ldl
 
+
+bin_PROGRAMS += server1
+
+server1_SOURCES = server1.c
+server1_LDADD = -L../build-root/build-vpp_lite_debug-native/uri/.libs/libvpp_commapi.so

@@ -15,6 +15,7 @@
 #include <vpp-api/vpe_msg_enum.h>
 #include <svm_fifo_segment.h>
 #include <vnet/uri/uri.h>
+#include "vpp_commapi.h"
 
 #define vl_typedefs		/* define message structures */
 #include <vpp-api/vpe_all_api_h.h>
@@ -358,6 +359,7 @@ typedef struct socket_info
   int bound;
   int bcast;
   int is_server;
+  int listen; //alagalah - temp until we unravel bind
   int connected;
   int defer_connect;
   int pktinfo;
@@ -1197,14 +1199,21 @@ vpp_bind_api(socket_info_t *si)
   memcpy (bmp->uri, si->uri, vec_len (si->uri));
   vl_msg_api_send_shmem (vcm->vl_input_queue, (u8 *)&bmp);
 
-  if (wait_for_state_change (si, STATE_READY))
-    {
-      clib_warning ("timeout waiting for STATE_READY");
-      return VNET_API_ERROR_URI_FIFO_CREATE_FAILED;
-    }
+
 
   return 0;
 }
+
+int
+vpp_listen_api (socket_info_t *si)
+{
+	if (wait_for_state_change(si, STATE_READY)) {
+		clib_warning("timeout waiting for STATE_READY");
+		return VNET_API_ERROR_URI_FIFO_CREATE_FAILED;
+	}
+	return 0;
+}
+
 
 int
 vpp_calc_fd_from_indexes (int socket_idx, int session_idx)
@@ -4154,8 +4163,9 @@ pipe (int pipefd[2])
  *   ACCEPT
  ***************************************************************************/
 
-static int
-vpp_accept (int s, struct sockaddr *addr, socklen_t * addrlen, int flags)
+int
+//vpp_accept (int s, struct sockaddr *addr, socklen_t * addrlen, int flags)
+vpp_accept (int s, struct sockaddr *addr, socklen_t * addrlen)
 {
   socket_info_t *parent_si, *child_si;
   session_t *session;
@@ -4201,7 +4211,7 @@ vpp_accept (int s, struct sockaddr *addr, socklen_t * addrlen, int flags)
 #ifdef HAVE_ACCEPT4
       return libc_accept4 (s, addr, addrlen, flags);
 #else
-      UNUSED (flags);
+      //UNUSED (flags);
       return libc_accept (s, addr, addrlen);
 #endif
     }
@@ -4226,6 +4236,7 @@ vpp_accept (int s, struct sockaddr *addr, socklen_t * addrlen, int flags)
   child_si->type = parent_si->type;
   child_si->protocol = parent_si->protocol;
   child_si->bound = 1;
+  child_si->listen =1;
   child_si->is_server = 1;
   child_si->connected = 1;
   child_si->parent_index = parent_idx;
@@ -4269,13 +4280,7 @@ vpp_accept (int s, struct sockaddr *addr, socklen_t * addrlen, int flags)
 }
 
 
-#ifdef HAVE_ACCEPT4
-int
-accept4 (int s, struct sockaddr *addr, socklen_t * addrlen, int flags)
-{
-  return swrap_accept (s, addr, (socklen_t *) addrlen, flags);
-}
-#endif
+
 
 #ifdef HAVE_ACCEPT_PSOCKLEN_T
 int
@@ -4285,7 +4290,7 @@ int
 accept (int s, struct sockaddr *addr, socklen_t * addrlen)
 #endif
 {
-  return vpp_accept (s, addr, (socklen_t *) addrlen, 0);
+  return vpp_accept (s, addr, (socklen_t *) addrlen);
 }
 
 static int autobind_start_init;
@@ -4659,7 +4664,7 @@ swrap_bind (int s, const struct sockaddr *myaddr, socklen_t addrlen)
   return ret;
 }
 
-static int
+int
 vpp_bind (int s, const struct sockaddr *myaddr, socklen_t addrlen)
 {
   socket_info_t *si = vpp_find_socket_info (s);
@@ -4858,25 +4863,41 @@ bindresvport (int sockfd, struct sockaddr_in *sinp)
  *   LISTEN
  ***************************************************************************/
 
-static int
-swrap_listen (int s, int backlog)
+//static int
+//swrap_listen (int s, int backlog)
+//{
+//  int ret;
+//  struct socket_info *si = find_socket_info (s);
+//
+//  if (!si)
+//    {
+//      return libc_listen (s, backlog);
+//    }
+//
+//  if (si->bound == 0)
+//    {
+//      ret = swrap_auto_bind (s, si, si->family);
+//      if (ret == -1)
+//	{
+//	  errno = EADDRINUSE;
+//	  return ret;
+//	}
+//    }
+//
+//  ret = libc_listen (s, backlog);
+//
+//  return ret;
+//}
+
+int
+vpp_listen (int s, int backlog)
 {
   int ret;
-  struct socket_info *si = find_socket_info (s);
+  socket_info_t *si = vpp_find_socket_info (s);
 
   if (!si)
     {
       return libc_listen (s, backlog);
-    }
-
-  if (si->bound == 0)
-    {
-      ret = swrap_auto_bind (s, si, si->family);
-      if (ret == -1)
-	{
-	  errno = EADDRINUSE;
-	  return ret;
-	}
     }
 
   ret = libc_listen (s, backlog);
@@ -4887,7 +4908,8 @@ swrap_listen (int s, int backlog)
 int
 listen (int s, int backlog)
 {
-  return swrap_listen (s, backlog);
+  //return swrap_listen (s, backlog);
+  return vpp_listen (s, backlog);
 }
 
 /****************************************************************************
