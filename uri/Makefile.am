@@ -44,8 +44,11 @@ libvpp_commapi_la_LIBADD =  -lvlibmemoryclient -lvlibapi -lsvm -lvppinfra -lpthr
 
 
 bin_PROGRAMS += server1
-
-
 server1_SOURCES = server1.c
 server1_LDADD = libvpp_commapi.la
+#server1_LDFLAGS = -static
+
+bin_PROGRAMS += client
+client_SOURCES = client.c
+client_LDADD = libvpp_commapi.la
 #server1_LDFLAGS = -static

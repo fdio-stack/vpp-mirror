@@ -7,6 +7,7 @@
 #include <arpa/inet.h> //inet_addr
 #include <unistd.h>    //close
 #include <fcntl.h> // for open
+#include <vpp_commapi.h>
 
 int main(int argc , char *argv[])
 {
@@ -15,7 +16,7 @@ int main(int argc , char *argv[])
   char message[1000] , server_reply[2000];
 
   //Create socket
-  sock = socket(AF_INET , SOCK_STREAM , 0);
+  sock = vpp_socket(AF_INET , SOCK_STREAM , 0);
   if (sock == -1)
     {
       printf("Could not create socket");

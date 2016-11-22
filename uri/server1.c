@@ -23,7 +23,7 @@ int main(int argc , char *argv[])
     {
       printf("Could not create socket");
     }
-  puts("Socket created");
+  printf("Socket created: %d\n", socket_desc);
 
   //Prepare the sockaddr_in structure
   server.sin_family = AF_INET;

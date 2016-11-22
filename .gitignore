@@ -87,3 +87,4 @@ GTAGS
 /Debug/
 
 .autotools
+.externalToolBuilders/
