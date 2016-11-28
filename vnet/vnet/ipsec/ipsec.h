@@ -12,9 +12,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#if DPDK==1
-#include <vnet/devices/dpdk/dpdk.h>
-#endif
+#ifndef __IPSEC_H__
+#define __IPSEC_H__
 
 #define IPSEC_FLAG_IPSEC_GRE_TUNNEL (1 << 0)
 
@@ -280,12 +279,6 @@ int ipsec_set_interface_key (vnet_main_t * vnm, u32 hw_if_index,
 always_inline void
 ipsec_alloc_empty_buffers (vlib_main_t * vm, ipsec_main_t * im)
 {
-#if DPDK==1
-  dpdk_main_t *dm = &dpdk_main;
-  u32 free_list_index = dm->vlib_buffer_free_list_index;
-#else
-  u32 free_list_index = VLIB_BUFFER_DEFAULT_FREE_LIST_INDEX;
-#endif
   u32 cpu_index = os_get_cpu_number ();
   uword l = vec_len (im->empty_buffers[cpu_index]);
   uword n_alloc = 0;
@@ -297,11 +290,8 @@ ipsec_alloc_empty_buffers (vlib_main_t * vm, ipsec_main_t * im)
 	  vec_alloc (im->empty_buffers[cpu_index], 2 * VLIB_FRAME_SIZE);
 	}
 
-      n_alloc = vlib_buffer_alloc_from_free_list (vm,
-						  im->empty_buffers[cpu_index]
-						  + l,
-						  2 * VLIB_FRAME_SIZE - l,
-						  free_list_index);
+      n_alloc = vlib_buffer_alloc (vm, im->empty_buffers[cpu_index] + l,
+				   2 * VLIB_FRAME_SIZE - l);
 
       _vec_len (im->empty_buffers[cpu_index]) = l + n_alloc;
     }
@@ -319,6 +309,8 @@ get_next_output_feature_node_index (vlib_buffer_t * b,
   vnet_feature_next (sw_if_index, &next, b);
   return node->next_nodes[next];
 }
+
+#endif /* __IPSEC_H__ */
 
 /*
  * fd.io coding-style-patch-verification: ON

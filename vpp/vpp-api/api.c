@@ -96,6 +96,10 @@
 #undef __included_bihash_template_h__
 #include <vnet/l2/l2_fib.h>
 
+#if DPDK > 0
+#include <vnet/devices/dpdk/dpdk.h>
+#endif
+
 #if IPSEC > 0
 #include <vnet/ipsec/ipsec.h>
 #include <vnet/ipsec/ikev2.h>
@@ -5015,7 +5019,7 @@ static void send_gre_tunnel_details
   clib_memcpy (rmp->src_address, &(t->tunnel_src), 4);
   clib_memcpy (rmp->dst_address, &(t->tunnel_dst), 4);
   rmp->outer_fib_id = htonl (im->fibs[t->outer_fib_index].ft_table_id);
-  rmp->teb = t->teb;
+  rmp->teb = (GRE_TUNNEL_TYPE_TEB == t->type);
   rmp->sw_if_index = htonl (t->sw_if_index);
   rmp->context = context;
 
@@ -8635,6 +8639,9 @@ vl_api_sw_interface_span_dump_t_handler (vl_api_sw_interface_span_dump_t * mp)
   u32 src_sw_if_index = 0, *dst_sw_if_index;
 
   q = vl_api_client_index_to_input_queue (mp->client_index);
+  if (!q)
+    return;
+
   vec_foreach (dst_sw_if_index, sm->dst_by_src_sw_if_index)
   {
     if (*dst_sw_if_index > 0)
@@ -9489,14 +9496,14 @@ vl_api_ipsec_spd_dump_t_handler (vl_api_ipsec_spd_dump_t * mp)
   spd_index = p[0];
   spd = pool_elt_at_index (im->spds, spd_index);
 
-  pool_foreach (policy, spd->policies, (
-					 {
-					 if (mp->sa_id == ~(0)
-					     || ntohl (mp->sa_id) ==
-					     policy->sa_id)
-					 send_ipsec_spd_details (policy, q,
-								 mp->context);}
-		));
+  /* *INDENT-OFF* */
+  pool_foreach (policy, spd->policies,
+  ({
+    if (mp->sa_id == ~(0) || ntohl (mp->sa_id) == policy->sa_id)
+      send_ipsec_spd_details (policy, q,
+                              mp->context);}
+    ));
+  /* *INDENT-ON* */
 #else
   clib_warning ("unimplemented");
 #endif
@@ -9507,10 +9514,12 @@ vl_api_feature_enable_disable_t_handler (vl_api_feature_enable_disable_t * mp)
 {
   vl_api_feature_enable_disable_reply_t *rmp;
   int rv = 0;
+  u8 *arc_name, *feature_name;
 
-  u8 *arc_name = format (0, "%s%c", mp->arc_name, 0);
-  u8 *feature_name = format (0, "%s%c", mp->feature_name, 0);
-  u32 sw_if_index = ntohl (mp->sw_if_index);
+  VALIDATE_SW_IF_INDEX (mp);
+
+  arc_name = format (0, "%s%c", mp->arc_name, 0);
+  feature_name = format (0, "%s%c", mp->feature_name, 0);
 
   vnet_feature_registration_t *reg;
   reg =
@@ -9520,8 +9529,10 @@ vl_api_feature_enable_disable_t_handler (vl_api_feature_enable_disable_t * mp)
     rv = VNET_API_ERROR_INVALID_VALUE;
   else
     {
+      u32 sw_if_index;
       clib_error_t *error = 0;
 
+      sw_if_index = ntohl (mp->sw_if_index);
       if (reg->enable_disable_cb)
 	error = reg->enable_disable_cb (sw_if_index, mp->enable);
       if (!error)
@@ -9537,6 +9548,8 @@ vl_api_feature_enable_disable_t_handler (vl_api_feature_enable_disable_t * mp)
 
   vec_free (feature_name);
   vec_free (arc_name);
+
+  BAD_SW_IF_INDEX_LABEL;
 
   REPLY_MACRO (VL_API_FEATURE_ENABLE_DISABLE_REPLY);
 }

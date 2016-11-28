@@ -20,6 +20,14 @@
 #include <vlib/threads.h>
 #include <vlib/unix/unix.h>
 
+#if DPDK==1
+#include <rte_config.h>
+#include <rte_common.h>
+#include <rte_eal.h>
+#include <rte_launch.h>
+#include <rte_lcore.h>
+#endif
+
 static u8 *
 format_sched_policy_and_priority (u8 * s, va_list * args)
 {
@@ -444,9 +452,9 @@ test_frame_queue_nelts (vlib_main_t * vm, unformat_input_t * input,
 
   while (unformat_check_input (line_input) != UNFORMAT_END_OF_INPUT)
     {
-      if (unformat (line_input, "nelts %u"), &nelts)
+      if (unformat (line_input, "nelts %u", &nelts))
 	;
-      else if (unformat (line_input, "index %u"), &index)
+      else if (unformat (line_input, "index %u", &index))
 	;
       else
 	return clib_error_return (0, "parse error: '%U'",
@@ -511,9 +519,9 @@ test_frame_queue_threshold (vlib_main_t * vm, unformat_input_t * input,
 
   while (unformat_check_input (line_input) != UNFORMAT_END_OF_INPUT)
     {
-      if (unformat (line_input, "threshold %u"), &threshold)
+      if (unformat (line_input, "threshold %u", &threshold))
 	;
-      else if (unformat (line_input, "index %u"), &index)
+      else if (unformat (line_input, "index %u", &index))
 	;
       else
 	return clib_error_return (0, "parse error: '%U'",

@@ -243,7 +243,6 @@ dpdk_lib_init (dpdk_main_t * dm)
   clib_error_t *error;
   vlib_main_t *vm = vlib_get_main ();
   vlib_thread_main_t *tm = vlib_get_thread_main ();
-  vlib_node_runtime_t *rt;
   vnet_sw_interface_t *sw;
   vnet_hw_interface_t *hi;
   dpdk_device_t *xd;
@@ -258,9 +257,6 @@ dpdk_lib_init (dpdk_main_t * dm)
 
   dm->input_cpu_first_index = 0;
   dm->input_cpu_count = 1;
-
-  rt = vlib_node_get_runtime (vm, dpdk_input_node.index);
-  rt->function = dpdk_input_multiarch_select ();
 
   /* find out which cpus will be used for input */
   p = hash_get_mem (tm->thread_registrations_by_name, "workers");
@@ -410,7 +406,6 @@ dpdk_lib_init (dpdk_main_t * dm)
 
       if (devconf->num_rx_queues > 1 && dm->use_rss == 0)
 	{
-	  rt->function = dpdk_input_rss_multiarch_select ();
 	  dm->use_rss = 1;
 	}
 
@@ -1746,7 +1741,7 @@ dpdk_init (vlib_main_t * vm)
 
   /* Default vlib_buffer_t flags, DISABLES tcp/udp checksumming... */
   dm->buffer_flags_template =
-    (VLIB_BUFFER_TOTAL_LENGTH_VALID
+    (VLIB_BUFFER_TOTAL_LENGTH_VALID | VNET_BUFFER_RTE_MBUF_VALID
      | IP_BUFFER_L4_CHECKSUM_COMPUTED | IP_BUFFER_L4_CHECKSUM_CORRECT);
 
   dm->stat_poll_interval = DPDK_STATS_POLL_INTERVAL;

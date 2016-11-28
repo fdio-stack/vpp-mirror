@@ -21,14 +21,14 @@ DPDK_DOWNLOAD_DIR     ?= $(HOME)/Downloads
 DPDK_MARCH            ?= native
 DPDK_TUNE             ?= generic
 DPDK_DEBUG            ?= n
+DPDK_CRYPTO_PMD        ?= n
 
 B := $(DPDK_BUILD_DIR)
 I := $(DPDK_INSTALL_DIR)
-DPDK_VERSION ?= 16.07
+DPDK_VERSION ?= 16.11
 DPDK_BASE_URL ?= http://fast.dpdk.org/rel
 DPDK_TARBALL := dpdk-$(DPDK_VERSION).tar.xz
 DPDK_TAR_URL := $(DPDK_BASE_URL)/$(DPDK_TARBALL)
-DPDK_16.04_TARBALL_MD5_CKSUM := d1f82e7d7589b3b2f623c155442b8306
 DPDK_16.07_TARBALL_MD5_CKSUM := 690a2bb570103e58d12f9806e8bf21be
 DPDK_16.11_TARBALL_MD5_CKSUM := 06c1c577795360719d0b4fafaeee21e9
 DPDK_SOURCE := $(B)/dpdk-$(DPDK_VERSION)
@@ -119,6 +119,9 @@ $(B)/custom-config: $(B)/.patch.ok Makefile
 	$(call set,RTE_LIBRTE_VMXNET3_DEBUG_INIT,$(DPDK_DEBUG))
 	$(call set,RTE_LIBRTE_PMD_BOND,y)
 	$(call set,RTE_LIBRTE_IP_FRAG,y)
+	$(call set,RTE_LIBRTE_PMD_AESNI_MB,$(DPDK_CRYPTO_PMD))
+	$(call set,RTE_LIBRTE_PMD_AESNI_GCM,$(DPDK_CRYPTO_PMD))
+	$(call set,RTE_LIBRTE_PMD_QAT,$(DPDK_CRYPTO_PMD))
 	@# not needed
 	$(call set,RTE_LIBRTE_TIMER,n)
 	$(call set,RTE_LIBRTE_CFGFILE,n)

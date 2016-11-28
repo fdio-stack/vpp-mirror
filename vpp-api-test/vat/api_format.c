@@ -37,12 +37,9 @@
 #include <vnet/classify/policer_classify.h>
 #include <vnet/classify/flow_classify.h>
 #include <vnet/mpls/mpls.h>
-#if DPDK > 0
 #include <vnet/ipsec/ipsec.h>
 #include <vnet/ipsec/ikev2.h>
-#else
 #include <inttypes.h>
-#endif
 #include <vnet/map/map.h>
 #include <vnet/cop/cop.h>
 #include <vnet/ip/ip6_hop_by_hop.h>
@@ -54,6 +51,7 @@
 
 #include "vat/json_format.h"
 
+#include <inttypes.h>
 #include <sys/stat.h>
 
 #define vl_typedefs		/* define message structures */
@@ -247,7 +245,6 @@ unformat_ip6_address (unformat_input_t * input, va_list * args)
 uword
 unformat_ipsec_policy_action (unformat_input_t * input, va_list * args)
 {
-#if DPDK > 0
   u32 *r = va_arg (*args, u32 *);
 
   if (0);
@@ -257,15 +254,11 @@ unformat_ipsec_policy_action (unformat_input_t * input, va_list * args)
     else
     return 0;
   return 1;
-#else
-  return 0;
-#endif
 }
 
 uword
 unformat_ipsec_crypto_alg (unformat_input_t * input, va_list * args)
 {
-#if DPDK > 0
   u32 *r = va_arg (*args, u32 *);
 
   if (0);
@@ -275,15 +268,11 @@ unformat_ipsec_crypto_alg (unformat_input_t * input, va_list * args)
     else
     return 0;
   return 1;
-#else
-  return 0;
-#endif
 }
 
 u8 *
 format_ipsec_crypto_alg (u8 * s, va_list * args)
 {
-#if DPDK > 0
   u32 i = va_arg (*args, u32);
   u8 *t = 0;
 
@@ -296,15 +285,11 @@ format_ipsec_crypto_alg (u8 * s, va_list * args)
       return format (s, "unknown");
     }
   return format (s, "%s", t);
-#else
-  return format (s, "Unimplemented");
-#endif
 }
 
 uword
 unformat_ipsec_integ_alg (unformat_input_t * input, va_list * args)
 {
-#if DPDK > 0
   u32 *r = va_arg (*args, u32 *);
 
   if (0);
@@ -314,15 +299,11 @@ unformat_ipsec_integ_alg (unformat_input_t * input, va_list * args)
     else
     return 0;
   return 1;
-#else
-  return 0;
-#endif
 }
 
 u8 *
 format_ipsec_integ_alg (u8 * s, va_list * args)
 {
-#if DPDK > 0
   u32 i = va_arg (*args, u32);
   u8 *t = 0;
 
@@ -335,15 +316,11 @@ format_ipsec_integ_alg (u8 * s, va_list * args)
       return format (s, "unknown");
     }
   return format (s, "%s", t);
-#else
-  return format (s, "Unsupported");
-#endif
 }
 
 uword
 unformat_ikev2_auth_method (unformat_input_t * input, va_list * args)
 {
-#if DPDK > 0
   u32 *r = va_arg (*args, u32 *);
 
   if (0);
@@ -353,15 +330,11 @@ unformat_ikev2_auth_method (unformat_input_t * input, va_list * args)
     else
     return 0;
   return 1;
-#else
-  return 0;
-#endif
 }
 
 uword
 unformat_ikev2_id_type (unformat_input_t * input, va_list * args)
 {
-#if DPDK > 0
   u32 *r = va_arg (*args, u32 *);
 
   if (0);
@@ -371,9 +344,6 @@ unformat_ikev2_id_type (unformat_input_t * input, va_list * args)
     else
     return 0;
   return 1;
-#else
-  return 0;
-#endif
 }
 
 uword
@@ -5768,7 +5738,7 @@ api_ip_add_del_route (vat_main_t * vam)
   u8 is_unreach = 0, is_prohibit = 0;
   u8 create_vrf_if_needed = 0;
   u8 is_add = 1;
-  u8 next_hop_weight = 1;
+  u32 next_hop_weight = 1;
   u8 not_last = 0;
   u8 is_multipath = 0;
   u8 address_set = 0;
@@ -6054,7 +6024,7 @@ api_mpls_route_add_del (vat_main_t * vam)
   u32 sw_if_index = ~0, table_id = 0;
   u8 create_table_if_needed = 0;
   u8 is_add = 1;
-  u8 next_hop_weight = 1;
+  u32 next_hop_weight = 1;
   u8 is_multipath = 0;
   u32 next_hop_table_id = 0;
   u8 next_hop_set = 0;
@@ -11404,7 +11374,6 @@ api_ip_dump (vat_main_t * vam)
 static int
 api_ipsec_spd_add_del (vat_main_t * vam)
 {
-#if DPDK > 0
   unformat_input_t *i = vam->input;
   vl_api_ipsec_spd_add_del_t *mp;
   f64 timeout;
@@ -11438,16 +11407,11 @@ api_ipsec_spd_add_del (vat_main_t * vam)
   W;
   /* NOTREACHED */
   return 0;
-#else
-  clib_warning ("unsupported (no dpdk)");
-  return -99;
-#endif
 }
 
 static int
 api_ipsec_interface_add_del_spd (vat_main_t * vam)
 {
-#if DPDK > 0
   unformat_input_t *i = vam->input;
   vl_api_ipsec_interface_add_del_spd_t *mp;
   f64 timeout;
@@ -11496,16 +11460,11 @@ api_ipsec_interface_add_del_spd (vat_main_t * vam)
   W;
   /* NOTREACHED */
   return 0;
-#else
-  clib_warning ("unsupported (no dpdk)");
-  return -99;
-#endif
 }
 
 static int
 api_ipsec_spd_add_del_entry (vat_main_t * vam)
 {
-#if DPDK > 0
   unformat_input_t *i = vam->input;
   vl_api_ipsec_spd_add_del_entry_t *mp;
   f64 timeout;
@@ -11659,16 +11618,11 @@ api_ipsec_spd_add_del_entry (vat_main_t * vam)
   W;
   /* NOTREACHED */
   return 0;
-#else
-  clib_warning ("unsupported (no dpdk)");
-  return -99;
-#endif
 }
 
 static int
 api_ipsec_sad_add_del_entry (vat_main_t * vam)
 {
-#if DPDK > 0
   unformat_input_t *i = vam->input;
   vl_api_ipsec_sad_add_del_entry_t *mp;
   f64 timeout;
@@ -11796,16 +11750,11 @@ api_ipsec_sad_add_del_entry (vat_main_t * vam)
   W;
   /* NOTREACHED */
   return 0;
-#else
-  clib_warning ("unsupported (no dpdk)");
-  return -99;
-#endif
 }
 
 static int
 api_ipsec_sa_set_key (vat_main_t * vam)
 {
-#if DPDK > 0
   unformat_input_t *i = vam->input;
   vl_api_ipsec_sa_set_key_t *mp;
   f64 timeout;
@@ -11848,16 +11797,11 @@ api_ipsec_sa_set_key (vat_main_t * vam)
   W;
   /* NOTREACHED */
   return 0;
-#else
-  clib_warning ("unsupported (no dpdk)");
-  return -99;
-#endif
 }
 
 static int
 api_ikev2_profile_add_del (vat_main_t * vam)
 {
-#if DPDK > 0
   unformat_input_t *i = vam->input;
   vl_api_ikev2_profile_add_del_t *mp;
   f64 timeout;
@@ -11901,16 +11845,11 @@ api_ikev2_profile_add_del (vat_main_t * vam)
   W;
   /* NOTREACHED */
   return 0;
-#else
-  clib_warning ("unsupported (no dpdk)");
-  return -99;
-#endif
 }
 
 static int
 api_ikev2_profile_set_auth (vat_main_t * vam)
 {
-#if DPDK > 0
   unformat_input_t *i = vam->input;
   vl_api_ikev2_profile_set_auth_t *mp;
   f64 timeout;
@@ -11977,16 +11916,11 @@ api_ikev2_profile_set_auth (vat_main_t * vam)
   W;
   /* NOTREACHED */
   return 0;
-#else
-  clib_warning ("unsupported (no dpdk)");
-  return -99;
-#endif
 }
 
 static int
 api_ikev2_profile_set_id (vat_main_t * vam)
 {
-#if DPDK > 0
   unformat_input_t *i = vam->input;
   vl_api_ikev2_profile_set_id_t *mp;
   f64 timeout;
@@ -12062,16 +11996,11 @@ api_ikev2_profile_set_id (vat_main_t * vam)
   W;
   /* NOTREACHED */
   return 0;
-#else
-  clib_warning ("unsupported (no dpdk)");
-  return -99;
-#endif
 }
 
 static int
 api_ikev2_profile_set_ts (vat_main_t * vam)
 {
-#if DPDK > 0
   unformat_input_t *i = vam->input;
   vl_api_ikev2_profile_set_ts_t *mp;
   f64 timeout;
@@ -12138,16 +12067,11 @@ api_ikev2_profile_set_ts (vat_main_t * vam)
   W;
   /* NOTREACHED */
   return 0;
-#else
-  clib_warning ("unsupported (no dpdk)");
-  return -99;
-#endif
 }
 
 static int
 api_ikev2_set_local_key (vat_main_t * vam)
 {
-#if DPDK > 0
   unformat_input_t *i = vam->input;
   vl_api_ikev2_set_local_key_t *mp;
   f64 timeout;
@@ -12185,10 +12109,6 @@ api_ikev2_set_local_key (vat_main_t * vam)
   W;
   /* NOTREACHED */
   return 0;
-#else
-  clib_warning ("unsupported (no dpdk)");
-  return -99;
-#endif
 }
 
 /*
