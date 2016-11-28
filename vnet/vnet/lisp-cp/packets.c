@@ -142,24 +142,34 @@ pkt_push_udp (vlib_main_t * vm, vlib_buffer_t * b, u16 sp, u16 dp)
 }
 
 void *
-pkt_push_tcp (vlib_main_t * vm, vlib_buffer_t * b, u16 sp, u16 dp, u32 seq,
-              u32 ack, u8 tcp_hdr_opts_len, u8 flags, u16 wnd)
+pkt_push_tcp_net_order (vlib_main_t * vm, vlib_buffer_t * b, u16 sp, u16 dp, u32 seq,
+                        u32 ack, u8 tcp_hdr_opts_len, u8 flags, u16 wnd)
 {
   tcp_header_t *th;
 
   th = vlib_buffer_push_uninit (b, tcp_hdr_opts_len);
 
-  th->src_port = clib_host_to_net_u16 (sp);
-  th->dst_port = clib_host_to_net_u16 (dp);
-  th->seq_number = clib_host_to_net_u32 (seq);
-  th->ack_number = clib_host_to_net_u32 (ack);
+  th->src_port = sp;
+  th->dst_port = dp;
+  th->seq_number = seq;
+  th->ack_number = ack;
   th->reserved1 = 0;
   th->data_offset = tcp_hdr_opts_len >> 2;
   th->flags = flags;
-  th->window = clib_host_to_net_u16 (wnd);
+  th->window = wnd;
   th->checksum = 0;
   th->urgent_pointer = 0;
   return th;
+}
+void *
+pkt_push_tcp (vlib_main_t * vm, vlib_buffer_t * b, u16 sp, u16 dp, u32 seq,
+              u32 ack, u8 tcp_hdr_opts_len, u8 flags, u16 wnd)
+{
+  return pkt_push_tcp_net_order (vm, b, clib_host_to_net_u16 (sp),
+                                 clib_host_to_net_u16 (dp),
+                                 clib_host_to_net_u32 (seq),
+                                 clib_host_to_net_u32 (ack), tcp_hdr_opts_len,
+                                 flags, clib_host_to_net_u16 (wnd));
 }
 
 void *

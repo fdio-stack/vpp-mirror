@@ -112,7 +112,7 @@ typedef struct _tcp_session
 
   u32 rcv_las;          /**< rcv_nxt at last ack sent/rcv_wnd update */
 
-  tcp_options_t rcv_opt;        /**< received options */
+  tcp_options_t opt;    /**< send/receive and session options */
 
   u32 iss;              /**< initial sent sequence */
   u32 irs;              /**< initial remote sequence */
@@ -258,6 +258,10 @@ void
 tcp_send_synack (tcp_session_t *ts, u8 is_ip4);
 void
 tcp_send_dupack (tcp_session_t *ts, u8 is_ip4);
+void
+tcp_send_challange_ack (tcp_session_t *ts, u8 is_ip4);
+void
+tcp_send_reset (vlib_buffer_t *pkt, u8 is_ip4);
 
 always_inline u32
 tcp_end_seq (tcp_header_t *th, u32 len)

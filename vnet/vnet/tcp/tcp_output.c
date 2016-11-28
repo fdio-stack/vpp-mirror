@@ -131,18 +131,18 @@ tcp_make_syn_or_synack_options (tcp_session_t *ts, tcp_options_t *opts)
   opts->mss = 1400; /*XXX discover that */
   len += TCP_OPTION_LEN_MSS;
 
-  if (ts->rcv_opt.wscale_flag)
+  if (ts->opt.wscale_flag)
     {
       opts->wscale_flag = 1;
-      opts->wscale = ts->rcv_opt.wscale_snd;
+      opts->wscale = ts->opt.wscale_snd;
       len += TCP_OPTION_LEN_WINDOW_SCALE;
     }
 
-  if (ts->rcv_opt.tstamp_flag)
+  if (ts->opt.tstamp_flag)
     {
       opts->tstamp_flag = 1;
       opts->tsval = tcp_time_now ();
-      opts->tsecr = ts->rcv_opt.tsval_recent;
+      opts->tsecr = ts->opt.tsval_recent;
       len += TCP_OPTION_LEN_TIMESTAMP;
     }
 
@@ -154,11 +154,11 @@ tcp_make_ack_options (tcp_session_t *ts, tcp_options_t *opts)
 {
   u8 len = 0;
 
-  if (ts->rcv_opt.tstamp_flag)
+  if (ts->opt.tstamp_flag)
     {
       opts->tstamp_flag = 1;
       opts->tsval = tcp_time_now ();
-      opts->tsecr = ts->rcv_opt.tsval_recent;
+      opts->tsecr = ts->opt.tsval_recent;
       len += TCP_OPTION_LEN_TIMESTAMP;
     }
   return len;
@@ -202,6 +202,7 @@ tcp_send_ack (tcp_session_t *ts, u8 is_ip4)
                      clib_min(ts->rcv_wnd, 65535U));
 
   tcp_options_write ((u8 *)(th + 1), snd_opts);
+  ts->rcv_las = ts->rcv_nxt;
 
   vnet_buffer (b)->tcp.session_index = ts->s_t_index;
   vnet_buffer (b)->tcp.flags = TCP_FLAG_ACK;
@@ -260,9 +261,10 @@ tcp_send_synack (tcp_session_t *ts, u8 is_ip4)
 
 
   tcp_options_write ((u8 *)(th + 1), snd_opts);
+  ts->rcv_las = ts->rcv_nxt;
 
   vnet_buffer (b)->tcp.session_index = ts->s_t_index;
-  vnet_buffer (b)->tcp.flags = TCP_FLAG_ACK;
+  vnet_buffer (b)->tcp.flags = TCP_FLAG_SYN | TCP_FLAG_ACK;
 
   /* Get frame to the right node
    * XXX should we queue acks and deliver as burst? */
@@ -280,6 +282,97 @@ void
 tcp_send_dupack (tcp_session_t *ts, u8 is_ip4)
 {
   clib_warning ("unimplemented");
+}
+
+void
+tcp_send_challange_ack (tcp_session_t *ts, u8 is_ip4)
+{
+  clib_warning ("unimplemented");
+}
+
+/**
+ *  Send reset
+ */
+void
+tcp_send_reset (vlib_buffer_t *pkt, u8 is_ip4)
+{
+  vlib_buffer_t *b;
+  vlib_frame_t *f;
+  u32 bi;
+  tcp_main_t *tm = vnet_get_tcp_main ();
+  vlib_main_t *vm = tm->vlib_main;
+  u32 *to_next, next_index;
+  u8 tcp_hdr_len, flags = 0;
+  tcp_header_t *th, * pkt_th;
+  u32 seq, ack;
+
+  if (vlib_buffer_alloc (vm, &bi, 1) != 1)
+    {
+      clib_warning ("Can't allocate buffer!");
+      return;
+    }
+
+  b = vlib_get_buffer (vm, bi);
+
+  /* Leave enough space for headers */
+  vlib_buffer_make_headroom (b, MAX_HDRS_LEN);
+
+  /* Make and write options */
+  tcp_hdr_len = sizeof (tcp_header_t);
+
+  pkt_th = vlib_buffer_get_current (pkt);
+  if (pkt_th->ack)
+    {
+     flags = TCP_FLAG_RST;
+     seq = pkt_th->ack_number;
+     ack = 0;
+    }
+  else
+    {
+      flags = TCP_FLAG_RST | TCP_FLAG_ACK;
+      seq = 0;
+      ack = clib_host_to_net_u32(vnet_buffer (pkt)->tcp.end_seq);
+    }
+
+  th = pkt_push_tcp_net_order (vm, b, pkt_th->dst_port, pkt_th->src_port, seq,
+                               ack, tcp_hdr_len, flags, 0);
+
+  if (is_ip4)
+    {
+      ip4_header_t * ih, *pkt_ih;
+
+      /* XXX options */
+      pkt_ih = (ip4_header_t *)((u8 *)th - sizeof(ip4_header_t));
+
+      ASSERT ((pkt_ih->ip_version_and_header_length & 0xF0) == 0x40);
+
+      ih = pkt_push_ipv4 (vm, b, &pkt_ih->dst_address, &pkt_ih->src_address,
+                          IP_PROTOCOL_TCP);
+      th->checksum = ip4_tcp_udp_compute_checksum (vm, b, ih);
+    }
+  else
+    {
+      ip6_header_t * ih, *pkt_ih;
+      int bogus = ~0;
+      /* XXX options */
+      pkt_ih = (ip6_header_t *)((u8 *)th - sizeof(ip6_header_t));
+
+      ASSERT ((pkt_ih->ip_version_traffic_class_and_flow_label & 0xF0) == 0x60);
+      ih = pkt_push_ipv6 (vm, b, &pkt_ih->dst_address, &pkt_ih->dst_address,
+                          IP_PROTOCOL_TCP);
+      th->checksum = ip6_tcp_udp_icmp_compute_checksum (vm, b, ih, &bogus);
+      ASSERT(!bogus);
+    }
+
+  /* Send to IP lookup */
+  next_index = is_ip4 ? ip4_lookup_node.index : ip6_lookup_node.index;
+  f = vlib_get_frame_to_node (vm, next_index);
+
+  /* Enqueue the packet */
+  to_next = vlib_frame_vector_args (f);
+  to_next[0] = bi;
+  f->n_vectors = 1;
+  vlib_put_frame_to_node (vm, next_index, f);
 }
 
 always_inline uword

@@ -25,6 +25,9 @@ void *pkt_push_udp_and_ip (vlib_main_t * vm, vlib_buffer_t * b, u16 sp,
 			   u16 dp, ip_address_t * sip, ip_address_t * dip);
 
 void *
+pkt_push_tcp_net_order (vlib_main_t * vm, vlib_buffer_t * b, u16 sp, u16 dp, u32 seq,
+                        u32 ack, u8 tcp_hdr_opts_len, u8 flags, u16 wnd);
+void *
 pkt_push_tcp (vlib_main_t * vm, vlib_buffer_t * b, u16 sp, u16 dp, u32 seq,
               u32 ack, u8 tcp_hdr_opts_len, u8 flags, u16 wnd);
 void *
