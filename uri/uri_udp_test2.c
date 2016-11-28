@@ -820,7 +820,7 @@ main (int argc, char **argv)
   unformat_input_t _argv, *a = &_argv;
   u8 *chroot_prefix;
   u8 *heap;
-  u8 * bind_name = (u8 *) "udp4:1234";
+  u8 * bind_name = (u8 *) "udp://0.0.0.0/1234";
   u32 tmp;
   mheap_t *h;
   session_t * session;

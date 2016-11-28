@@ -222,7 +222,7 @@ tcp_segment_validate (vlib_main_t *vm, tcp_session_t *ts0, vlib_buffer_t *tb0,
   if (paws_passed)
     {
       ts0->rcv_opt.tsval_recent = ts0->rcv_opt.tsval;
-      ts0->rcv_opt.tsval_recent_age = tcp_time_now (vm);
+      ts0->rcv_opt.tsval_recent_age = tcp_time_now ();
     }
 
   return 0;
@@ -535,6 +535,41 @@ VLIB_REGISTER_NODE (tcp6_established_node) = {
 #define _(s,n) [TCP_ESTABLISHED_NEXT_##s] = n,
     foreach_tcp_established_next
 #undef _
+  },
+};
+
+VLIB_NODE_FUNCTION_MULTIARCH (tcp6_established_node, tcp6_established)
+
+static uword
+stub_establish_fixme (vlib_main_t * vm, vlib_node_runtime_t * node,
+                      vlib_frame_t * frame)
+{
+  clib_warning ("BUG: stub called...");
+  vlib_buffer_free (vm,   vlib_frame_vector_args (frame), frame->n_vectors);
+  return frame->n_vectors;
+}
+
+VLIB_REGISTER_NODE (tcp4_establish_node) = {
+  .function = stub_establish_fixme,
+  .name = "tcp4-establish",
+  /* Takes a vector of packets. */
+  .vector_size = sizeof (u32),
+
+  .n_next_nodes = 1,
+  .next_nodes = {
+    "error-drop",
+  },
+};
+
+VLIB_REGISTER_NODE (tcp6_establish_node) = {
+  .function = stub_establish_fixme,
+  .name = "tcp6-establish",
+  /* Takes a vector of packets. */
+  .vector_size = sizeof (u32),
+
+  .n_next_nodes = 1,
+  .next_nodes = {
+    "error-drop",
   },
 };
 
@@ -931,7 +966,7 @@ VLIB_REGISTER_NODE (tcp6_input_node) = {
   .n_next_nodes = TCP_INPUT_N_NEXT,
   .next_nodes = {
 #define _(s,n) [TCP_INPUT_NEXT_##s] = n,
-    foreach_tcp4_input_next
+    foreach_tcp6_input_next
 #undef _
   },
 

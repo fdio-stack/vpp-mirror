@@ -494,8 +494,7 @@ port_decode (char *uri, u16 *port)
   char * cp;
   u32 port_number_host_byte_order;
 
-  /* "udp4:12345" */
-  cp = &uri[5];
+  cp = uri;
   if (*cp == 0)
     return VNET_API_ERROR_INVALID_VALUE;
 
@@ -515,9 +514,11 @@ port_decode (char *uri, u16 *port)
   return 0;
 }
 
+/*$$$$ fixme */
 int
 uri_decode (char *uri, stream_session_type_t *sst, u16 *port)
 {
+  int i;
   int rv;
   port[0] = ~0;
 
@@ -526,16 +527,34 @@ uri_decode (char *uri, stream_session_type_t *sst, u16 *port)
     {
       sst[0] = SESSION_TYPE_FIFO;
     }
-  else if (uri[0] == 'u' && uri[3] == '4')
+  else if (uri[0] == 'u')
     sst[0] = SESSION_TYPE_IP4_UDP;
-  else if (uri[0] == 't' && uri[3] == '4')
+  else if (uri[0] == 't')
     sst[0] = SESSION_TYPE_IP4_TCP;
   else
     return VNET_API_ERROR_UNKNOWN_URI_TYPE;
 
   if (sst[0] < SESSION_TYPE_FIFO)
     {
-      if ((rv = port_decode (uri, port)))
+      char *cp = uri;
+
+      while (*cp && (*cp != ':'))
+        cp++;
+      if (*cp)
+        cp++;
+      for (i = 0; i < 3; i++)
+        {
+          while (*cp && (*cp != '.'))
+            cp++;
+          if (*cp)
+            cp++;
+        }
+      while (*cp && (*cp != '/'))
+        cp++;
+      if (*cp)
+        cp++;
+
+      if ((rv = port_decode (cp, port)))
         return rv;
     }
 
@@ -632,8 +651,13 @@ vnet_bind_uri (vnet_bind_uri_args_t *a)
     return VNET_API_ERROR_ADDRESS_IN_USE;
 
   unformat_init_string (input, a->uri, strlen (a->uri));
-  unformat (input, "%U", unformat_vnet_uri, &ip46_address,
-                  &sst, &port_number_host_byte_order, &fifo_name);
+  /* If the URI doesn't parse, return an error */
+  if (!unformat (input, "%U", unformat_vnet_uri, &ip46_address,
+                 &sst, &port_number_host_byte_order, &fifo_name))
+    {
+      unformat_free (input);
+      return VNET_API_ERROR_INVALID_VALUE;
+    }
 
   /* External client? */
   if (a->api_client_index != ~0)

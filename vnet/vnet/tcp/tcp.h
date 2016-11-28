@@ -294,7 +294,7 @@ tcp_snd_wnd_end (const tcp_session_t *ts)
 }
 
 always_inline u32
-tcp_time_now ()
+tcp_time_now (void)
 {
   return clib_cpu_time_now () >> tcp_main.log2_tstamp_clocks_per_tick;
 }
