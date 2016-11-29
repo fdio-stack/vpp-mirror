@@ -175,7 +175,6 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
           svm_fifo_t * f0;
           u16 udp_len0;
           u8 * data0;
-          u64 si0;
           
           /* speculatively enqueue b0 to the current next frame */
 	  bi0 = from[0];
@@ -196,23 +195,23 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
           ip0 = (ip4_header_t *) (((u8 *)udp0) - sizeof (*ip0));
           s0 = 0;
 
-          /* look session */
-          si0 = stream_session_lookup4 (&ip0->dst_address, &ip0->src_address,
-                                          udp0->dst_port, udp0->src_port,
-                                          SESSION_TYPE_IP4_UDP);
+          /* lookup session */
+          s0 = stream_session_lookup4 (&ip0->dst_address, &ip0->src_address,
+                                       udp0->dst_port, udp0->src_port,
+                                       SESSION_TYPE_IP4_UDP, my_thread_index);
 
-          if (PREDICT_TRUE (si0 != ~0ULL))
+          /* no listener */
+          if (PREDICT_FALSE(s0 == 0))
             {
-              s0 = stream_session_get_tsi (si0, my_thread_index);
+              error0 = URI_INPUT_ERROR_NO_LISTENER;
+              goto trace0;
+            }
 
-              f0 = s0->server_rx_fifo;
-              
-              if (PREDICT_FALSE(s0->session_state != SESSION_STATE_READY))
-                {
-                  error0 = URI_INPUT_ERROR_NOT_READY;
-                  goto trace0;
-                }
+          f0 = s0->server_rx_fifo;
 
+          /* established hit */
+          if (PREDICT_TRUE (s0->session_state == SESSION_STATE_READY))
+            {
               udp_len0 = clib_net_to_host_u16 (udp0->length);
 
               if (PREDICT_FALSE(udp_len0 > svm_fifo_max_enqueue (f0)))
@@ -237,7 +236,8 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
                             s0 - ssm->sessions[my_thread_index]);
               }
             }
-          else
+          /* listener hit */
+          else if (s0->session_state == SESSION_STATE_LISTENING)
             {
               udp_session_t *us;
               int rv;
@@ -261,12 +261,19 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
               /*
                * create stream session and attach the udp session to it
                */
-              rv = stream_session_create (us - udp_sessions[my_thread_index],
-                                          my_thread_index,
-                                          SESSION_TYPE_IP4_UDP);
+              rv = stream_session_create (s0->session_index,
+                                          us - udp_sessions[my_thread_index],
+                                          my_thread_index, SESSION_TYPE_IP4_UDP,
+                                          /* notify */1);
               if (rv)
                 error0 = rv;
 
+            }
+          else
+            {
+
+              error0 = URI_INPUT_ERROR_NOT_READY;
+              goto trace0;
             }
 
         trace0:

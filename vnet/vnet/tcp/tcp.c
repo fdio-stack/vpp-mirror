@@ -637,7 +637,7 @@ typedef enum _tcp_rcv_process_next
 
 VLIB_NODE_FUNCTION_MULTIARCH (tcp6_established_node, tcp6_established)
 
-always_inline int
+static int
 tcp_state_synsent_rcv ()
 {
   /* TODO */
@@ -676,11 +676,27 @@ tcp_state_synsent_rcv ()
   return 0;
 }
 
-always_inline void
+static void
 tcp_session_close (tcp_session_t *ts)
 {
   /* TODO */
   clib_warning ("unimplemented");
+}
+
+static void
+tcp_notify_accept_server (tcp_session_t *ts, u32 my_thread_index)
+{
+  stream_server_main_t *ssm = &stream_server_main;
+  stream_server_t *ss;
+  stream_session_t *s;
+
+  s = stream_session_get (ts->s_s_index, my_thread_index);
+
+  /* Get session's server */
+  ss = pool_elt_at_index(ssm->servers, s->server_index);
+
+  /* Shoulder-tap the server */
+  ss->session_create_callback (ss, s, ssm->vpp_event_queues[my_thread_index]);
 }
 
 /**
@@ -796,6 +812,9 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
                   << ts0->opt.wscale;
               ts0->snd_wl1 = vnet_buffer (b0)->tcp.seq_number;
               ts0->snd_wl2 = vnet_buffer (b0)->tcp.ack_number;
+
+              /* Shoulder tap the server */
+              tcp_notify_accept_server (ts0, my_thread_index);
               break;
             case TCP_CONNECTION_STATE_FIN_WAIT_1:
               /* In addition to the processing for the ESTABLISHED state, if
@@ -1010,8 +1029,8 @@ tcp46_listen_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
 
           pool_get(tm->sessions[my_thread_index], child0);
           child0->s_t_index = child0 - tm->sessions[my_thread_index];
-          child0->s_lcl_port = tcp0->dst_port;
-          child0->s_rmt_port = tcp0->src_port;
+          child0->s_lcl_port = ts0->s_lcl_port;
+          child0->s_rmt_port = clib_net_to_host_u16(tcp0->src_port);
           if (is_ip4)
             {
               child0->s_lcl_ip4.as_u32 = ip40->dst_address.as_u32;
@@ -1026,8 +1045,9 @@ tcp46_listen_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
             }
 
           error0 = stream_session_create (
-              child0->s_t_index, my_thread_index,
-              is_ip4 ? SESSION_TYPE_IP4_TCP : SESSION_TYPE_IP6_TCP);
+              ts0->s_s_index, child0->s_t_index, my_thread_index,
+              is_ip4 ? SESSION_TYPE_IP4_TCP : SESSION_TYPE_IP6_TCP,
+              /* notify */0);
 
           if (!error0)
             {
@@ -1039,7 +1059,7 @@ tcp46_listen_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
               child0->state = TCP_CONNECTION_STATE_SYN_RCVD;
 
               /* send syn-ack */
-              tcp_send_synack (ts0, is_ip4);
+              tcp_send_synack (child0, is_ip4);
             }
 
           if (PREDICT_FALSE(b0->flags & VLIB_BUFFER_IS_TRACED))
@@ -1187,7 +1207,6 @@ tcp46_input_inline (vlib_main_t * vm,
                     int is_ip4)
 {
   u32 n_left_from, next_index, * from, * to_next;
-  __attribute__ ((unused)) word n_no_listener = 0;
   u32 my_thread_index = vm->cpu_index;
   tcp_main_t *tm = vnet_get_tcp_main ();
 
@@ -1213,7 +1232,6 @@ tcp46_input_inline (vlib_main_t * vm,
           ip4_header_t * ip40;
           ip6_header_t * ip60;
           u32 error0 = TCP_ERROR_NO_LISTENER, next0 = TCP_INPUT_NEXT_DROP;
-          u64 tsi0;
           u8 flags0;
 
           bi0 = from[0];
@@ -1230,36 +1248,34 @@ tcp46_input_inline (vlib_main_t * vm,
               ip40 = vlib_buffer_get_current (b0);
               tcp0 = ip4_next_header (ip40);
 
-              /* look session */
-              tsi0 = stream_session_lookup4 (&ip40->dst_address,
-                                            &ip40->src_address, tcp0->dst_port,
-                                            tcp0->src_port,
-                                            SESSION_TYPE_IP4_TCP);
+              /* lookup session */
+              s0 = stream_session_lookup4 (&ip40->dst_address,
+                                           &ip40->src_address, tcp0->dst_port,
+                                           tcp0->src_port, SESSION_TYPE_IP4_TCP,
+                                           my_thread_index);
             }
           else
             {
               ip60 = vlib_buffer_get_current (b0);
               tcp0 = ip6_next_header (ip60);
-              tsi0 = stream_session_lookup6 (&ip60->dst_address,
-                                            &ip60->src_address, tcp0->dst_port,
-                                            tcp0->src_port,
-                                            SESSION_TYPE_IP6_TCP);
+              s0 = stream_session_lookup6 (&ip60->src_address,
+                                           &ip60->dst_address, tcp0->src_port,
+                                           tcp0->dst_port, SESSION_TYPE_IP6_TCP,
+                                           my_thread_index);
             }
 
           /* Session exists */
-          if (PREDICT_TRUE(~0ULL != tsi0))
+          if (PREDICT_TRUE(0 != s0))
             {
-              /* Save session index */
-              vnet_buffer (b0)->tcp.session_index = tsi0;
+              ts0 = tcp_session_get (s0->transport_session_index,
+                                     my_thread_index);
 
+              /* Save session index */
+              vnet_buffer (b0)->tcp.session_index = s0->transport_session_index;
               vnet_buffer (b0)->tcp.seq_number = clib_net_to_host_u32 (
                   tcp0->seq_number);
               vnet_buffer (b0)->tcp.ack_number = clib_net_to_host_u32 (
                   tcp0->ack_number);
-
-              s0 = stream_session_get_tsi (tsi0, my_thread_index);
-              ts0 = tcp_session_get (s0->transport_session_index,
-                                     my_thread_index);
 
               flags0 = tcp0->flags
                   & (TCP_FLAG_SYN | TCP_FLAG_ACK | TCP_FLAG_RST | TCP_FLAG_FIN);
@@ -1352,52 +1368,31 @@ tcp_established_get_port_next_index (vlib_main_t * vm, u16 port, u8 is_ip6)
                               clib_host_to_net_u16 (port));
 }
 
-uword
-tcp_register_listener (vlib_main_t * vm,
-                       tcp_listener_registration_t * r)
+u32
+tcp_register_listener (tcp_listener_registration_t * r)
 {
-  tcp_main_t * tm = &tcp_main;
-  tcp_listener_t * l;
-  u16 * ni;
+  tcp_main_t * tm = vnet_get_tcp_main ();
+  tcp_session_t * listener;
 
-  {
-    clib_error_t * error;
-    if ((error = vlib_call_init_function (vm, tcp_lookup_init)))
-      clib_error_report (error);
-  }
+  pool_get(tm->listener_pool, listener);
+  memset(listener, 0, sizeof(*listener));
 
-  pool_get_aligned (tm->listener_pool, l, CLIB_CACHE_LINE_BYTES);
+  listener->s_t_index = listener - tm->listener_pool;
+  listener->s_lcl_port = r->port;
 
-  memset (l, 0, sizeof (l[0]));
+  if (r->is_ip4)
+    listener->s_lcl_ip4.as_u32 = r->ip_address.ip4.as_u32;
+  else
+    clib_memcpy (&listener->s_lcl_ip6, &r->ip_address.ip6,
+                 sizeof(ip6_address_t));
+  return listener - tm->listener_pool;
+}
 
-  l->dst_port = r->port;
-  l->valid_local_adjacency_bitmap = 0;
-  l->flags = r->flags & (TCP_LISTENER_IP4 | TCP_LISTENER_IP6);
-
-  if (r->flags & TCP_LISTENER_IP4)
-    {
-      l->next_index[TCP_IP4] = vlib_node_add_next (vm,
-                                                   tcp4_established_node.index,
-                                                   r->data_node_index);
-      /* Setup port to next index sparse vector */
-      ni = tcp_established_get_port_next_index (vm, l->dst_port, TCP_IP4);
-      ni[0] = l->next_index[TCP_IP4];
-    }
-
-  if (r->flags & TCP_LISTENER_IP6)
-    {
-      l->next_index[TCP_IP6] = vlib_node_add_next (vm,
-                                                   tcp6_established_node.index,
-                                                   r->data_node_index);
-      /* Setup port to next index sparse vector */
-      ni = tcp_established_get_port_next_index (vm, l->dst_port, TCP_IP6);
-      ni[0] = l->next_index[TCP_IP6];
-    }
-
-  tm->listener_index_by_dst_port[clib_host_to_net_u16 (l->dst_port)] = l
-      - tm->listener_pool;
-
-  return l - tm->listener_pool;
+void
+tcp_unregister_listener (u32 listener_index)
+{
+  tcp_main_t * tm = vnet_get_tcp_main ();
+  pool_put_index (tm->listener_pool, listener_index);
 }
 
 clib_error_t *

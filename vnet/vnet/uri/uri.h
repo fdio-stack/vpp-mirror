@@ -115,9 +115,9 @@ int vnet_disconnect_uri_session (u32 client_index, u32 session_index,
                                  u32 thread_index);
 
 int
-vnet_connect_ip4_udp (u8 * ip46_address, u16 * port, 
-                      u32 api_client_index, u64 *options, 
-                      u8 * segment_name, u32 * name_length, void * mp);
+vnet_connect_ip4_udp (ip4_address_t *ip46_address, u16 port,
+                      u32 api_client_index, u64 *options, u8 * segment_name,
+                      u32 * name_length, void * mp);
 
 unformat_function_t unformat_vnet_uri;
 format_function_t format_bind_table_entry;
@@ -126,6 +126,7 @@ format_function_t format_bind_table_entry;
 /* FIXME move to UDP main
  * Per-worker thread udp connection pools */
 udp_session_t **udp_sessions;
+udp_session_t *udp_listeners;
 
 #endif /* __included_uri_h__ */
 

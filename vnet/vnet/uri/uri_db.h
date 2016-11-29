@@ -71,6 +71,7 @@ typedef enum
  */
 typedef enum
 {
+  SESSION_STATE_LISTENING,
   SESSION_STATE_CONNECTING,
   SESSION_STATE_READY,
 } stream_session_state_t;
@@ -146,6 +147,15 @@ typedef struct _stream_server
   /** Accept cookie, for multiple session flavors ($$$ maybe) */
   u32 accept_cookie;
 
+  /** Index in server pool */
+  u32 server_index;
+
+  /** Stream session type */
+  u8 session_type;
+
+  /** Index of the listen session */
+  u32 listen_session_index;
+
   /** Shoulder-taps for the server */
   int (*session_create_callback) (struct _stream_server *server, 
                                   stream_session_t *new_session,
@@ -178,6 +188,9 @@ typedef struct _stream_server_main
   /** per worker thread session pools */
   stream_session_t **sessions;
   
+  /** Pool of listen sessions. Same type as stream sessions to ease lookups */
+  stream_session_t *listen_sessions[SESSION_TYPE_N_TYPES];
+
   /* Server pool */
   stream_server_t * servers;
 
@@ -217,18 +230,22 @@ extern vlib_node_registration_t tcp4_uri_input_node;
 extern vlib_node_registration_t tcp6_uri_input_node;
 
 int
-stream_session_create (u32 transport_session_index, u32 my_thread_index, u8 sst);
+stream_session_create (u32 listener_index, u32 transport_session_index,
+                       u32 my_thread_index, u8 sst, u8 notify);
 
 void
 stream_session_delete (stream_server_main_t *ssm, stream_session_t * s);
 
-u64
+stream_session_t *
+stream_session_lookup_listener4 (ip4_address_t * lcl, u16 lcl_port, u8 proto);
+stream_session_t *
 stream_session_lookup4 (ip4_address_t * lcl, ip4_address_t * rmt, u16 lcl_port,
-                        u16 rmt_port, u8 proto);
-
-u64
+                        u16 rmt_port, u8 proto, u32 my_thread_index);
+stream_session_t *
+stream_session_lookup_listener6 (ip6_address_t * lcl, u16 lcl_port, u8 proto);
+stream_session_t *
 stream_session_lookup6 (ip6_address_t * lcl, ip6_address_t * rmt, u16 lcl_port,
-                        u16 rmt_port, u8 proto);
+                        u16 rmt_port, u8 , u32 my_thread_index);
 
 always_inline stream_session_t *
 stream_session_get_tsi (u64 ti_and_si, u32 thread_index)
@@ -264,10 +281,10 @@ check_api_queue_full (stream_server_t *ss)
 }
 
 typedef u32
-(*tp_application_bind) (vlib_main_t *, ip46_address_t *, u16);
+(*tp_application_bind) (vlib_main_t *, u32, ip46_address_t *, u16);
 
 typedef u32
-(*tp_application_unbind) (vlib_main_t *, u16);
+(*tp_application_unbind) (vlib_main_t *, u32);
 
 typedef u32
 (*tp_application_send) (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b);
@@ -277,6 +294,9 @@ typedef u8 *
 
 typedef transport_session_t *
 (*tp_session_get) (u32 session_index, u32 my_thread_index);
+
+typedef transport_session_t *
+(*tp_listen_session_get) (u32 session_index);
 
 typedef void
 (*tp_session_del) (u32 session_index, u32 my_thread_index);
@@ -291,6 +311,7 @@ typedef struct _transport_proto_vft
   tp_application_send send;
   tp_session_format format_session;
   tp_session_get get_session;
+  tp_listen_session_get get_listener;
   tp_session_del delete_session;
 } transport_proto_vft_t;
 
@@ -308,12 +329,18 @@ stream_session_make_v4_kv (session_kv4_t *kv, ip4_address_t * lcl,
                            ip4_address_t * rmt, u16 lcl_port, u16 rmt_port,
                            u8 proto);
 void
+make_listener_v4_kv (session_kv4_t *kv, ip4_address_t * lcl, u16 lcl_port,
+                     u8 proto);
+void
 transport_session_make_v6_kv (session_kv6_t *kv, transport_session_t *t);
 
 void
 stream_session_make_v6_kv (session_kv6_t *kv, ip6_address_t * lcl,
                            ip6_address_t * rmt, u16 lcl_port, u16 rmt_port,
                            u8 proto);
+void
+make_listener_v6_kv (session_kv6_t *kv, ip6_address_t * lcl, u16 lcl_port,
+                     u8 proto);
 /*
  * fd.io coding-style-patch-verification: ON
  *

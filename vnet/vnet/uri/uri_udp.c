@@ -23,41 +23,58 @@
 #include <vnet/fib/ip4_fib.h>
 
 u32
-vnet_bind_ip4_udp_uri (vlib_main_t *vm, ip46_address_t *ip,
+vnet_bind_ip4_udp_uri (vlib_main_t *vm, u32 session_index, ip46_address_t *ip,
                        u16 port_number_host_byte_order)
 {
+  udp_session_t *listener;
+  pool_get(udp_listeners, listener);
+  memset (listener, 0, sizeof (udp_session_t));
+  listener->s_lcl_port = port_number_host_byte_order;
+  listener->s_lcl_ip4.as_u32 = ip->ip4.as_u32;
+  listener->s_proto = SESSION_TYPE_IP4_UDP;
   udp_register_dst_port (vm, port_number_host_byte_order,
                          udp4_uri_input_node.index, 1 /* is_ipv4 */);
   return 0;
 }
 
 u32
-vnet_bind_ip6_udp_uri (vlib_main_t *vm, u16 port_number_host_byte_order)
+vnet_bind_ip6_udp_uri (vlib_main_t *vm, u32 session_index, ip46_address_t *ip,
+                       u16 port_number_host_byte_order)
 {
+  udp_session_t *listener;
+  pool_get(udp_listeners, listener);
+  listener->s_lcl_port = port_number_host_byte_order;
+  clib_memcpy (&listener->s_lcl_ip6, &ip->ip6, sizeof(ip6_address_t));
+  listener->s_proto = SESSION_TYPE_IP6_UDP;
   udp_register_dst_port (vm, port_number_host_byte_order,
                          udp4_uri_input_node.index, 0 /* is_ipv4 */);
   return 0;
 }
 
-
 u32
-vnet_unbind_ip4_udp_uri (vlib_main_t *vm, u16 port_number_host_byte_order)
+vnet_unbind_ip4_udp_uri (vlib_main_t *vm, u32 listener_index)
 {
+  udp_session_t *listener = pool_elt_at_index(udp_listeners, listener_index);
   /* deregister the udp_local mapping */
-  udp_unregister_dst_port (vm, port_number_host_byte_order,
-                           1 /* is_ipv4 */);
-
+  udp_unregister_dst_port (vm, listener->s_lcl_port, 1 /* is_ipv4 */);
   return 0;
 }
 
 u32
-vnet_unbind_ip6_udp_uri (vlib_main_t *vm, u16 port_number_host_byte_order)
+vnet_unbind_ip6_udp_uri (vlib_main_t *vm, u32 listener_index)
 {
+  udp_session_t *listener = pool_elt_at_index(udp_listeners, listener_index);
   /* deregister the udp_local mapping */
-  udp_unregister_dst_port (vm, port_number_host_byte_order,
-                           0 /* is_ipv4 */);
-
+  udp_unregister_dst_port (vm, listener->s_lcl_port, 0 /* is_ipv4 */);
   return 0;
+}
+
+transport_session_t *
+uri_udp_session_get_listener (u32 listener_index)
+{
+  udp_session_t *us;
+  us = pool_elt_at_index (udp_listeners, listener_index);
+  return &us->session;
 }
 
 int
@@ -70,14 +87,12 @@ int redirect_connect_uri_callback (u32 api_client_index, void *mp)
 }
 
 int
-vnet_connect_ip4_udp (u8 * ip46_address, u16 * port, 
+vnet_connect_ip4_udp (ip4_address_t *ip_address, u16 port,
                       u32 api_client_index, u64 * options, 
                       u8 * segment_name, u32 * name_length, void *mp)
 {
-  u16 i0;
   stream_server_main_t *ssm = &stream_server_main;
   stream_server_t *ss;
-  u16 port_net_byte_order = clib_host_to_net_u16(*port);
   ip4_fib_t * fib;
   u32 fib_index;
   ip4_fib_mtrie_leaf_t leaf0;
@@ -86,25 +101,24 @@ vnet_connect_ip4_udp (u8 * ip46_address, u16 * port,
   const load_balance_t * lb0;
   const dpo_id_t *dpo0;
   ip4_fib_mtrie_t * mtrie0;
+  stream_session_t *s;
 
   /*
    * Connect to a local URI?
    */
-  i0 = sparse_vec_index (ssm->stream_server_by_dst_port[SESSION_TYPE_IP4_UDP],
-                         port_net_byte_order);
-
-  /* No listener for dst port... */
-  if (i0 == SPARSE_VEC_INVALID_INDEX)
-    goto create_regular_session;
+  s = stream_session_lookup_listener4 (ip_address, port,
+                                       SESSION_TYPE_IP4_UDP);
 
   /* Find the server */
-  ss = pool_elt_at_index(ssm->servers, i0 - 1);
+  if (s)
+    ss = pool_elt_at_index(ssm->servers, s->server_index);
+
   /*
    * Server is willing to have a direct fifo connection created
    * instead of going through the state machine, etc.
    */
 
-  if ((ss->flags & URI_OPTIONS_FLAGS_USE_FIFO) == 0)
+  if (!s || (ss->flags & URI_OPTIONS_FLAGS_USE_FIFO) == 0)
     goto create_regular_session;
 
   /* Look up <address>, and see if we hit a local adjacency */
@@ -115,7 +129,7 @@ vnet_connect_ip4_udp (u8 * ip46_address, u16 * port,
   ASSERT (fib_index != ~0);
   fib = ip4_fib_get (fib_index);
 
-  dst_addr0 = (ip4_address_t *) ip46_address;
+  dst_addr0 = ip_address;
   mtrie0 = &fib->mtrie;
   leaf0 = IP4_FIB_MTRIE_LEAF_ROOT;
   leaf0 = ip4_fib_mtrie_lookup_step (mtrie0, leaf0, dst_addr0, 0);
@@ -260,6 +274,7 @@ const static transport_proto_vft_t udp4_proto = {
   .unbind = vnet_unbind_ip4_udp_uri,
   .send = uri_tx_ip4_udp,
   .get_session = uri_udp_session_get,
+  .get_listener = uri_udp_session_get_listener,
   .delete_session = uri_udp_session_delete,
   .format_session = format_ip4_udp_stream_session
 };

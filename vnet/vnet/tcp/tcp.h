@@ -183,23 +183,21 @@ typedef struct tcp_listener_registration
   /* Listen on this port. */
   u16 port;
 
-#define TCP_LISTENER_IP4 (1 << 0)
-#define TCP_LISTENER_IP6 (1 << 1)
-  u16 flags;
+  /* Listen at this addresses */
+  ip46_address_t ip_address;
 
-  /* Next node index for data packets. */
-  u32 data_node_index;
-
-  /* Event function: called on new connections */
-//  tcp_event_function_t * event_function;
+  u8 is_ip4;
+  /* TODO options? */
 } tcp_listener_registration_t;
 
 typedef struct {
   u8 next, error;
 } tcp_lookup_dispatch_t;
 
-uword
-tcp_register_listener (vlib_main_t * vm, tcp_listener_registration_t * r);
+u32
+tcp_register_listener (tcp_listener_registration_t * r);
+void
+tcp_unregister_listener (u32 listener_index);
 
 typedef struct _tcp_main
 {
@@ -209,18 +207,13 @@ typedef struct _tcp_main
   /* Per-worker thread timer vectors, parallel to connection pools */
   tcp_timer_t **timers;
 
-  /* Non-packet work queues */
-//  tcp_work_queue_t **rx_work_queues;
-
-  /* Connections to peer processes */
-//  tcp_peer_connection_t * peer_connections;
-
   /* Hash tables mapping name/protocol to protocol info index. */
   uword * dst_port_info_by_name[TCP_N_AF];
   uword * dst_port_info_by_dst_port[TCP_N_AF];
 
   /* Pool of listeners. */
-  tcp_listener_t *listener_pool;
+  tcp_session_t *listener_pool;
+
   u32 *listener_index_by_dst_port;
 
   /** Dispatch table by state and flags */

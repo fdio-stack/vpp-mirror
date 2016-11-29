@@ -21,49 +21,68 @@
 #include <vnet/tcp/tcp.h>
 
 u32
-vnet_bind_ip4_tcp_uri (vlib_main_t * vm, ip46_address_t *ip,
+vnet_bind_ip4_tcp_uri (vlib_main_t * vm, u32 session_index, ip46_address_t *ip,
                        u16 port_number_host_byte_order)
 {
   tcp_listener_registration_t _a, *a = &_a;
+  u32 tsi;
+  tcp_session_t * listener;
 
   a->port = port_number_host_byte_order;
-//  a->event_function = 0;
-  a->flags = TCP_LISTENER_IP4;
-  a->data_node_index = tcp4_uri_input_node.index;
+  clib_memcpy(&a->ip_address, ip, sizeof (ip46_address_t));
+  a->is_ip4 = 1;
 
-  tcp_register_listener (vm, a);
+  tsi = tcp_register_listener (a);
 
-  return 0;
+  listener = pool_elt_at_index (tcp_main.listener_pool, tsi);
+  listener->s_s_index = session_index;
+  listener->s_proto = SESSION_TYPE_IP4_TCP;
+
+  return tsi;
 }
 
 u32
-vnet_bind_ip6_tcp_uri (vlib_main_t * vm, ip46_address_t *ip,
+vnet_bind_ip6_tcp_uri (vlib_main_t * vm, u32 session_index, ip46_address_t *ip,
                        u16 port_number_host_byte_order)
 {
   tcp_listener_registration_t _a, *a = &_a;
+  u32 tsi;
+  tcp_session_t * listener;
 
   a->port = port_number_host_byte_order;
-//  a->event_function = 0;
-  a->flags = TCP_LISTENER_IP6;
-  a->data_node_index = tcp6_uri_input_node.index;
+  clib_memcpy(&a->ip_address, ip, sizeof (ip46_address_t));
+  a->is_ip4 = 0;
 
-  tcp_register_listener (vm, a);
+  tsi = tcp_register_listener (a);
 
+  listener = pool_elt_at_index (tcp_main.listener_pool, tsi);
+  listener->s_s_index = session_index;
+  listener->s_proto = SESSION_TYPE_IP6_TCP;
+
+  return tsi;
+}
+
+u32
+vnet_unbind_ip4_tcp_uri (vlib_main_t * vm, u32 listener_index)
+{
+  tcp_unregister_listener (listener_index);
   return 0;
 }
 
 u32
-vnet_unbind_ip4_tcp_uri (vlib_main_t * vm, u16 port)
+vnet_unbind_ip6_tcp_uri (vlib_main_t * vm, u32 listener_index)
 {
-  clib_warning ("unimplmented");
+  tcp_unregister_listener (listener_index);
   return 0;
 }
 
-u32
-vnet_unbind_ip6_tcp_uri (vlib_main_t * vm, u16 port)
+transport_session_t *
+uri_tcp_session_get_listener (u32 listener_index)
 {
-  clib_warning ("unimplmented");
-  return 0;
+  tcp_main_t *tm = vnet_get_tcp_main ();
+  tcp_session_t *ts;
+  ts = pool_elt_at_index (tm->listener_pool, listener_index);
+  return &ts->session;
 }
 
 u8*
@@ -160,6 +179,7 @@ const static transport_proto_vft_t tcp4_proto = {
   .unbind = vnet_unbind_ip4_tcp_uri,
   .send = uri_tx_ip4_tcp,
   .get_session = uri_tcp_session_get,
+  .get_listener = uri_tcp_session_get_listener,
   .delete_session = uri_tcp_session_delete,
   .format_session = format_stream_session_ip4_tcp
 };
@@ -177,6 +197,9 @@ const static transport_proto_vft_t tcp6_proto = {
   .bind = vnet_bind_ip6_tcp_uri,
   .unbind = vnet_unbind_ip6_tcp_uri,
   .send = uri_tx_ip6_tcp,
+  .get_session = uri_tcp_session_get,
+  .get_listener = uri_tcp_session_get_listener,
+  .delete_session = uri_tcp_session_delete,
   .format_session = format_stream_session_ip6_tcp
 };
 

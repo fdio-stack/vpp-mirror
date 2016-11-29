@@ -8554,8 +8554,6 @@ int send_session_create_callback (stream_server_t * ss, stream_session_t * s,
 {
   vl_api_accept_session_t * mp;
   unix_shared_memory_queue_t * q;
-//  transport_session_t * ts;
-//  transport_proto_vft_t *tp_vft;
   
   q = vl_api_client_index_to_input_queue (ss->api_client_index);
 
@@ -8566,27 +8564,6 @@ int send_session_create_callback (stream_server_t * ss, stream_session_t * s,
   mp->_vl_msg_id = clib_host_to_net_u16 (VL_API_ACCEPT_SESSION);
 
   /* Note: session_type is the first octet in all types of sessions */
-
-//  tp_vft = uri_get_transport (s->session_type);
-//  ts = tp_vft->get_session (s->transport_session_index,
-//                            s->session_thread_index);
-//
-//  if (s->session_type == SESSION_TYPE_IP4_UDP
-//      || s->session_type == SESSION_TYPE_IP4_TCP)
-//    {
-//      session_kv4_t kv;
-//      transport_session_make_v4_kv (&kv, ts);
-//      memcpy (mp->key, &kv.key, sizeof(kv));
-//    }
-//  else if (s->session_type == SESSION_TYPE_IP4_UDP
-//      || s->session_type == SESSION_TYPE_IP4_TCP)
-//    {
-//      session_kv6_t kv;
-//      transport_session_make_v6_kv (&kv, ts);
-//      memcpy (mp->key, &kv.key, sizeof(kv));
-//    }
-//  else
-//    clib_warning ("session does not have a key!");
 
   mp->accept_cookie = ss->accept_cookie;
   mp->server_rx_fifo = (u64) s->server_rx_fifo;
