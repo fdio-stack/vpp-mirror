@@ -4070,7 +4070,7 @@ vpp_socket (int family, int type, int protocol)
     }
 
   /* Use vector index as FD index from FD base */
-  return (si - vcm->sockets) + VPP_COMMAPI_FD_SOCKET_OFFSET + 1;
+  return (si - vcm->sockets) + VPP_COMMAPI_FD_SOCKET_OFFSET;
 
 }
 
