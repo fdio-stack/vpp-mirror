@@ -830,6 +830,8 @@ snat_out2in_worker_handoff_fn (vlib_main_t * vm,
   u32 current_worker_index = ~0;
   u32 cpu_index = os_get_cpu_number ();
 
+  ASSERT (vec_len (sm->workers));
+
   if (PREDICT_FALSE (handoff_queue_elt_by_worker_index == 0))
     {
       vec_validate (handoff_queue_elt_by_worker_index, tm->n_vlib_mains - 1);
@@ -875,9 +877,20 @@ snat_out2in_worker_handoff_fn (vlib_main_t * vm,
       /* Ever heard of of the "user" before? */
       if (clib_bihash_search_8_8 (&sm->worker_by_out, &kv0, &value0))
         {
-          /* No, assign next available worker (RR) */
-          next_worker_index = sm->first_worker_index +
-            sm->workers[sm->next_worker++ % vec_len (sm->workers)];
+          key0.port = 0;
+          kv0.key = key0.as_u64;
+
+          if (clib_bihash_search_8_8 (&sm->worker_by_out, &kv0, &value0))
+            {
+              /* No, assign next available worker (RR) */
+              next_worker_index = sm->first_worker_index +
+                sm->workers[sm->next_worker++ % vec_len (sm->workers)];
+            }
+          else
+            {
+              /* Static mapping without port */
+              next_worker_index = value0.value;
+            }
 
           /* Add to translated packets worker lookup */
           kv0.value = next_worker_index;
@@ -888,6 +901,8 @@ snat_out2in_worker_handoff_fn (vlib_main_t * vm,
 
       if (PREDICT_FALSE (next_worker_index != cpu_index))
         {
+          do_handoff = 1;
+
           if (next_worker_index != current_worker_index)
             {
               if (hf)

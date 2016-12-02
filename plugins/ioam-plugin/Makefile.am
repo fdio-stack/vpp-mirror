@@ -28,7 +28,8 @@ ioam_pot_plugin_la_SOURCES =			\
 	ioam/lib-pot/pot_api.c
 
 BUILT_SOURCES =					\
-	ioam/lib-pot/pot.api.h ioam/lib-pot/pot.py
+	ioam/lib-pot/pot.api.h			\
+	ioam/lib-pot/pot.api.json
 
 SUFFIXES = .api.h .api
 
@@ -37,14 +38,17 @@ SUFFIXES = .api.h .api
 	$(CC) $(CPPFLAGS) -E -P -C -x c $^ \
 	| vppapigen --input - --output $@ --show-name $@
 
-%.py: %.api
-	$(info Creating Python binding for $@)
-	$(CC) $(CPPFLAGS) -E -P -C -x c $<				\
-	| vppapigen --input - --python -				\
-	| pyvppapigen.py --input - > $@
+%.api.json: %.api
+	@echo "  JSON APIGEN  " $@ ;				\
+	mkdir -p `dirname $@` ;					\
+	$(CC) $(CPPFLAGS) -E -P -C -x c $^			\
+	| vppapigen --input - --json $@
 
-pyapidir = ${prefix}/vpp_papi_plugins
-pyapi_DATA = ioam/lib-pot/pot.py
+apidir = $(prefix)/ioam/
+api_DATA =					\
+	ioam/lib-pot/pot.api.json		\
+	ioam/lib-trace/trace.api.json		\
+	ioam/export/ioam_export.api.json
 
 noinst_HEADERS =				\
   ioam/lib-pot/pot_all_api_h.h			\
@@ -73,7 +77,9 @@ ioam/export/node.c                \
 ioam/export/ioam_export.api.h     \
 ioam/export/ioam_export_thread.c
 
-BUILT_SOURCES += ioam/export/ioam_export.api.h
+BUILT_SOURCES +=				\
+	ioam/export/ioam_export.api.h		\
+	ioam/export/ioam_export.api.json
 
 noinst_HEADERS +=                       \
   ioam/export/ioam_export_all_api_h.h   \
@@ -96,10 +102,9 @@ ioam_trace_plugin_la_SOURCES =			\
 	ioam/lib-trace/trace_util.h			\
 	ioam/lib-trace/trace_api.c
 
-BUILT_SOURCES +=					\
-	ioam/lib-trace/trace.api.h ioam/lib-trace/trace.py
-
-pyapi_DATA += ioam/lib-trace/trace.py
+BUILT_SOURCES +=				\
+	ioam/lib-trace/trace.api.h		\
+	ioam/lib-trace/trace.api.json
 
 noinst_HEADERS +=                       \
   ioam/export/ioam_export_all_api_h.h   \
@@ -158,13 +163,13 @@ libjvpp_ioamtrace_la_CPPFLAGS = -I$(JAVA_HOME)/include -I$(JAVA_HOME)/include/li
 
 BUILT_SOURCES += $(jvpp_root)/io_fd_vpp_jvpp_ioamtrace_JVppIoamtraceImpl.h
 
-$(jvpp_root)/io_fd_vpp_jvpp_ioamtrace_JVppIoamtraceImpl.h: defs_ioam_trace_papi.py
+$(jvpp_root)/io_fd_vpp_jvpp_ioamtrace_JVppIoamtraceImpl.h: ioam_trace.api.json
 	dir=`pwd`;						\
 	mkdir -p $(jvpp_target); \
 	mkdir -p $(jvpp_root)/$(jvpp_package_dir); 		\
 	cd $(jvpp_root)/$(jvpp_package_dir);			\
 	mkdir -p dto future callfacade callback notification test; 	\
-	@srcdir@/$(jvpp_registry_root)/jvpp/gen/jvpp_gen.py -i $${dir}/defs_ioam_trace_papi.py --plugin_name ioamtrace;		\
+	@srcdir@/$(jvpp_registry_root)/jvpp/gen/jvpp_gen.py -i $${dir}/ioam_trace.api.json --plugin_name ioamtrace;		\
 	cd -;							\
 	mv -f $(jvpp_root)/$(jvpp_package_dir)/jvpp_ioamtrace_gen.h $(jvpp_root)/jvpp_ioam_trace_gen.h;							\
 	cp $(srcdir)/$(jvpp_root)/$(jvpp_package_dir)/test/*.java $(jvpp_root)/$(jvpp_package_dir)/test/;				\
@@ -184,8 +189,8 @@ $(jioam_trace_jarfile): libjvpp_ioamtrace.la
 	cd $(jvpp_target);				\
 	$(JAR) cfv $(JARFLAGS) ../../../$@ libjvpp_ioamtrace.so.0.0.0 $(jvpp_package_dir)/* ; cd ..;
 
-defs_ioam_trace_papi.py:
+ioam_trace.api.json:
 	@echo "  jIoam_trace API"; \
-        vppapigen --input $(api_file) --python defs_ioam_trace_papi.py;
+        vppapigen --input $(api_file) --json ioam_trace.api.json;
 
 all-local: $(jioam_trace_jarfile)

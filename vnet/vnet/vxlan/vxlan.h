@@ -28,6 +28,7 @@
 #include <vnet/ip/ip6_packet.h>
 #include <vnet/ip/udp.h>
 #include <vnet/dpo/dpo.h>
+#include <vnet/adj/adj_types.h>
 
 typedef CLIB_PACKED (struct {
   ip4_header_t ip4;            /* 20 bytes */
@@ -84,6 +85,10 @@ typedef struct {
   ip46_address_t src;
   ip46_address_t dst;
 
+  u32 mcast_sw_if_index;
+  /* decap next index */
+  u32 decap_next_index;
+
   /* The FIB index for src/dst addresses */
   u32 encap_fib_index;
 
@@ -96,8 +101,12 @@ typedef struct {
    */
   fib_node_t node;
 
-  /* The FIB entry sourced by the tunnel for its destination prefix */
+  /*
+   * The FIB entry for (depending on VXLAN tunnel is unicast or mcast)
+   * sending unicast VXLAN encap packets or receiving mcast VXLAN packets
+   */
   fib_node_index_t fib_entry_index;
+  adj_index_t mcast_adj_index;
 
   /**
    * The tunnel is a child of the FIB entry for its desintion. This is
@@ -134,6 +143,11 @@ typedef struct {
   uword * vxlan4_tunnel_by_key; /* keyed on ipv4.dst + vni */
   uword * vxlan6_tunnel_by_key; /* keyed on ipv6.dst + vni */
 
+  /* local VTEP IPs used by vxlan-bypass node to check if received
+     VXLAN packet DIP matches any local VTEP address */
+  uword * vtep4;  /* local ip4 VTEPs keyed on their ip4 addr */
+  uword * vtep6;  /* local ip6 VTEPs keyed on their ip6 addr */
+
   /* Free vlib hw_if_indices */
   u32 * free_vxlan_tunnel_hw_if_indices;
 
@@ -161,6 +175,7 @@ typedef struct {
    * structure, this seems less of abreaking change */
   u8 is_ip6;
   ip46_address_t src, dst;
+  u32 mcast_sw_if_index;
   u32 encap_fib_index;
   u32 decap_next_index;
   u32 vni;

@@ -557,9 +557,7 @@ vnet_arp_set_ip4_over_ethernet_internal (vnet_main_t * vnm,
 					 &pfx.fp_addr,
 					 e->sw_if_index,
 					 ~0,
-					 1,
-					 MPLS_LABEL_INVALID,
-					 FIB_ROUTE_PATH_FLAG_NONE);
+					 1, NULL, FIB_ROUTE_PATH_FLAG_NONE);
     }
   else
     {
@@ -812,7 +810,7 @@ unset_random_arp_entry (void)
   vnet_arp_unset_ip4_over_ethernet (vnm, e->sw_if_index, &delme);
 }
 
-static void
+static int
 arp_unnumbered (vlib_buffer_t * p0,
 		u32 pi0, ethernet_header_t * eth0, u32 sw_if_index)
 {
@@ -849,7 +847,10 @@ arp_unnumbered (vlib_buffer_t * p0,
   }));
   /* *INDENT-ON* */
 
-  ASSERT (vec_len (broadcast_swifs));
+  /* If there are no interfaces un-unmbered to this interface,
+     we are done  here. */
+  if (0 == vec_len (broadcast_swifs))
+    return 0;
 
   /* Allocate buffering if we need it */
   if (vec_len (broadcast_swifs) > 1)
@@ -954,6 +955,8 @@ arp_unnumbered (vlib_buffer_t * p0,
 
   vec_free (broadcast_swifs);
   vec_free (buffers);
+
+  return !0;
 }
 
 static uword
@@ -1154,7 +1157,10 @@ arp_input (vlib_main_t * vm, vlib_node_runtime_t * node, vlib_frame_t * frame)
 		  goto drop2;
 		}
 	      if (is_unnum0)
-		arp_unnumbered (p0, pi0, eth0, conn_sw_if_index0);
+		{
+		  if (!arp_unnumbered (p0, pi0, eth0, conn_sw_if_index0))
+		    goto drop2;
+		}
 	      else
 		vlib_buffer_advance (p0, -adj0->rewrite_header.data_bytes);
 	    }

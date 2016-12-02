@@ -577,6 +577,53 @@ VLIB_REGISTER_NODE (tcp6_established_node) = {
   },
 };
 
+static uword tcp46_establish_inline (vlib_main_t * vm, 
+                                     vlib_node_runtime_t * node,
+                                     vlib_frame_t * from_frame,
+                                     int is_ip4)
+{
+  clib_warning ("STUB called");
+  return 0;
+}
+
+static uword
+tcp4_establish (vlib_main_t * vm, vlib_node_runtime_t * node,
+                  vlib_frame_t * from_frame)
+{
+  return tcp46_establish_inline (vm, node, from_frame, 1 /* is_ip4 */);
+}
+
+VLIB_REGISTER_NODE (tcp4_establish_node) = {
+  .function = tcp4_establish,
+  .name = "tcp4-establish",
+  /* Takes a vector of packets. */
+  .vector_size = sizeof (u32),
+
+  .runtime_data_bytes = sizeof (tcp_input_runtime_t),
+
+  .n_errors = TCP_N_ERROR,
+  .error_strings = tcp_error_strings,
+};
+
+static uword
+tcp6_establish (vlib_main_t * vm, vlib_node_runtime_t * node,
+                  vlib_frame_t * from_frame)
+{
+  return tcp46_establish_inline (vm, node, from_frame, 0 /* is_ip4 */);
+}
+
+VLIB_REGISTER_NODE (tcp6_establish_node) = {
+  .function = tcp6_establish,
+  .name = "tcp6-establish",
+  /* Takes a vector of packets. */
+  .vector_size = sizeof (u32),
+
+  .runtime_data_bytes = sizeof (tcp_input_runtime_t),
+
+  .n_errors = TCP_N_ERROR,
+  .error_strings = tcp_error_strings,
+};
+
 #define foreach_tcp_rcv_process_next            \
   _ (DROP, "error-drop")
 

@@ -28,7 +28,7 @@ snat_plugin_la_SOURCES = snat/snat.c		\
         snat/out2in.c				\
 	snat/snat_plugin.api.h
 
-BUILT_SOURCES = snat/snat.api.h snat/snat.py
+BUILT_SOURCES = snat/snat.api.h snat/snat.api.json
 
 SUFFIXES = .api.h .api
 
@@ -37,14 +37,14 @@ SUFFIXES = .api.h .api
 	$(CC) $(CPPFLAGS) -E -P -C -x c $^ \
 	| vppapigen --input - --output $@ --show-name $@
 
-%.py: %.api
-	$(info Creating Python binding for $@)
-	$(CC) $(CPPFLAGS) -E -P -C -x c $<                              \
-	| vppapigen --input - --python -                                \
-	| pyvppapigen.py --input - > $@
+%.api.json: %.api
+	@echo "  JSON APIGEN  " $@ ;				\
+	mkdir -p `dirname $@` ;					\
+	$(CC) $(CPPFLAGS) -E -P -C -x c $^			\
+	| vppapigen --input - --json $@
 
-pyapidir = ${prefix}/vpp_papi_plugins
-pyapi_DATA = snat/snat.py
+apidir = $(prefix)/snat/
+api_DATA = snat.api.json
 
 noinst_HEADERS =			\
   snat/snat_all_api_h.h			\
@@ -60,7 +60,7 @@ install-data-hook:
 	@(cd $(vppapitestpluginsdir) && $(RM) $(vppapitestplugins_LTLIBRARIES))
 
 apidir = $(prefix)/snat
-api_DATA = snat/snat.api
+api_DATA = snat/snat.api.json
 
 #
 # Java code generation
@@ -83,13 +83,13 @@ libjvpp_snat_la_CPPFLAGS = -I$(JAVA_HOME)/include -I$(JAVA_HOME)/include/linux -
 
 BUILT_SOURCES += $(jvpp_root)/io_fd_vpp_jvpp_snat_JVppSnatImpl.h
 
-$(jvpp_root)/io_fd_vpp_jvpp_snat_JVppSnatImpl.h: defs_snat_papi.py
+$(jvpp_root)/io_fd_vpp_jvpp_snat_JVppSnatImpl.h: snat.api.json
 	dir=`pwd`;						\
 	mkdir -p $(jvpp_target); \
 	mkdir -p $(jvpp_root)/$(jvpp_package_dir); 		\
 	cd $(jvpp_root)/$(jvpp_package_dir);			\
 	mkdir -p dto future callfacade callback notification test; 	\
-	@srcdir@/$(jvpp_registry_root)/jvpp/gen/jvpp_gen.py -i $${dir}/defs_snat_papi.py --plugin_name snat;		\
+	@srcdir@/$(jvpp_registry_root)/jvpp/gen/jvpp_gen.py -i $${dir}/snat.api.json --plugin_name snat;		\
 	cd -;							\
 	mv -f $(jvpp_root)/$(jvpp_package_dir)/jvpp_snat_gen.h $(jvpp_root)/jvpp_snat_gen.h;							\
 	cp $(srcdir)/$(jvpp_root)/$(jvpp_package_dir)/test/*.java $(jvpp_root)/$(jvpp_package_dir)/test/;				\
@@ -109,8 +109,8 @@ $(jsnat_jarfile): libjvpp_snat.la
 	cd $(jvpp_target);				\
 	$(JAR) cfv $(JARFLAGS) ../../../$@ libjvpp_snat.so.0.0.0 $(jvpp_package_dir)/* ; cd ..;
 
-defs_snat_papi.py:
+snat.api.json:
 	@echo "  jSnat_sfc API"; \
-        vppapigen --input $(api_file) --python defs_snat_papi.py;
+        vppapigen --input $(api_file) --json snat.api.json;
 
 all-local: $(jsnat_jarfile)

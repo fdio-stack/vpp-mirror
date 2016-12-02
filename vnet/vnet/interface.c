@@ -687,7 +687,9 @@ vnet_register_interface (vnet_main_t * vnm,
   vnet_hw_interface_class_t *hw_class =
     vnet_get_hw_interface_class (vnm, hw_class_index);
   vlib_main_t *vm = vnm->vlib_main;
-  u32 hw_index;
+  vnet_feature_config_main_t *fcm;
+  vnet_config_main_t *cm;
+  u32 hw_index, i;
   char *tx_node_name, *output_node_name;
 
   pool_get (im->hw_interfaces, hw);
@@ -712,11 +714,11 @@ vnet_register_interface (vnet_main_t * vnm,
 
   /* Make hardware interface point to software interface. */
   {
-    vnet_sw_interface_t sw;
-
-    memset (&sw, 0, sizeof (sw));
-    sw.type = VNET_SW_INTERFACE_TYPE_HARDWARE;
-    sw.hw_if_index = hw_index;
+    vnet_sw_interface_t sw = {
+      .type = VNET_SW_INTERFACE_TYPE_HARDWARE,
+      .flood_class = VNET_FLOOD_CLASS_NORMAL,
+      .hw_if_index = hw_index
+    };
     hw->sw_if_index = vnet_create_sw_interface_no_callbacks (vnm, &sw);
   }
 
@@ -765,8 +767,8 @@ vnet_register_interface (vnet_main_t * vnm,
       /* The new class may differ from the old one.
        * Functions have to be updated. */
       node = vlib_get_node (vm, hw->output_node_index);
-      node->function = dev_class->no_flatten_output_chains ?
-	vnet_interface_output_node_no_flatten_multiarch_select () :
+      node->function = dev_class->flatten_output_chains ?
+	vnet_interface_output_node_flatten_multiarch_select () :
 	vnet_interface_output_node_multiarch_select ();
       node->format_trace = format_vnet_interface_output_trace;
       nrt = vlib_node_get_runtime (vm, hw->output_node_index);
@@ -810,8 +812,8 @@ vnet_register_interface (vnet_main_t * vnm,
 
       r.flags = 0;
       r.name = output_node_name;
-      r.function = dev_class->no_flatten_output_chains ?
-	vnet_interface_output_node_no_flatten_multiarch_select () :
+      r.function = dev_class->flatten_output_chains ?
+	vnet_interface_output_node_flatten_multiarch_select () :
 	vnet_interface_output_node_multiarch_select ();
       r.format_trace = format_vnet_interface_output_trace;
 
@@ -832,6 +834,28 @@ vnet_register_interface (vnet_main_t * vnm,
       vlib_node_add_next_with_slot (vm, hw->output_node_index,
 				    hw->tx_node_index,
 				    VNET_INTERFACE_OUTPUT_NEXT_TX);
+
+      /* add interface to the list of "output-interface" feature arc start nodes
+         and clone nexts from 1st interface if it exists */
+      fcm = vnet_feature_get_config_main (im->output_feature_arc_index);
+      cm = &fcm->config_main;
+      i = vec_len (cm->start_node_indices);
+      vec_validate (cm->start_node_indices, i);
+      cm->start_node_indices[i] = hw->output_node_index;
+      if (hw_index)
+	{
+	  /* copy nexts from 1st interface */
+	  vnet_hw_interface_t *first_hw;
+	  vlib_node_t *first_node;
+
+	  first_hw = vnet_get_hw_interface (vnm, /* hw_if_index */ 0);
+	  first_node = vlib_get_node (vm, first_hw->output_node_index);
+
+	  /* 1st 2 nexts are already added above */
+	  for (i = 2; i < vec_len (first_node->next_nodes); i++)
+	    vlib_node_add_next_with_slot (vm, hw->output_node_index,
+					  first_node->next_nodes[i], i);
+	}
     }
 
   setup_output_node (vm, hw->output_node_index, hw_class);
@@ -1202,6 +1226,7 @@ vnet_interface_init (vlib_main_t * vm)
 
     return error;
   }
+  vnm->interface_tag_by_sw_if_index = hash_create (0, sizeof (uword));
 }
 
 VLIB_INIT_FUNCTION (vnet_interface_init);

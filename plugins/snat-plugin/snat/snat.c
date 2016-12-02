@@ -440,6 +440,35 @@ int snat_add_static_mapping(ip4_address_t l_addr, ip4_address_t e_addr,
       kv.key = m_key.as_u64;
       kv.value = m - sm->static_mappings;
       clib_bihash_add_del_8_8(&sm->static_mapping_by_external, &kv, 1);
+
+      /* Assign worker */
+      if (sm->workers)
+        {
+          snat_user_key_t w_key0;
+          snat_static_mapping_key_t w_key1;
+
+          w_key0.addr = m->local_addr;
+          w_key0.fib_index = m->fib_index;
+          kv.key = w_key0.as_u64;
+
+          if (clib_bihash_search_8_8 (&sm->worker_by_in, &kv, &value))
+            {
+              kv.value = sm->first_worker_index +
+                sm->workers[sm->next_worker++ % vec_len (sm->workers)];
+
+              clib_bihash_add_del_8_8 (&sm->worker_by_in, &kv, 1);
+            }
+          else
+            {
+              kv.value = value.value;
+            }
+
+          w_key1.addr = m->external_addr;
+          w_key1.port = clib_host_to_net_u16 (m->external_port);
+          w_key1.fib_index = sm->outside_fib_index;
+          kv.key = w_key1.as_u64;
+          clib_bihash_add_del_8_8 (&sm->worker_by_out, &kv, 1);
+        }
     }
   else
     {
@@ -494,8 +523,10 @@ int snat_add_static_mapping(ip4_address_t l_addr, ip4_address_t e_addr,
           if (!clib_bihash_search_8_8 (&sm->user_hash, &kv, &value))
             {
               user_index = value.value;
-              clib_bihash_search_8_8 (&sm->worker_by_in, &kv, &value);
-              tsm = vec_elt_at_index (sm->per_thread_data, value.value);
+              if (!clib_bihash_search_8_8 (&sm->worker_by_in, &kv, &value))
+                tsm = vec_elt_at_index (sm->per_thread_data, value.value);
+              else
+                tsm = vec_elt_at_index (sm->per_thread_data, sm->num_workers);
               u = pool_elt_at_index (tsm->users, user_index);
               if (u->nstaticsessions)
                 {
