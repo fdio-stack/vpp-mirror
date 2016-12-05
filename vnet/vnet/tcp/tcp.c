@@ -1378,7 +1378,7 @@ tcp_register_listener (tcp_listener_registration_t * r)
   memset(listener, 0, sizeof(*listener));
 
   listener->s_t_index = listener - tm->listener_pool;
-  listener->s_lcl_port = r->port;
+  listener->s_lcl_port = clib_host_to_net_u16 (r->port);
 
   if (r->is_ip4)
     listener->s_lcl_ip4.as_u32 = r->ip_address.ip4.as_u32;

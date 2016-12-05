@@ -226,7 +226,7 @@ stream_session_lookup4 (ip4_address_t * lcl, ip4_address_t * rmt, u16 lcl_port,
     return stream_session_get_tsi (kv4.value, my_thread_index);
 
   /* If nothing is found, check if any listener is available */
-  return stream_session_lookup_listener4(lcl, lcl_port, proto);
+  return stream_session_lookup_listener4 (lcl, lcl_port, proto);
 }
 
 stream_session_t *

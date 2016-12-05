@@ -29,7 +29,7 @@ vnet_bind_ip4_udp_uri (vlib_main_t *vm, u32 session_index, ip46_address_t *ip,
   udp_session_t *listener;
   pool_get(udp_listeners, listener);
   memset (listener, 0, sizeof (udp_session_t));
-  listener->s_lcl_port = port_number_host_byte_order;
+  listener->s_lcl_port = clib_host_to_net_u16 (port_number_host_byte_order);
   listener->s_lcl_ip4.as_u32 = ip->ip4.as_u32;
   listener->s_proto = SESSION_TYPE_IP4_UDP;
   udp_register_dst_port (vm, port_number_host_byte_order,
@@ -43,7 +43,7 @@ vnet_bind_ip6_udp_uri (vlib_main_t *vm, u32 session_index, ip46_address_t *ip,
 {
   udp_session_t *listener;
   pool_get(udp_listeners, listener);
-  listener->s_lcl_port = port_number_host_byte_order;
+  listener->s_lcl_port = clib_host_to_net_u16 (port_number_host_byte_order);
   clib_memcpy (&listener->s_lcl_ip6, &ip->ip6, sizeof(ip6_address_t));
   listener->s_proto = SESSION_TYPE_IP6_UDP;
   udp_register_dst_port (vm, port_number_host_byte_order,
