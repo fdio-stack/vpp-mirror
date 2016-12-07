@@ -48,6 +48,8 @@ typedef enum {
   URI_QUEUE_NEXT_DROP,
   URI_QUEUE_NEXT_IP4_LOOKUP,
   URI_QUEUE_NEXT_IP6_LOOKUP,
+  URI_QUEUE_NEXT_TCP_IP4_OUTPUT,
+  URI_QUEUE_NEXT_TCP_IP6_OUTPUT,
   URI_QUEUE_N_NEXT,
 } uri_queue_next_t;
 
@@ -260,7 +262,6 @@ stream_session_get (u64 si, u32 thread_index)
 {
   return pool_elt_at_index(stream_server_main.sessions[thread_index], si);
 }
-
 
 always_inline int
 check_api_queue_full (stream_server_t *ss)

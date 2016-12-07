@@ -20,6 +20,7 @@
 #include <vnet/ip/ip.h>
 #include <vnet/tcp/tcp_packet.h>
 #include <vnet/uri/transport.h>
+#include <vnet/uri/uri.h>
 
 #define MAX_HDRS_LEN 100
 #define TCP_TSTAMP_RESOLUTION 1e-3
@@ -301,6 +302,13 @@ tcp_session_delete (u32 session_index, u32 my_thread_index)
 {
   pool_put_index(tcp_main.sessions[my_thread_index], session_index);
 }
+
+u32
+tcp_uri_tx_packetize_ip4 (vlib_main_t *vm, stream_session_t *s,
+                          vlib_buffer_t *b);
+u32
+tcp_uri_tx_packetize_ip6 (vlib_main_t *vm, stream_session_t *s,
+                          vlib_buffer_t *b);
 
 #endif /* _vnet_tcp_h_ */
 

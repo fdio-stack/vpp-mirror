@@ -745,7 +745,6 @@ libvnet_la_SOURCES +=					\
   vnet/uri/uri.c					\
   vnet/uri/uri_hashes.c					\
   vnet/uri/uri_queue.c					\
-  vnet/uri/uri_tcp.c					\
   vnet/uri/uri_udp4_node.c				\
   vnet/uri/uri_udp_builtin_server.c			\
   vnet/uri/uri_udp.c

@@ -1395,6 +1395,118 @@ tcp_unregister_listener (u32 listener_index)
   pool_put_index (tm->listener_pool, listener_index);
 }
 
+u32
+tcp_uri_bind_ip4 (vlib_main_t * vm, u32 session_index, ip46_address_t *ip,
+                       u16 port_number_host_byte_order)
+{
+  tcp_listener_registration_t _a, *a = &_a;
+  u32 tsi;
+  tcp_session_t * listener;
+
+  a->port = port_number_host_byte_order;
+  clib_memcpy(&a->ip_address, ip, sizeof (ip46_address_t));
+  a->is_ip4 = 1;
+
+  tsi = tcp_register_listener (a);
+
+  listener = pool_elt_at_index (tcp_main.listener_pool, tsi);
+  listener->s_s_index = session_index;
+  listener->s_proto = SESSION_TYPE_IP4_TCP;
+
+  return tsi;
+}
+
+u32
+tcp_uri_bind_ip6 (vlib_main_t * vm, u32 session_index, ip46_address_t *ip,
+                       u16 port_number_host_byte_order)
+{
+  tcp_listener_registration_t _a, *a = &_a;
+  u32 tsi;
+  tcp_session_t * listener;
+
+  a->port = port_number_host_byte_order;
+  clib_memcpy(&a->ip_address, ip, sizeof (ip46_address_t));
+  a->is_ip4 = 0;
+
+  tsi = tcp_register_listener (a);
+
+  listener = pool_elt_at_index (tcp_main.listener_pool, tsi);
+  listener->s_s_index = session_index;
+  listener->s_proto = SESSION_TYPE_IP6_TCP;
+
+  return tsi;
+}
+
+u32
+tcp_uri_unbind_ip4 (vlib_main_t * vm, u32 listener_index)
+{
+  tcp_unregister_listener (listener_index);
+  return 0;
+}
+
+u32
+tcp_uri_unbind_ip6 (vlib_main_t * vm, u32 listener_index)
+{
+  tcp_unregister_listener (listener_index);
+  return 0;
+}
+
+transport_session_t *
+tcp_uri_session_get_listener (u32 listener_index)
+{
+  tcp_main_t *tm = vnet_get_tcp_main ();
+  tcp_session_t *ts;
+  ts = pool_elt_at_index (tm->listener_pool, listener_index);
+  return &ts->session;
+}
+
+u8*
+format_tcp_stream_session_ip4 (u8 *s, va_list *args)
+{
+  clib_warning ("unimplmented");
+  return 0;
+}
+
+u8*
+format_tcp_stream_session_ip6 (u8 *s, va_list *args)
+{
+  clib_warning ("unimplmented");
+  return 0;
+}
+
+void
+uri_tcp_session_delete (u32 transport_session_index, u32 my_thread_index)
+{
+  tcp_session_delete (transport_session_index, my_thread_index);
+}
+
+transport_session_t *
+uri_tcp_session_get (u32 ts_index, u32 my_thread_index)
+{
+  tcp_session_t *ts = tcp_session_get (ts_index, my_thread_index);
+  return &ts->session;
+}
+
+const static transport_proto_vft_t tcp4_proto = {
+  .bind = tcp_uri_bind_ip4,
+  .unbind = tcp_uri_unbind_ip4,
+  .send = tcp_uri_tx_packetize_ip4,
+  .get_session = uri_tcp_session_get,
+  .get_listener = tcp_uri_session_get_listener,
+  .delete_session = uri_tcp_session_delete,
+  .format_session = format_tcp_stream_session_ip4
+};
+
+const static transport_proto_vft_t tcp6_proto = {
+  .bind = tcp_uri_bind_ip6,
+  .unbind = tcp_uri_unbind_ip6,
+  .send = tcp_uri_tx_packetize_ip6,
+  .get_session = uri_tcp_session_get,
+  .get_listener = tcp_uri_session_get_listener,
+  .delete_session = uri_tcp_session_delete,
+  .format_session = format_tcp_stream_session_ip6
+};
+
 clib_error_t *
 tcp_lookup_init (vlib_main_t * vm)
 {
@@ -1406,6 +1518,9 @@ tcp_lookup_init (vlib_main_t * vm)
     return error;
   if ((error = vlib_call_init_function(vm, ip6_lookup_init)))
     return error;
+
+  uri_register_transport (SESSION_TYPE_IP4_TCP, &tcp4_proto);
+  uri_register_transport (SESSION_TYPE_IP6_TCP, &tcp6_proto);
 
   /* Initialize dispatch table. */
   int i, j;

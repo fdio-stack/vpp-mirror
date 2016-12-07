@@ -150,7 +150,7 @@ tcp_make_syn_or_synack_options (tcp_session_t *ts, tcp_options_t *opts)
 }
 
 always_inline int
-tcp_make_ack_options (tcp_session_t *ts, tcp_options_t *opts)
+tcp_make_established_options (tcp_session_t *ts, tcp_options_t *opts)
 {
   u8 len = 0;
 
@@ -192,7 +192,7 @@ tcp_send_ack (tcp_session_t *ts, u8 is_ip4)
   vlib_buffer_make_headroom (b, MAX_HDRS_LEN);
 
   /* Make and write options */
-  tcp_opts_len = tcp_make_ack_options (ts, snd_opts);
+  tcp_opts_len = tcp_make_established_options (ts, snd_opts);
   tcp_hdr_opts_len = tcp_opts_len + sizeof (tcp_header_t);
 
   /* Window in syn and syn|ack segments is not scaled */
@@ -511,5 +511,111 @@ VLIB_REGISTER_NODE (tcp6_output_node) = {
   .format_buffer = format_tcp_header,
   .format_trace = format_tcp_tx_trace,
 };
+
+u16
+tcp_mss_to_advertise (tcp_session_t *ts)
+{
+  /* TODO cache mss and consider PMTU discovery */
+
+  return ts->opt.mss;
+}
+
+/**
+ * Compute and return window to advertise, scaled as per RFC1323
+ */
+u32
+tcp_window_to_advertise (tcp_session_t *ts, u32 my_thread_index)
+{
+  stream_session_t *s;
+  u32 available_space, wnd;
+
+  s = stream_session_get (ts->s_s_index, my_thread_index);
+
+  available_space = svm_fifo_max_enqueue (s->server_rx_fifo);
+  wnd = clib_min (available_space, 65535U << ts->opt.wscale_snd);
+  ts->rcv_wnd = wnd;
+
+  return wnd >> ts->opt.wscale_snd;
+}
+
+/**
+ * Read as much data as possible from the tx fifo, build a tcp packet and
+ * ask that it be sent to tcp-output
+ */
+u32
+tcp_uri_tx_packetize_inline (vlib_main_t *vm, stream_session_t *s,
+                             vlib_buffer_t *b, u8 is_ip4)
+{
+  tcp_main_t * tm = vnet_get_tcp_main ();
+  u32 max_dequeue, len_to_dequeue, advertise_wnd;
+  u32 my_thread_index = vm->cpu_index;
+  svm_fifo_t * f;
+  u8 * data;
+  u16 snd_mss;
+  tcp_session_t *ts;
+  u8 tcp_opts_len, tcp_hdr_opts_len;
+  tcp_options_t _snd_opts, *snd_opts = &_snd_opts;
+
+  ASSERT(s->session_thread_index == my_thread_index);
+
+  ts = pool_elt_at_index(tm->sessions[my_thread_index],
+                         s->transport_session_index);
+
+  f = s->server_tx_fifo;
+
+  /* Make room for headers */
+  vlib_buffer_make_headroom (b, MAX_HDRS_LEN);
+
+  data = vlib_buffer_get_current (b);
+
+  /* TODO peek instead of dequeue since some data may not have been acked */
+  /* TODO Nagle */
+
+  /* Dequeue a bunch of data into the packet buffer */
+  max_dequeue = svm_fifo_max_dequeue (f);
+  if (max_dequeue == 0)
+    {
+      /* $$$$ set b0->error = node->errors[nil dequeue] */
+      return URI_QUEUE_NEXT_DROP;
+    }
+
+  /* Get the maximum segment size we're willing to accept */
+  snd_mss = tcp_mss_to_advertise (ts);
+
+  /* Dequeue the actual data */
+  len_to_dequeue = max_dequeue < snd_mss ? max_dequeue : snd_mss;
+  svm_fifo_dequeue (f, 0, len_to_dequeue, data);
+
+  /* Make and write options */
+  tcp_opts_len = tcp_make_established_options (ts, snd_opts);
+  tcp_hdr_opts_len = tcp_opts_len + sizeof (tcp_header_t);
+
+  advertise_wnd = tcp_window_to_advertise (ts, my_thread_index);
+
+  pkt_push_tcp (vm, b, ts->s_lcl_port, ts->s_rmt_port,
+                tcp_actual_snd_sequence (ts), ts->rcv_nxt, tcp_hdr_opts_len,
+                TCP_FLAG_ACK, advertise_wnd);
+
+  if (is_ip4)
+    return URI_QUEUE_NEXT_TCP_IP4_OUTPUT;
+  else
+    return URI_QUEUE_NEXT_TCP_IP6_OUTPUT;
+}
+
+u32
+tcp_uri_tx_packetize_ip4 (vlib_main_t *vm, stream_session_t *s,
+                             vlib_buffer_t *b)
+{
+  return tcp_uri_tx_packetize_inline (vm, s, b, 1);
+}
+
+u32
+tcp_uri_tx_packetize_ip6 (vlib_main_t *vm, stream_session_t *s,
+                             vlib_buffer_t *b)
+{
+  return tcp_uri_tx_packetize_inline (vm, s, b, 0);
+}
+
+
 
 VLIB_NODE_FUNCTION_MULTIARCH (tcp6_output_node, tcp6_output)

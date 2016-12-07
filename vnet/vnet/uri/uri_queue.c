@@ -258,6 +258,9 @@ VLIB_REGISTER_NODE (uri_queue_node) = {
     [URI_QUEUE_NEXT_DROP] = "error-drop",
     [URI_QUEUE_NEXT_IP4_LOOKUP] = "ip4-lookup",
     [URI_QUEUE_NEXT_IP6_LOOKUP] = "ip6-lookup",
+    [URI_QUEUE_NEXT_TCP_IP4_OUTPUT] = "tcp4-output",
+    [URI_QUEUE_NEXT_TCP_IP6_OUTPUT] = "tcp6-output",
+
   },
 };
 
