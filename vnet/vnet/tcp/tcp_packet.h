@@ -19,15 +19,15 @@
 #include <vnet/vnet.h>
 
 /* TCP flags bit 0 first. */
-#define foreach_tcp_flag                        \
-  _ (FIN)                                       \
-  _ (SYN)                                       \
-  _ (RST)                                       \
-  _ (PSH)                                       \
-  _ (ACK)                                       \
-  _ (URG)                                       \
-  _ (ECE)                                       \
-  _ (CWR)
+#define foreach_tcp_flag                                \
+  _ (FIN) /**< No more data from sender. */             \
+  _ (SYN) /**< Synchronize sequence numbers. */         \
+  _ (RST) /**< Reset the connection. */                 \
+  _ (PSH) /**< Push function. */                        \
+  _ (ACK) /**< Ack field significant. */                \
+  _ (URG) /**< Urgent pointer field significant. */     \
+  _ (ECE) /**< ECN-echo. Receiver got CE packet */      \
+  _ (CWR) /**< Sender reduced congestion window */
 
 enum
 {
@@ -66,35 +66,34 @@ typedef struct _tcp_header
   u32 ack_number;       /**< Acknowledgement number if ACK is set. It contains
                          *   the value of the next sequence number the sender
                          *   of the segment is expecting to receive. */
-
-  union
-  {
-    u16 reserved1:4,    /**< Reserved. */
-        data_offset:4,  /**< Number of 32bit words in TCP header. */
-        fin:1,          /**< No more data from sender. */
-        syn:1,          /**< Synchronize sequence numbers. */
-        rst:1,          /**< Reset the connection. */
-        psh:1,          /**< Push function. */
-        ack:1,          /**< Ack field significant. */
-        urg:1,          /**< Urgent pointer field significant. */
-        ece:1,          /**< ECN-echo. Receiver got CE packet */
-        cwr:1;          /**< Sender reduced congestion window */
-    struct
-    {
-      u8 data_offset_and_reserved;
-      u8 flags;
-    };
-  };
-
+  u8 data_offset_and_reserved;
+  u8 flags;             /**< Flags: see the macro above */
   u16 window;           /**< Number of bytes sender is willing to receive. */
+
   u16 checksum;         /**< Checksum of TCP pseudo header and data. */
   u16 urgent_pointer;   /**< Seq number of the byte after the urgent data. */
-} tcp_header_t;
+} __attribute__ ((packed)) tcp_header_t;
+
+/* Flag tests that return 0 or !0 */
+#define tcp_doff(_th) ((_th)->data_offset_and_reserved >> 4)
+#define tcp_fin(_th) ((_th)->flags & TCP_FLAG_BIT_FIN)
+#define tcp_syn(_th) ((_th)->flags & TCP_FLAG_BIT_SYN)
+#define tcp_rst(_th) ((_th)->flags & TCP_FLAG_BIT_RST)
+#define tcp_psh(_th) ((_th)->flags & TCP_FLAG_BIT_PSH)
+#define tcp_ack(_th) ((_th)->flags & TCP_FLAG_BIT_ACK)
+#define tcp_urg(_th) ((_th)->flags & TCP_FLAG_BIT_URG)
+#define tcp_ece(_th) ((_th)->flags & TCP_FLAG_BIT_ECE)
+#define tcp_cwr(_th) ((_th)->flags & TCP_FLAG_BIT_CWR)
+
+/* Flag tests that return 0 or 1 */
+#define tcp_is_syn(_th) !!((_th)->flags & TCP_FLAG_BIT_SYN)
+#define tcp_is_fin(_th) !!((_th)->flags & TCP_FLAG_BIT_FIN)
+
 
 always_inline int
 tcp_header_bytes (tcp_header_t *t)
 {
-  return t->data_offset * sizeof(u32);
+  return tcp_doff(t) * sizeof(u32);
 }
 
 /* TCP options. */

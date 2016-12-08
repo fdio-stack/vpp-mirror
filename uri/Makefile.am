@@ -22,7 +22,7 @@ AM_CFLAGS = -Wall
 # liburiclient_la_SOURCES = uriclient.c
 # nobase_include_HEADERS += uriclient.h 
 
-bin_PROGRAMS = uri_udp_test2
+bin_PROGRAMS = uri_udp_test2 uri_tcp_test
 
 #uritest_SOURCES = uritest.c
 #uritest_LDADD = -lvlibmemoryclient -lvlibapi -lsvm \
@@ -32,6 +32,10 @@ bin_PROGRAMS = uri_udp_test2
 #uri_udp_test_LDADD = -lvlibmemoryclient -lvlibapi -lsvm \
 #	-lvppinfra -lpthread -lm -lrt 
 
-uri_udp_test2_SOURCES = uri_udp_test2.c
+uri_udp_test2_SOURCES = uri_udp_test2.c			
 uri_udp_test2_LDADD = -lvlibmemoryclient -lvlibapi -lsvm \
+	-lvppinfra -lpthread -lm -lrt 
+
+uri_tcp_test_SOURCES = uri_tcp_test.c
+uri_tcp_test_LDADD = -lvlibmemoryclient -lvlibapi -lsvm \
 	-lvppinfra -lpthread -lm -lrt 

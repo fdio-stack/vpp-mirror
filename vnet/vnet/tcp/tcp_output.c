@@ -321,7 +321,7 @@ tcp_send_reset (vlib_buffer_t *pkt, u8 is_ip4)
   tcp_hdr_len = sizeof (tcp_header_t);
 
   pkt_th = vlib_buffer_get_current (pkt);
-  if (pkt_th->ack)
+  if (tcp_ack (pkt_th))
     {
      flags = TCP_FLAG_RST;
      seq = pkt_th->ack_number;

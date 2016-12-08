@@ -77,7 +77,7 @@ tcp_options_parse (tcp_header_t *th, tcp_options_t *to)
   const u8 *data;
   u8 opt_len, opts_len, kind;
 
-  opts_len = (th->data_offset << 2) - sizeof (tcp_header_t);
+  opts_len = (tcp_doff(th) << 2) - sizeof (tcp_header_t);
   data = (const u8 *)(th + 1);
   to->flags = 0;
 
@@ -106,14 +106,14 @@ tcp_options_parse (tcp_header_t *th, tcp_options_t *to)
       switch (kind)
       {
         case TCP_OPTION_MSS:
-          if (opt_len == TCP_OPTION_LEN_MSS && th->syn)
+          if (opt_len == TCP_OPTION_LEN_MSS && tcp_syn (th))
             {
               to->mss_flag = 1;
               to->mss = clib_net_to_host_u16 (*(u16 *) (data + 2));
             }
           break;
         case TCP_OPTION_WINDOW_SCALE:
-          if (opt_len == TCP_OPTION_LEN_WINDOW_SCALE && th->syn)
+          if (opt_len == TCP_OPTION_LEN_WINDOW_SCALE && tcp_syn (th))
             {
               to->wscale_flag = 1;
               to->wscale = data[2];
@@ -133,7 +133,7 @@ tcp_options_parse (tcp_header_t *th, tcp_options_t *to)
             }
           break;
         case TCP_OPTION_SACK_PERMITTED:
-          if (opt_len == TCP_OPTION_LEN_SACK_PERMITTED && th->syn)
+          if (opt_len == TCP_OPTION_LEN_SACK_PERMITTED && tcp_syn (th))
             to->sack_flag = 1;
           break;
         case TCP_OPTION_SACK_BLOCK:
@@ -168,7 +168,7 @@ tcp_segment_validate (vlib_main_t *vm, tcp_session_t *ts0, vlib_buffer_t *tb0,
 {
   u8 paws_passed;
 
-  if (PREDICT_FALSE(!th0->ack && !th0->rst && !th0->syn))
+  if (PREDICT_FALSE(!tcp_ack(th0) && !tcp_rst(th0) && !tcp_syn(th0)))
     return -1;
 
   tcp_options_parse (th0, &ts0->opt);
@@ -190,7 +190,7 @@ tcp_segment_validate (vlib_main_t *vm, tcp_session_t *ts0, vlib_buffer_t *tb0,
       else
         {
           /* Drop after ack if not rst */
-          if (!th0->rst)
+          if (!tcp_rst (th0))
             {
               tcp_send_dupack (ts0, is_ip4);
               return -1;
@@ -202,7 +202,7 @@ tcp_segment_validate (vlib_main_t *vm, tcp_session_t *ts0, vlib_buffer_t *tb0,
   if (!tcp_sequence_is_valid (ts0, vnet_buffer (tb0)->tcp.seq_number,
                               vnet_buffer (tb0)->tcp.end_seq))
     {
-      if (!th0->rst)
+      if (!tcp_rst (th0))
         {
           tcp_send_dupack (ts0, is_ip4);
         }
@@ -210,7 +210,7 @@ tcp_segment_validate (vlib_main_t *vm, tcp_session_t *ts0, vlib_buffer_t *tb0,
     }
 
   /* 2nd: check the RST bit */
-  if (th0->rst)
+  if (tcp_rst (th0))
     {
       /* TODO reset connection */
       return -1;
@@ -219,7 +219,7 @@ tcp_segment_validate (vlib_main_t *vm, tcp_session_t *ts0, vlib_buffer_t *tb0,
   /* 3rd: check security and precedence (skip) */
 
   /* 4th: check the SYN bit */
-  if (th0->syn)
+  if (tcp_syn (th0))
     {
       /* TODO send RST */
       return -1;
@@ -436,7 +436,7 @@ tcp46_established_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
         {
           u32 bi0;
           vlib_buffer_t * b0;
-          tcp_header_t *tcp0 = 0;
+          tcp_header_t *th0 = 0;
           tcp_session_t *ts0;
           ip4_header_t * ip40;
           ip6_header_t * ip60;
@@ -459,17 +459,17 @@ tcp46_established_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
           if (is_ip4)
             {
               ip40 = vlib_buffer_get_current (b0);
-              tcp0 = ip4_next_header (ip40);
+              th0 = ip4_next_header (ip40);
               n_advance_bytes0 = (ip4_header_bytes (ip40)
-                  + tcp_header_bytes (tcp0));
+                  + tcp_header_bytes (th0));
               n_data_bytes0 = clib_net_to_host_u16 (ip40->length)
                   - n_advance_bytes0;
             }
           else
             {
               ip60 = vlib_buffer_get_current (b0);
-              tcp0 = ip6_next_header (ip60);
-              n_advance_bytes0 = tcp_header_bytes (tcp0);
+              th0 = ip6_next_header (ip60);
+              n_advance_bytes0 = tcp_header_bytes (th0);
               n_data_bytes0 = clib_net_to_host_u16 (ip60->payload_length)
                   - n_advance_bytes0;
               n_advance_bytes0 += sizeof(ip60[0]);
@@ -477,7 +477,7 @@ tcp46_established_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
 
           /* SYNs, FINs and data consume sequence numbers */
           vnet_buffer (b0)->tcp.end_seq = vnet_buffer (b0)->tcp.seq_number
-              + tcp0->syn + tcp0->fin + n_advance_bytes0;
+              + tcp_is_syn (th0) + tcp_is_fin (th0) + n_advance_bytes0;
 
           error0 = tcp_session_no_space (ts0, my_thread_index, n_data_bytes0);
           if (PREDICT_FALSE(error0))
@@ -486,14 +486,14 @@ tcp46_established_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
           /* TODO header prediction fast path */
 
           /* 1-4: check SEQ, RST, SYN */
-          if (PREDICT_FALSE(tcp_segment_validate (vm, ts0, b0, tcp0, is_ip4)))
+          if (PREDICT_FALSE(tcp_segment_validate (vm, ts0, b0, th0, is_ip4)))
             {
               error0 = TCP_ERROR_SEGMENT_INVALID;
               goto drop;
             }
 
           /* 5: check the ACK field  */
-          if (tcp_incoming_ack_established (ts0, b0, tcp0, is_ip4) < 0)
+          if (tcp_incoming_ack_established (ts0, b0, th0, is_ip4) < 0)
             goto drop;
 
           /* 6: check the URG bit TODO */
@@ -1357,16 +1357,6 @@ VLIB_REGISTER_NODE (tcp6_input_node) = {
 };
 
 VLIB_NODE_FUNCTION_MULTIARCH (tcp6_input_node, tcp6_input)
-
-u16 *
-tcp_established_get_port_next_index (vlib_main_t * vm, u16 port, u8 is_ip6)
-{
-  tcp_input_runtime_t * rt;
-  rt = vlib_node_get_runtime_data (
-      vm, is_ip6 ? tcp6_established_node.index : tcp4_established_node.index);
-  return sparse_vec_validate (rt->next_index_by_dst_port,
-                              clib_host_to_net_u16 (port));
-}
 
 u32
 tcp_register_listener (tcp_listener_registration_t * r)

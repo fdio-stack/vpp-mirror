@@ -72,7 +72,7 @@ format_tcp_header (u8 * s, va_list * args)
   s = format (s, "TCP: %d -> %d", clib_net_to_host_u16 (tcp->src),
               clib_net_to_host_u16 (tcp->dst));
 
-  s = format (s, "\n%Useq. tx 0x%08x rx 0x%08x", format_white_space, indent,
+  s = format (s, "\n%Useq. 0x%08x ack 0x%08x", format_white_space, indent,
               clib_net_to_host_u32 (tcp->seq_number),
               clib_net_to_host_u32 (tcp->ack_number));
 

@@ -153,8 +153,7 @@ pkt_push_tcp_net_order (vlib_main_t * vm, vlib_buffer_t * b, u16 sp, u16 dp, u32
   th->dst_port = dp;
   th->seq_number = seq;
   th->ack_number = ack;
-  th->reserved1 = 0;
-  th->data_offset = tcp_hdr_opts_len >> 2;
+  th->data_offset_and_reserved = (tcp_hdr_opts_len >> 2) << 4;
   th->flags = flags;
   th->window = wnd;
   th->checksum = 0;

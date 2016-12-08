@@ -471,21 +471,21 @@ format_bind_table_entry (u8 * s, va_list * args)
   if (e == 0)
     {
       if (verbose)
-        s = format (s, "%-15s%-25s%-20s%-10s%-10s",
+        s = format (s, "%-35s%-25s%-20s%-10s%-10s",
                     "URI", "Server", "Segment", "API Client", "Cookie");
       else
-        s = format (s, "%-15s%-15s",
+        s = format (s, "%-35s%-15s",
                     "URI", "Server");
       return s;
     }
 
   if (verbose)
-    s = format (s, "%-15s%-25s%-20s%-10d%-10d",
+    s = format (s, "%-35s%-25s%-20s%-10d%-10d",
                 e->bind_name, e->server_name, e->segment_name,
                 e->bind_client_index,
                 e->accept_cookie);
   else
-    s = format (s, "%-15s%-15s", e->bind_name, e->server_name);
+    s = format (s, "%-35s%-15s", e->bind_name, e->server_name);
   return s;
 }
 

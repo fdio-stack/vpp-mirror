@@ -260,7 +260,7 @@ tcp_send_reset (vlib_buffer_t *pkt, u8 is_ip4);
 always_inline u32
 tcp_end_seq (tcp_header_t *th, u32 len)
 {
-  return th->seq_number + th->syn + th->fin + len;
+  return th->seq_number + tcp_is_syn(th) + tcp_is_fin(th) + len;
 }
 
 /* Modulo arithmetic for TCP sequence numbers */
