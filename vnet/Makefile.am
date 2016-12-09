@@ -15,7 +15,19 @@ AUTOMAKE_OPTIONS = foreign subdir-objects
 
 AM_CFLAGS = -Wall -Werror @DPDK@ @DPDK_CRYPTO@ @IPSEC@ @IPV6SR@
 
-BUILT_SOURCES = vnet/interface.api.h vnet/interface.api.json
+BUILT_SOURCES = 				\
+ vnet/interface.api.h				\
+ vnet/interface.api.json			\
+ vnet/ip/ip.api.h				\
+ vnet/ip/ip.api.json				\
+ vnet/l2/l2.api.h				\
+ vnet/l2/l2.api.json				\
+ vnet/map/map.api.h				\
+ vnet/map/map.api.json				\
+ vnet/span/span.api.h				\
+ vnet/span/span.api.json			\
+ vnet/unix/tap.api.h				\
+ vnet/unix/tap.api.json
 
 libvnet_la_SOURCES =
 libvnetplugin_la_SOURCES =
@@ -116,6 +128,7 @@ nobase_include_HEADERS +=			\
 ########################################
 libvnet_la_SOURCES +=				\
  vnet/l2/feat_bitmap.c				\
+ vnet/l2/l2_api.c      				\
  vnet/l2/l2_bd.c				\
  vnet/l2/l2_bvi.c				\
  vnet/l2/l2_input_classify.c			\
@@ -149,7 +162,8 @@ nobase_include_HEADERS +=			\
  vnet/l2/l2_fib.h				\
  vnet/l2/l2_rw.h                                \
  vnet/l2/l2_xcrw.h				\
- vnet/l2/l2_classify.h
+ vnet/l2/l2_classify.h				\
+ vnet/l2/l2.api.h
 
 ########################################
 # Layer 2 protocol: SRP
@@ -291,6 +305,7 @@ libvnet_la_SOURCES +=				\
  vnet/ip/ip6_input.c				\
  vnet/ip/ip6_neighbor.c				\
  vnet/ip/ip6_pg.c				\
+ vnet/ip/ip_api.c				\
  vnet/ip/ip_checksum.c				\
  vnet/ip/ip_frag.c				\
  vnet/ip/ip.h					\
@@ -311,6 +326,7 @@ nobase_include_HEADERS +=			\
  vnet/ip/icmp4.h				\
  vnet/ip/icmp6.h				\
  vnet/ip/igmp_packet.h				\
+ vnet/ip/ip.api.h				\
  vnet/ip/ip4_error.h				\
  vnet/ip/ip4.h					\
  vnet/ip/ip4_mtrie.h				\
@@ -320,6 +336,7 @@ nobase_include_HEADERS +=			\
  vnet/ip/ip6_hop_by_hop.h			\
  vnet/ip/ip6_hop_by_hop_packet.h		\
  vnet/ip/ip6_packet.h				\
+ vnet/ip/ip6_neighbor.h				\
  vnet/ip/ip.h					\
  vnet/ip/ip_packet.h				\
  vnet/ip/ip_source_and_port_range_check.h	\
@@ -332,6 +349,22 @@ nobase_include_HEADERS +=			\
  vnet/ip/udp_error.def				\
  vnet/ip/udp.h					\
  vnet/ip/udp_packet.h
+
+########################################
+# Bidirectional Forwarding Detection
+########################################
+
+nobase_include_HEADERS +=                       \
+ vnet/bfd/bfd_protocol.h			\
+ vnet/bfd/bfd_main.h                            \
+ vnet/bfd/bfd_api.h                            \
+ vnet/bfd/bfd_udp.h
+
+libvnet_la_SOURCES +=				\
+ vnet/bfd/bfd_api.h                            \
+ vnet/bfd/bfd_udp.c                             \
+ vnet/bfd/bfd_main.c                            \
+ vnet/bfd/bfd_protocol.c
 
 ########################################
 # Layer 3 protocol: IPSec
@@ -390,17 +423,19 @@ nobase_include_HEADERS +=			\
 ########################################
 # Layer 3 protocol: MAP
 ########################################
-libvnet_la_SOURCES +=                           \
- vnet/map/map.c                                 \
- vnet/map/map_dpo.c                             \
- vnet/map/ip4_map.c                             \
- vnet/map/ip6_map.c                             \
- vnet/map/ip4_map_t.c                           \
- vnet/map/ip6_map_t.c
+libvnet_la_SOURCES +=				\
+ vnet/map/map.c					\
+ vnet/map/map_dpo.c				\
+ vnet/map/ip4_map.c				\
+ vnet/map/ip6_map.c				\
+ vnet/map/ip4_map_t.c				\
+ vnet/map/ip6_map_t.c				\
+ vnet/map/map_api.c
 
-nobase_include_HEADERS +=                       \
- vnet/map/map.h                                 \
- vnet/map/map_dpo.h
+nobase_include_HEADERS +=			\
+ vnet/map/map.h					\
+ vnet/map/map_dpo.h				\
+ vnet/map/map.api.h
 
 if ENABLE_TESTS
 TESTS += test_map
@@ -672,10 +707,12 @@ nobase_include_HEADERS += 			\
 ########################################
 
 libvnet_la_SOURCES +=				\
-  vnet/span/span.c	\
+  vnet/span/span_api.c  \
+  vnet/span/span.c	    \
   vnet/span/node.c
 
 nobase_include_HEADERS += 			\
+  vnet/span/span.api.h  \
   vnet/span/span.h
 
 ########################################
@@ -802,12 +839,14 @@ nobase_include_HEADERS +=			\
 libvnet_la_SOURCES +=				\
   vnet/unix/gdb_funcs.c				\
   vnet/unix/pcap.c				\
+  vnet/unix/tap_api.c				\
   vnet/unix/tapcli.c				\
   vnet/unix/tuntap.c
 
 nobase_include_HEADERS +=			\
   vnet/unix/pcap.h				\
   vnet/unix/tuntap.h				\
+  vnet/unix/tap.api.h				\
   vnet/unix/tapcli.h
 
 ########################################
@@ -845,6 +884,7 @@ libvnet_la_SOURCES +=				\
 
 nobase_include_HEADERS +=			\
   vnet/fib/fib.h				\
+  vnet/fib/fib_api.h				\
   vnet/fib/ip4_fib.h				\
   vnet/fib/ip6_fib.h				\
   vnet/fib/fib_types.h				\
@@ -926,7 +966,14 @@ SUFFIXES = .api.h .api .api.json
 # install the API definition, so we can produce java bindings, etc.
 
 apidir = $(prefix)/vnet
-api_DATA = vnet/interface.api.json
+
+api_DATA =					\
+ vnet/interface.api.json			\
+ vnet/ip/ip.api.json				\
+ vnet/l2/l2.api.json				\
+ vnet/map/map.api.json				\
+ vnet/span/span.api.json			\
+ vnet/unix/tap.api.json
 
 # The actual %.api.h rule is in .../build-data/packages/suffix-rules.mk
 # and requires a symbolic link at the top of the vnet source tree

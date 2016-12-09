@@ -67,6 +67,13 @@ rte_delay_us_override (unsigned us)
     }
   return 0;			// no override
 }
+
+static void
+rte_delay_us_override_cb (unsigned us)
+{
+  if (rte_delay_us_override (us) == 0)
+    rte_delay_us_block (us);
+}
 #endif
 
 static void
@@ -79,6 +86,13 @@ vpe_main_init (vlib_main_t * vm)
 
   /* Turn off network stack components which we don't want */
   vlib_mark_init_function_complete (vm, srp_init);
+
+#if DPDK
+#if RTE_VERSION >= RTE_VERSION_NUM(16, 11, 0, 0)
+  /* register custom delay function */
+  rte_delay_us_callback_register (rte_delay_us_override_cb);
+#endif
+#endif
 }
 
 /*

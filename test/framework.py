@@ -193,7 +193,7 @@ class VppTestCase(unittest.TestCase):
             cls.vpp_stderr_reader_thread = Thread(target=pump_output, args=(
                 cls.vpp.stderr, cls.vpp_stderr_queue))
             cls.vpp_stderr_reader_thread.start()
-            cls.vapi = VppPapiProvider(cls.shm_prefix, cls.shm_prefix)
+            cls.vapi = VppPapiProvider(cls.shm_prefix, cls.shm_prefix, cls)
             if cls.step:
                 hook = StepHook(cls)
             else:
@@ -278,6 +278,8 @@ class VppTestCase(unittest.TestCase):
 
     def setUp(self):
         """ Clear trace before running each test"""
+        if self.vpp_dead:
+            raise Exception("VPP is dead when setting up the test")
         self.vapi.cli("clear trace")
         # store the test instance inside the test class - so that objects
         # holding the class can access instance methods (like assertEqual)
@@ -461,6 +463,34 @@ class VppTestCase(unittest.TestCase):
                 return None
             if info.dst == dst_index:
                 return info
+
+    def assert_equal(self, real_value, expected_value, name_or_class=None):
+        if name_or_class is None:
+            self.assertEqual(real_value, expected_value, msg)
+            return
+        try:
+            msg = "Invalid %s: %d('%s') does not match expected value %d('%s')"
+            msg = msg % (getdoc(name_or_class).strip(),
+                         real_value, str(name_or_class(real_value)),
+                         expected_value, str(name_or_class(expected_value)))
+        except:
+            msg = "Invalid %s: %s does not match expected value %s" % (
+                name_or_class, real_value, expected_value)
+
+        self.assertEqual(real_value, expected_value, msg)
+
+    def assert_in_range(
+            self,
+            real_value,
+            expected_min,
+            expected_max,
+            name=None):
+        if name is None:
+            msg = None
+        else:
+            msg = "Invalid %s: %s out of range <%s,%s>" % (
+                name, real_value, expected_min, expected_max)
+        self.assertTrue(expected_min <= real_value <= expected_max, msg)
 
 
 class VppTestResult(unittest.TestResult):

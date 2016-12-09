@@ -80,7 +80,7 @@ extern vlib_node_registration_t handoff_dispatch_node;
   _ ("net_enic", ENIC)            \
   _ ("net_vmxnet3", VMXNET3)      \
   _ ("net_af_packet", AF_PACKET)  \
-  _ ("net_bonding", BOND)         \
+  _ ("rte_bond_pmd", BOND)        \
   _ ("net_fm10k", FM10K)          \
   _ ("net_cxgbe", CXGBE)          \
   _ ("net_dpaa2", DPAA2)
@@ -467,7 +467,6 @@ struct rte_mbuf *dpdk_zerocopy_replicate_packet_mb (vlib_buffer_t * b);
   _(NONE, "no error")							\
   _(RX_PACKET_ERROR, "Rx packet errors")				\
   _(RX_BAD_FCS, "Rx bad fcs")						\
-  _(L4_CHECKSUM_ERROR, "Rx L4 checksum errors")				\
   _(IP_CHECKSUM_ERROR, "Rx ip checksum errors")				\
   _(RX_ALLOC_FAIL, "rx buf alloc from free list failed")		\
   _(RX_ALLOC_NO_PHYSMEM, "rx buf alloc failed no physmem")		\

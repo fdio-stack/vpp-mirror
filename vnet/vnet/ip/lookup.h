@@ -111,7 +111,7 @@ typedef enum {
     [IP_LOOKUP_NEXT_LOCAL] = "ip4-local",			\
     [IP_LOOKUP_NEXT_ARP] = "ip4-arp",				\
     [IP_LOOKUP_NEXT_GLEAN] = "ip4-glean",			\
-    [IP_LOOKUP_NEXT_REWRITE] = "ip4-rewrite-transit",		\
+    [IP_LOOKUP_NEXT_REWRITE] = "ip4-rewrite",    		\
     [IP_LOOKUP_NEXT_MIDCHAIN] = "ip4-midchain",		        \
     [IP_LOOKUP_NEXT_LOAD_BALANCE] = "ip4-load-balance",		\
     [IP_LOOKUP_NEXT_ICMP_ERROR] = "ip4-icmp-error",		\
@@ -167,6 +167,17 @@ struct ip_adjacency_t_;
 typedef void (*adj_midchain_fixup_t)(vlib_main_t * vm,
 				     struct ip_adjacency_t_ *adj,
 				     vlib_buffer_t * b0);
+
+/**
+ * @brief Flags on an IP adjacency
+ */
+typedef enum ip_adjacency_flags_t_
+{
+    /**
+     * Currently a sync walk is active. Used to prevent re-entrant walking
+     */
+    IP_ADJ_SYNC_WALK_ACTIVE = (1 << 0),
+} ip_adjacency_flags_t;
 
 /** @brief IP unicast adjacency.
     @note cache aligned.
@@ -254,6 +265,12 @@ typedef struct ip_adjacency_t_ {
    * remaining cachelines
    */
   fib_node_t ia_node;
+
+  /**
+   * Flags on the adjacency
+   */
+  ip_adjacency_flags_t ia_flags;
+
 } ip_adjacency_t;
 
 STATIC_ASSERT((STRUCT_OFFSET_OF(ip_adjacency_t, cacheline0) == 0),

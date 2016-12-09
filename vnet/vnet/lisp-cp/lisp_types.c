@@ -270,6 +270,31 @@ unformat_fid_address (unformat_input_t * i, va_list * args)
 }
 
 uword
+unformat_hmac_key_id (unformat_input_t * input, va_list * args)
+{
+  u32 *key_id = va_arg (*args, u32 *);
+  u8 *s = 0;
+
+  if (unformat (input, "%s", &s))
+    {
+      if (!strcmp ((char *) s, "sha1"))
+	key_id[0] = HMAC_SHA_1_96;
+      else if (!strcmp ((char *) s, "sha256"))
+	key_id[0] = HMAC_SHA_256_128;
+      else
+	{
+	  clib_warning ("invalid key_id: '%s'", s);
+	  key_id[0] = HMAC_NO_KEY;
+	}
+    }
+  else
+    return 0;
+
+  vec_free (s);
+  return 1;
+}
+
+uword
 unformat_gid_address (unformat_input_t * input, va_list * args)
 {
   gid_address_t *a = va_arg (*args, gid_address_t *);
@@ -331,6 +356,24 @@ unformat_negative_mapping_action (unformat_input_t * input, va_list * args)
 
   vec_free (s);
   return 1;
+}
+
+u8 *
+format_hmac_key_id (u8 * s, va_list * args)
+{
+  lisp_key_type_t key_id = va_arg (*args, lisp_key_type_t);
+
+  switch (key_id)
+    {
+    case HMAC_SHA_1_96:
+      return format (0, "sha1");
+    case HMAC_SHA_256_128:
+      return format (0, "sha256");
+    default:
+      return 0;
+    }
+
+  return 0;
 }
 
 u8 *
@@ -676,6 +719,14 @@ gid_address_free (gid_address_t * a)
   lcaf_t *lcaf = &gid_address_lcaf (a);
   u8 lcaf_type = lcaf_type (lcaf);
   (*lcaf_free_fcts[lcaf_type]) (lcaf);
+}
+
+void
+gid_address_from_ip (gid_address_t * g, ip_address_t * ip)
+{
+  memset (g, 0, sizeof (g[0]));
+  ip_address_set (&gid_address_ip (g), ip, ip_addr_version (ip));
+  gid_address_ippref_len (g) = 32;
 }
 
 int
@@ -1048,7 +1099,7 @@ sd_write (u8 * p, void *a)
   size += sizeof (u16);
   memset (h, 0, sizeof (h[0]));
   LCAF_TYPE (h) = LCAF_SOURCE_DEST;
-  u16 lcaf_len = 4 + sizeof (lcaf_src_dst_hdr_t)
+  u16 lcaf_len = sizeof (lcaf_src_dst_hdr_t)
     + fid_addr_size_to_write (&sd_src (sd))
     + fid_addr_size_to_write (&sd_dst (sd));
   LCAF_LENGTH (h) = clib_host_to_net_u16 (lcaf_len);

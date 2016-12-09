@@ -88,7 +88,6 @@ _(INCORRECT_ADJACENCY_TYPE, -94, "Invalid adjacency type for this operation") \
 _(EXCEEDED_NUMBER_OF_RANGES_CAPACITY, -95, "Operation would exceed configured capacity of ranges") \
 _(EXCEEDED_NUMBER_OF_PORTS_CAPACITY, -96, "Operation would exceed capacity of number of ports") \
 _(INVALID_ADDRESS_FAMILY, -97, "Invalid address family")                \
-                                                                        \
 _(ADDRESS_IN_USE, -98, "Address in use")				\
 _(ADDRESS_NOT_IN_USE, -99, "Address not in use")			\
 _(CANNOT_ENABLE_DISABLE_FEATURE, -100, "Cannot enable/disable feature") \
@@ -96,7 +95,9 @@ _(INVALID_SUB_SW_IF_INDEX, -101, "Invalid sub-interface sw_if_index")   \
 _(QUEUE_FULL, -102, "Queue full")                                       \
 _(TABLE_TOO_BIG, -103, "Table too big")                                 \
 _(UNKNOWN_URI_TYPE, -104, "Unknown URI type")				\
-_(URI_FIFO_CREATE_FAILED, -105, "URI FIFO segment create failed")
+_(URI_FIFO_CREATE_FAILED, -105, "URI FIFO segment create failed")       \
+_(BFD_EEXIST, -107, "Duplicate BFD session") \
+_(BFD_NOENT, -108, "No such BFD session")
 
 typedef enum
 {

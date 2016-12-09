@@ -64,6 +64,34 @@
 #define DBG_VQ(args...)
 #endif
 
+/*
+ * When an RX queue is down but active, received packets
+ * must be discarded. This value controls up to how many
+ * packets will be discarded during each round.
+ */
+#define VHOST_USER_DOWN_DISCARD_COUNT 256
+
+/*
+ * When the number of available buffers gets under this threshold,
+ * RX node will start discarding packets.
+ */
+#define VHOST_USER_RX_BUFFER_STARVATION 32
+
+/*
+ * On the receive side, the host should free descriptors as soon
+ * as possible in order to avoid TX drop in the VM.
+ * This value controls the number of copy operations that are stacked
+ * before copy is done for all and descriptors are given back to
+ * the guest.
+ * The value 64 was obtained by testing (48 and 128 were not as good).
+ */
+#define VHOST_USER_RX_COPY_THRESHOLD 64
+
+#define UNIX_GET_FD(unixfd_idx) \
+    (unixfd_idx != ~0) ? \
+	pool_elt_at_index (unix_main.file_pool, \
+			   unixfd_idx)->file_descriptor : -1;
+
 #define foreach_virtio_trace_flags \
   _ (SIMPLE_CHAINED, 0, "Simple descriptor chaining") \
   _ (SINGLE_DESC,  1, "Single descriptor packet") \
@@ -81,7 +109,8 @@ vlib_node_registration_t vhost_user_input_node;
 
 #define foreach_vhost_user_tx_func_error      \
   _(NONE, "no error")  \
-  _(NOT_READY, "vhost user state error")  \
+  _(NOT_READY, "vhost vring not ready")  \
+  _(DOWN, "vhost interface is down")  \
   _(PKT_DROP_NOBUF, "tx packet drops (no available descriptors)")  \
   _(PKT_DROP_NOMRG, "tx packet drops (cannot merge descriptors)")  \
   _(MMAP_FAIL, "mmap failure") \
@@ -153,8 +182,8 @@ format_vhost_user_interface_name (u8 * s, va_list * args)
 static int
 vhost_user_name_renumber (vnet_hw_interface_t * hi, u32 new_dev_instance)
 {
+  // FIXME: check if the new dev instance is already used
   vhost_user_main_t *vum = &vhost_user_main;
-
   vec_validate_init_empty (vum->show_dev_instance_by_real_dev_instance,
 			   hi->dev_instance, ~0);
 
@@ -356,34 +385,32 @@ vhost_user_rx_thread_placement ()
   }
 
   i = 0;
-  vec_foreach (vui, vum->vhost_user_interfaces)
-  {
-    if (!vui->active)
-      continue;
+  vhost_iface_and_queue_t iaq;
+  /* *INDENT-OFF* */
+  pool_foreach (vui, vum->vhost_user_interfaces, {
+      u32 *vui_workers = vec_len (vui->workers) ? vui->workers : workers;
+      u32 qid;
+      for (qid = 0; qid < VHOST_VRING_MAX_N / 2; qid++)
+	{
+	  vhost_user_vring_t *txvq =
+	      &vui->vrings[VHOST_VRING_IDX_TX (qid)];
+	  if (!txvq->started)
+	    continue;
 
-    u32 *vui_workers = vec_len (vui->workers) ? vui->workers : workers;
-    u32 qid;
-    for (qid = 0; qid < VHOST_VRING_MAX_N / 2; qid++)
-      {
-	vhost_user_vring_t *txvq = &vui->vrings[VHOST_VRING_IDX_TX (qid)];
-	if (!txvq->started)
-	  continue;
+	  i %= vec_len (vui_workers);
+	  u32 cpu_index = vui_workers[i];
+	  i++;
+	  vhc = &vum->cpus[cpu_index];
 
-	i %= vec_len (vui_workers);
-	u32 cpu_index = vui_workers[i];
-	i++;
-	vhc = &vum->cpus[cpu_index];
-
-	vhost_iface_and_queue_t iaq = {
-	  .qid = qid,
-	  .vhost_iface_index = vui - vum->vhost_user_interfaces,
-	};
-	vec_add1 (vhc->rx_queues, iaq);
-	vlib_node_set_state (vlib_mains ? vlib_mains[cpu_index] :
-			     &vlib_global_main, vhost_user_input_node.index,
-			     VLIB_NODE_STATE_POLLING);
-      }
-  }
+	  iaq.qid = qid;
+	  iaq.vhost_iface_index = vui - vum->vhost_user_interfaces;
+	  vec_add1 (vhc->rx_queues, iaq);
+	  vlib_node_set_state (vlib_mains ? vlib_mains[cpu_index] :
+	      &vlib_global_main, vhost_user_input_node.index,
+	      VLIB_NODE_STATE_POLLING);
+	}
+  });
+  /* *INDENT-ON* */
 }
 
 static int
@@ -401,7 +428,7 @@ vhost_user_thread_placement (u32 sw_if_index, u32 worker_thread_index, u8 del)
   if (!(hw = vnet_get_sup_hw_interface (vnet_get_main (), sw_if_index)))
     return -2;
 
-  vui = vec_elt_at_index (vum->vhost_user_interfaces, hw->dev_instance);
+  vui = pool_elt_at_index (vum->vhost_user_interfaces, hw->dev_instance);
   u32 found = ~0, *w;
   vec_foreach (w, vui->workers)
   {
@@ -473,8 +500,8 @@ vhost_user_kickfd_read_ready (unix_file_t * uf)
   __attribute__ ((unused)) int n;
   u8 buff[8];
   vhost_user_intf_t *vui =
-    vec_elt_at_index (vhost_user_main.vhost_user_interfaces,
-		      uf->private_data >> 8);
+    pool_elt_at_index (vhost_user_main.vhost_user_interfaces,
+		       uf->private_data >> 8);
   u32 qid = uf->private_data & 0xff;
   n = read (uf->file_descriptor, ((char *) &buff), 8);
   DBG_SOCK ("if %d KICK queue %d", uf->private_data >> 8, qid);
@@ -520,8 +547,8 @@ vhost_user_vring_init (vhost_user_intf_t * vui, u32 qid)
 {
   vhost_user_vring_t *vring = &vui->vrings[qid];
   memset (vring, 0, sizeof (*vring));
-  vring->kickfd = -1;
-  vring->callfd = -1;
+  vring->kickfd_idx = ~0;
+  vring->callfd_idx = ~0;
   vring->errfd = -1;
 
   /*
@@ -541,17 +568,19 @@ static inline void
 vhost_user_vring_close (vhost_user_intf_t * vui, u32 qid)
 {
   vhost_user_vring_t *vring = &vui->vrings[qid];
-  if (vring->kickfd != -1)
+  if (vring->kickfd_idx != ~0)
     {
       unix_file_t *uf = pool_elt_at_index (unix_main.file_pool,
 					   vring->kickfd_idx);
       unix_file_del (&unix_main, uf);
+      vring->kickfd_idx = ~0;
     }
-  if (vring->callfd != -1)
+  if (vring->callfd_idx != ~0)
     {
       unix_file_t *uf = pool_elt_at_index (unix_main.file_pool,
 					   vring->callfd_idx);
       unix_file_del (&unix_main, uf);
+      vring->callfd_idx = ~0;
     }
   if (vring->errfd != -1)
     close (vring->errfd);
@@ -561,7 +590,6 @@ vhost_user_vring_close (vhost_user_intf_t * vui, u32 qid)
 static inline void
 vhost_user_if_disconnect (vhost_user_intf_t * vui)
 {
-  vhost_user_main_t *vum = &vhost_user_main;
   vnet_main_t *vnm = vnet_get_main ();
   int q;
 
@@ -572,12 +600,7 @@ vhost_user_if_disconnect (vhost_user_intf_t * vui)
       unix_file_del (&unix_main, unix_main.file_pool + vui->unix_file_index);
       vui->unix_file_index = ~0;
     }
-  else
-    close (vui->unix_fd);
 
-  hash_unset (vum->vhost_user_interface_index_by_sock_fd, vui->unix_fd);
-  hash_unset (vum->vhost_user_interface_index_by_listener_fd, vui->unix_fd);
-  vui->unix_fd = -1;
   vui->is_up = 0;
 
   for (q = 0; q < VHOST_VRING_MAX_N; q++)
@@ -588,13 +611,18 @@ vhost_user_if_disconnect (vhost_user_intf_t * vui)
 }
 
 #define VHOST_LOG_PAGE 0x1000
-always_inline void
-vhost_user_log_dirty_pages (vhost_user_intf_t * vui, u64 addr, u64 len)
+static_always_inline void
+vhost_user_log_dirty_pages_2 (vhost_user_intf_t * vui,
+			      u64 addr, u64 len, u8 is_host_address)
 {
   if (PREDICT_TRUE (vui->log_base_addr == 0
 		    || !(vui->features & (1 << FEAT_VHOST_F_LOG_ALL))))
     {
       return;
+    }
+  if (is_host_address)
+    {
+      addr = (u64) map_user_mem (vui, (uword) addr);
     }
   if (PREDICT_FALSE ((addr + len - 1) / VHOST_LOG_PAGE / 8 >= vui->log_size))
     {
@@ -609,6 +637,12 @@ vhost_user_log_dirty_pages (vhost_user_intf_t * vui, u64 addr, u64 len)
       ((u8 *) vui->log_base_addr)[page / 8] |= 1 << page % 8;
       page++;
     }
+}
+
+static_always_inline void
+vhost_user_log_dirty_pages (vhost_user_intf_t * vui, u64 addr, u64 len)
+{
+  vhost_user_log_dirty_pages_2 (vui, addr, len, 0);
 }
 
 #define vhost_user_log_dirty_ring(vui, vq, member) \
@@ -629,20 +663,11 @@ vhost_user_socket_read (unix_file_t * uf)
   vhost_user_main_t *vum = &vhost_user_main;
   vhost_user_intf_t *vui;
   struct cmsghdr *cmsg;
-  uword *p;
   u8 q;
   unix_file_t template = { 0 };
   vnet_main_t *vnm = vnet_get_main ();
 
-  p = hash_get (vum->vhost_user_interface_index_by_sock_fd,
-		uf->file_descriptor);
-  if (p == 0)
-    {
-      DBG_SOCK ("FD %d doesn't belong to any interface", uf->file_descriptor);
-      return 0;
-    }
-  else
-    vui = vec_elt_at_index (vum->vhost_user_interfaces, p[0]);
+  vui = pool_elt_at_index (vum->vhost_user_interfaces, uf->private_data);
 
   char control[CMSG_SPACE (VHOST_MEMORY_MAX_NREGIONS * sizeof (int))];
 
@@ -898,11 +923,12 @@ vhost_user_socket_read (unix_file_t * uf)
       q = (u8) (msg.u64 & 0xFF);
 
       /* if there is old fd, delete and close it */
-      if (vui->vrings[q].callfd != -1)
+      if (vui->vrings[q].callfd_idx != ~0)
 	{
 	  unix_file_t *uf = pool_elt_at_index (unix_main.file_pool,
 					       vui->vrings[q].callfd_idx);
 	  unix_file_del (&unix_main, uf);
+	  vui->vrings[q].callfd_idx = ~0;
 	}
 
       if (!(msg.u64 & 0x100))
@@ -913,13 +939,14 @@ vhost_user_socket_read (unix_file_t * uf)
 	      goto close_socket;
 	    }
 
-	  vui->vrings[q].callfd = fds[0];
 	  template.read_function = vhost_user_callfd_read_ready;
 	  template.file_descriptor = fds[0];
+	  template.private_data =
+	    ((vui - vhost_user_main.vhost_user_interfaces) << 8) + q;
 	  vui->vrings[q].callfd_idx = unix_file_add (&unix_main, &template);
 	}
       else
-	vui->vrings[q].callfd = -1;
+	vui->vrings[q].callfd_idx = ~0;
       break;
 
     case VHOST_USER_SET_VRING_KICK:
@@ -928,11 +955,12 @@ vhost_user_socket_read (unix_file_t * uf)
 
       q = (u8) (msg.u64 & 0xFF);
 
-      if (vui->vrings[q].kickfd != -1)
+      if (vui->vrings[q].kickfd_idx != ~0)
 	{
 	  unix_file_t *uf = pool_elt_at_index (unix_main.file_pool,
-					       vui->vrings[q].kickfd);
+					       vui->vrings[q].kickfd_idx);
 	  unix_file_del (&unix_main, uf);
+	  vui->vrings[q].kickfd_idx = ~0;
 	}
 
       if (!(msg.u64 & 0x100))
@@ -943,24 +971,20 @@ vhost_user_socket_read (unix_file_t * uf)
 	      goto close_socket;
 	    }
 
-	  if (vui->vrings[q].kickfd > -1)
-	    close (vui->vrings[q].kickfd);
-
-	  vui->vrings[q].kickfd = fds[0];
 	  template.read_function = vhost_user_kickfd_read_ready;
 	  template.file_descriptor = fds[0];
 	  template.private_data =
-	    ((vui - vhost_user_main.vhost_user_interfaces) << 8) + q;
+	    (((uword) (vui - vhost_user_main.vhost_user_interfaces)) << 8) +
+	    q;
 	  vui->vrings[q].kickfd_idx = unix_file_add (&unix_main, &template);
 	}
       else
 	{
-	  vui->vrings[q].kickfd = -1;
+	  //When no kickfd is set, the queue is initialized as started
+	  vui->vrings[q].kickfd_idx = ~0;
 	  vui->vrings[q].started = 1;
 	}
 
-      //TODO: When kickfd is specified, 'started' is set when the first kick
-      //is received.
       break;
 
     case VHOST_USER_SET_VRING_ERR:
@@ -1141,18 +1165,8 @@ vhost_user_socket_error (unix_file_t * uf)
 {
   vlib_main_t *vm = vlib_get_main ();
   vhost_user_main_t *vum = &vhost_user_main;
-  vhost_user_intf_t *vui;
-  uword *p;
-
-  p = hash_get (vum->vhost_user_interface_index_by_sock_fd,
-		uf->file_descriptor);
-  if (p == 0)
-    {
-      DBG_SOCK ("fd %d doesn't belong to any interface", uf->file_descriptor);
-      return 0;
-    }
-  else
-    vui = vec_elt_at_index (vum->vhost_user_interfaces, p[0]);
+  vhost_user_intf_t *vui =
+    pool_elt_at_index (vum->vhost_user_interfaces, uf->private_data);
 
   DBG_SOCK ("socket error on if %d", vui->sw_if_index);
   vlib_worker_thread_barrier_sync (vm);
@@ -1170,17 +1184,8 @@ vhost_user_socksvr_accept_ready (unix_file_t * uf)
   unix_file_t template = { 0 };
   vhost_user_main_t *vum = &vhost_user_main;
   vhost_user_intf_t *vui;
-  uword *p;
 
-  p = hash_get (vum->vhost_user_interface_index_by_listener_fd,
-		uf->file_descriptor);
-  if (p == 0)
-    {
-      DBG_SOCK ("fd %d doesn't belong to any interface", uf->file_descriptor);
-      return 0;
-    }
-  else
-    vui = vec_elt_at_index (vum->vhost_user_interfaces, p[0]);
+  vui = pool_elt_at_index (vum->vhost_user_interfaces, uf->private_data);
 
   client_len = sizeof (client);
   client_fd = accept (uf->file_descriptor,
@@ -1194,12 +1199,8 @@ vhost_user_socksvr_accept_ready (unix_file_t * uf)
   template.read_function = vhost_user_socket_read;
   template.error_function = vhost_user_socket_error;
   template.file_descriptor = client_fd;
+  template.private_data = vui - vhost_user_main.vhost_user_interfaces;
   vui->unix_file_index = unix_file_add (&unix_main, &template);
-
-  vui->client_fd = client_fd;
-  hash_set (vum->vhost_user_interface_index_by_sock_fd, vui->client_fd,
-	    vui - vum->vhost_user_interfaces);
-
   return 0;
 }
 
@@ -1216,18 +1217,18 @@ vhost_user_init (vlib_main_t * vm)
   if (error)
     return error;
 
-  vum->vhost_user_interface_index_by_listener_fd =
-    hash_create (0, sizeof (uword));
-  vum->vhost_user_interface_index_by_sock_fd =
-    hash_create (0, sizeof (uword));
-  vum->vhost_user_interface_index_by_sw_if_index =
-    hash_create (0, sizeof (uword));
   vum->coalesce_frames = 32;
   vum->coalesce_time = 1e-3;
 
-  vec_validate_aligned (vum->rx_buffers, tm->n_vlib_mains - 1,
-			CLIB_CACHE_LINE_BYTES);
   vec_validate (vum->cpus, tm->n_vlib_mains - 1);
+
+  vhost_cpu_t *cpu;
+  vec_foreach (cpu, vum->cpus)
+  {
+    /* This is actually not necessary as validate already zeroes it
+     * Just keeping the loop here for later because I am lazy. */
+    cpu->rx_buffers_len = 0;
+  }
 
   /* find out which cpus will be used for input */
   vum->input_cpu_first_index = 0;
@@ -1240,6 +1241,8 @@ vhost_user_init (vlib_main_t * vm)
       vum->input_cpu_first_index = tr->first_index;
       vum->input_cpu_count = tr->count;
     }
+
+  vum->random = random_default_seed ();
 
   return 0;
 }
@@ -1255,15 +1258,6 @@ vhost_user_exit (vlib_main_t * vm)
 
 VLIB_MAIN_LOOP_EXIT_FUNCTION (vhost_user_exit);
 
-typedef struct
-{
-  u16 qid; /** The interface queue index (Not the virtio vring idx) */
-  u16 device_index; /** The device index */
-  u32 virtio_ring_flags; /** Runtime queue flags  **/
-  u16 first_desc_len; /** Length of the first data descriptor **/
-  virtio_net_hdr_mrg_rxbuf_t hdr; /** Virtio header **/
-} vhost_trace_t;
-
 static u8 *
 format_vhost_trace (u8 * s, va_list * va)
 {
@@ -1272,8 +1266,8 @@ format_vhost_trace (u8 * s, va_list * va)
   CLIB_UNUSED (vnet_main_t * vnm) = vnet_get_main ();
   vhost_user_main_t *vum = &vhost_user_main;
   vhost_trace_t *t = va_arg (*va, vhost_trace_t *);
-  vhost_user_intf_t *vui = vec_elt_at_index (vum->vhost_user_interfaces,
-					     t->device_index);
+  vhost_user_intf_t *vui = pool_elt_at_index (vum->vhost_user_interfaces,
+					      t->device_index);
 
   vnet_sw_interface_t *sw = vnet_get_sw_interface (vnm, vui->sw_if_index);
 
@@ -1323,7 +1317,7 @@ vhost_user_rx_trace (vhost_trace_t * t,
   if (txvq->desc[desc_current].flags & VIRTQ_DESC_F_INDIRECT)
     {
       t->virtio_ring_flags |= 1 << VIRTIO_TRACE_F_INDIRECT;
-      //Header is the first here
+      /* Header is the first here */
       hdr_desc = map_guest_mem (vui, txvq->desc[desc_current].addr, &hint);
     }
   if (txvq->desc[desc_current].flags & VIRTQ_DESC_F_NEXT)
@@ -1354,13 +1348,118 @@ vhost_user_send_call (vlib_main_t * vm, vhost_user_vring_t * vq)
 {
   vhost_user_main_t *vum = &vhost_user_main;
   u64 x = 1;
+  int fd = UNIX_GET_FD (vq->callfd_idx);
   int rv __attribute__ ((unused));
-  /* $$$$ pay attention to rv */
-  rv = write (vq->callfd, &x, sizeof (x));
+  /* TODO: pay attention to rv */
+  rv = write (fd, &x, sizeof (x));
   vq->n_since_last_int = 0;
   vq->int_deadline = vlib_time_now (vm) + vum->coalesce_time;
 }
 
+static_always_inline u32
+vhost_user_input_copy (vhost_user_intf_t * vui, vhost_copy_t * cpy,
+		       u16 copy_len, u32 * map_hint)
+{
+  void *src0, *src1, *src2, *src3;
+  if (PREDICT_TRUE (copy_len >= 4))
+    {
+      if (PREDICT_FALSE (!(src2 = map_guest_mem (vui, cpy[0].src, map_hint))))
+	return 1;
+      if (PREDICT_FALSE (!(src3 = map_guest_mem (vui, cpy[1].src, map_hint))))
+	return 1;
+
+      while (PREDICT_TRUE (copy_len >= 4))
+	{
+	  src0 = src2;
+	  src1 = src3;
+
+	  if (PREDICT_FALSE
+	      (!(src2 = map_guest_mem (vui, cpy[2].src, map_hint))))
+	    return 1;
+	  if (PREDICT_FALSE
+	      (!(src3 = map_guest_mem (vui, cpy[3].src, map_hint))))
+	    return 1;
+
+	  CLIB_PREFETCH (src2, 64, LOAD);
+	  CLIB_PREFETCH (src3, 64, LOAD);
+
+	  clib_memcpy ((void *) cpy[0].dst, src0, cpy[0].len);
+	  clib_memcpy ((void *) cpy[1].dst, src1, cpy[1].len);
+	  copy_len -= 2;
+	  cpy += 2;
+	}
+    }
+  while (copy_len)
+    {
+      if (PREDICT_FALSE (!(src0 = map_guest_mem (vui, cpy->src, map_hint))))
+	return 1;
+      clib_memcpy ((void *) cpy->dst, src0, cpy->len);
+      copy_len -= 1;
+      cpy += 1;
+    }
+  return 0;
+}
+
+/**
+ * Try to discard packets from the tx ring (VPP RX path).
+ * Returns the number of discarded packets.
+ */
+u32
+vhost_user_rx_discard_packet (vlib_main_t * vm,
+			      vhost_user_intf_t * vui,
+			      vhost_user_vring_t * txvq, u32 discard_max)
+{
+  /*
+   * On the RX side, each packet corresponds to one descriptor
+   * (it is the same whether it is a shallow descriptor, chained, or indirect).
+   * Therefore, discarding a packet is like discarding a descriptor.
+   */
+  u32 discarded_packets = 0;
+  u32 avail_idx = txvq->avail->idx;
+  u16 qsz_mask = txvq->qsz - 1;
+  while (discarded_packets != discard_max)
+    {
+      if (avail_idx == txvq->last_avail_idx)
+	goto out;
+
+      u16 desc_chain_head =
+	txvq->avail->ring[txvq->last_avail_idx & qsz_mask];
+      txvq->last_avail_idx++;
+      txvq->used->ring[txvq->last_used_idx & qsz_mask].id = desc_chain_head;
+      txvq->used->ring[txvq->last_used_idx & qsz_mask].len = 0;
+      vhost_user_log_dirty_ring (vui, txvq,
+				 ring[txvq->last_used_idx & qsz_mask]);
+      txvq->last_used_idx++;
+      discarded_packets++;
+    }
+
+out:
+  CLIB_MEMORY_BARRIER ();
+  txvq->used->idx = txvq->last_used_idx;
+  vhost_user_log_dirty_ring (vui, txvq, idx);
+  return discarded_packets;
+}
+
+/*
+ * In case of overflow, we need to rewind the array of allocated buffers.
+ */
+static void
+vhost_user_input_rewind_buffers (vlib_main_t * vm,
+				 vhost_cpu_t * cpu, vlib_buffer_t * b_head)
+{
+  u32 bi_current = cpu->rx_buffers[cpu->rx_buffers_len];
+  vlib_buffer_t *b_current = vlib_get_buffer (vm, bi_current);
+  b_current->current_length = 0;
+  b_current->flags = 0;
+  while (b_current != b_head)
+    {
+      cpu->rx_buffers_len++;
+      bi_current = cpu->rx_buffers[cpu->rx_buffers_len];
+      b_current = vlib_get_buffer (vm, bi_current);
+      b_current->current_length = 0;
+      b_current->flags = 0;
+    }
+}
 
 static u32
 vhost_user_if_input (vlib_main_t * vm,
@@ -1369,26 +1468,28 @@ vhost_user_if_input (vlib_main_t * vm,
 		     u16 qid, vlib_node_runtime_t * node)
 {
   vhost_user_vring_t *txvq = &vui->vrings[VHOST_VRING_IDX_TX (qid)];
-  vhost_user_vring_t *rxvq = &vui->vrings[VHOST_VRING_IDX_RX (qid)];
-  uword n_rx_packets = 0, n_rx_bytes = 0;
-  uword n_left;
+  u16 n_rx_packets = 0;
+  u32 n_rx_bytes = 0;
+  u16 n_left;
   u32 n_left_to_next, *to_next;
-  u32 next_index = 0;
-  u32 next0;
-  uword n_trace = vlib_get_trace_count (vm, node);
+  u32 next_index = VNET_DEVICE_INPUT_NEXT_ETHERNET_INPUT;
+  u32 n_trace = vlib_get_trace_count (vm, node);
   u16 qsz_mask;
-  u32 cpu_index, rx_len, drops, flush;
-  f64 now = vlib_time_now (vm);
-  u32 map_guest_hint_desc = 0;
-  u32 map_guest_hint_indirect = 0;
-  u32 *map_guest_hint_p = &map_guest_hint_desc;
+  u32 map_hint = 0;
+  u16 cpu_index = os_get_cpu_number ();
+  u16 copy_len = 0;
 
-  /* do we have pending interrupts ? */
-  if ((txvq->n_since_last_int) && (txvq->int_deadline < now))
-    vhost_user_send_call (vm, txvq);
+  {
+    /* do we have pending interrupts ? */
+    vhost_user_vring_t *rxvq = &vui->vrings[VHOST_VRING_IDX_RX (qid)];
+    f64 now = vlib_time_now (vm);
 
-  if ((rxvq->n_since_last_int) && (rxvq->int_deadline < now))
-    vhost_user_send_call (vm, rxvq);
+    if ((txvq->n_since_last_int) && (txvq->int_deadline < now))
+      vhost_user_send_call (vm, txvq);
+
+    if ((rxvq->n_since_last_int) && (rxvq->int_deadline < now))
+      vhost_user_send_call (vm, rxvq);
+  }
 
   if (PREDICT_FALSE (txvq->avail->flags & 0xFFFE))
     return 0;
@@ -1408,82 +1509,65 @@ vhost_user_if_input (vlib_main_t * vm,
        * client must not supply any new RX packets, but must process
        * and discard any TX packets."
        */
-
-      txvq->last_avail_idx = txvq->last_used_idx = txvq->avail->idx;
-      CLIB_MEMORY_BARRIER ();
-      txvq->used->idx = txvq->last_used_idx;
-      vhost_user_log_dirty_ring (vui, txvq, idx);
-      vhost_user_send_call (vm, txvq);
+      vhost_user_rx_discard_packet (vm, vui, txvq,
+				    VHOST_USER_DOWN_DISCARD_COUNT);
       return 0;
     }
 
   if (PREDICT_FALSE (n_left == txvq->qsz))
     {
-      //Informational error logging when VPP is not receiving packets fast enough
+      /*
+       * Informational error logging when VPP is not
+       * receiving packets fast enough.
+       */
       vlib_error_count (vm, node->node_index,
 			VHOST_USER_INPUT_FUNC_ERROR_FULL_RX_QUEUE, 1);
     }
 
   qsz_mask = txvq->qsz - 1;
-  cpu_index = os_get_cpu_number ();
-  drops = 0;
-  flush = 0;
 
   if (n_left > VLIB_FRAME_SIZE)
     n_left = VLIB_FRAME_SIZE;
 
-  /* Allocate some buffers.
-   * Note that buffers that are chained for jumbo
-   * frames are allocated separately using a slower path.
-   * The idea is to be certain to have enough buffers at least
-   * to cycle through the descriptors without having to check for errors.
-   * For jumbo frames, the bottleneck is memory copy anyway.
+  /*
+   * For small packets (<2kB), we will not need more than one vlib buffer
+   * per packet. In case packets are bigger, we will just yeld at some point
+   * in the loop and come back later. This is not an issue as for big packet,
+   * processing cost really comes from the memory copy.
    */
-  if (PREDICT_FALSE (!vum->rx_buffers[cpu_index]))
+  if (PREDICT_FALSE (vum->cpus[cpu_index].rx_buffers_len < n_left + 1))
     {
-      vec_alloc (vum->rx_buffers[cpu_index], 2 * VLIB_FRAME_SIZE);
-
-      if (PREDICT_FALSE (!vum->rx_buffers[cpu_index]))
-	flush = n_left;		//Drop all input
-    }
-
-  if (PREDICT_FALSE (_vec_len (vum->rx_buffers[cpu_index]) < n_left))
-    {
-      u32 curr_len = _vec_len (vum->rx_buffers[cpu_index]);
-      _vec_len (vum->rx_buffers[cpu_index]) +=
+      u32 curr_len = vum->cpus[cpu_index].rx_buffers_len;
+      vum->cpus[cpu_index].rx_buffers_len +=
 	vlib_buffer_alloc_from_free_list (vm,
-					  vum->rx_buffers[cpu_index] +
+					  vum->cpus[cpu_index].rx_buffers +
 					  curr_len,
-					  2 * VLIB_FRAME_SIZE - curr_len,
+					  VHOST_USER_RX_BUFFERS_N - curr_len,
 					  VLIB_BUFFER_DEFAULT_FREE_LIST_INDEX);
 
-      if (PREDICT_FALSE (n_left > _vec_len (vum->rx_buffers[cpu_index])))
-	flush = n_left - _vec_len (vum->rx_buffers[cpu_index]);
-    }
-
-  if (PREDICT_FALSE (flush))
-    {
-      //Remove some input buffers
-      drops += flush;
-      n_left -= flush;
-      vlib_error_count (vm, vhost_user_input_node.index,
-			VHOST_USER_INPUT_FUNC_ERROR_NO_BUFFER, flush);
-      while (flush)
+      if (PREDICT_FALSE
+	  (vum->cpus[cpu_index].rx_buffers_len <
+	   VHOST_USER_RX_BUFFER_STARVATION))
 	{
-	  u16 desc_chain_head =
-	    txvq->avail->ring[txvq->last_avail_idx & qsz_mask];
-	  txvq->last_avail_idx++;
-	  txvq->used->ring[txvq->last_used_idx & qsz_mask].id =
-	    desc_chain_head;
-	  txvq->used->ring[txvq->last_used_idx & qsz_mask].len = 0;
-	  vhost_user_log_dirty_ring (vui, txvq,
-				     ring[txvq->last_used_idx & qsz_mask]);
-	  txvq->last_used_idx++;
-	  flush--;
+	  /* In case of buffer starvation, discard some packets from the queue
+	   * and log the event.
+	   * We keep doing best effort for the remaining packets. */
+	  u32 flush = (n_left + 1 > vum->cpus[cpu_index].rx_buffers_len) ?
+	    n_left + 1 - vum->cpus[cpu_index].rx_buffers_len : 1;
+	  flush = vhost_user_rx_discard_packet (vm, vui, txvq, flush);
+
+	  n_left -= flush;
+	  vlib_increment_simple_counter (vnet_main.
+					 interface_main.sw_if_counters +
+					 VNET_INTERFACE_COUNTER_DROP,
+					 os_get_cpu_number (),
+					 vui->sw_if_index, flush);
+
+	  vlib_error_count (vm, vhost_user_input_node.index,
+			    VHOST_USER_INPUT_FUNC_ERROR_NO_BUFFER, flush);
 	}
     }
 
-  rx_len = vec_len (vum->rx_buffers[cpu_index]);	//vector might be null
   while (n_left > 0)
     {
       vlib_get_next_frame (vm, node, next_index, to_next, n_left_to_next);
@@ -1491,32 +1575,48 @@ vhost_user_if_input (vlib_main_t * vm,
       while (n_left > 0 && n_left_to_next > 0)
 	{
 	  vlib_buffer_t *b_head, *b_current;
-	  u32 bi_head, bi_current;
-	  u16 desc_chain_head, desc_current;
-	  u8 error = VHOST_USER_INPUT_FUNC_ERROR_NO_ERROR;
+	  u32 bi_current;
+	  u16 desc_current;
+	  u32 desc_data_offset;
+	  vring_desc_t *desc_table = txvq->desc;
 
-	  if (PREDICT_TRUE (n_left > 1))
+	  if (PREDICT_FALSE (vum->cpus[cpu_index].rx_buffers_len <= 1))
 	    {
-	      u32 next_desc =
-		txvq->avail->ring[(txvq->last_avail_idx + 1) & qsz_mask];
-	      void *buffer_addr =
-		map_guest_mem (vui, txvq->desc[next_desc].addr,
-			       &map_guest_hint_desc);
-	      if (PREDICT_TRUE (buffer_addr != 0))
-		CLIB_PREFETCH (buffer_addr, 64, STORE);
-
-	      u32 bi = vum->rx_buffers[cpu_index][rx_len - 2];
-	      vlib_prefetch_buffer_with_index (vm, bi, STORE);
-	      CLIB_PREFETCH (vlib_get_buffer (vm, bi)->data, 128, STORE);
+	      /* Not enough rx_buffers
+	       * Note: We yeld on 1 so we don't need to do an additional
+	       * check for the next buffer prefetch.
+	       */
+	      n_left = 0;
+	      break;
 	    }
 
-	  desc_chain_head = desc_current =
-	    txvq->avail->ring[txvq->last_avail_idx & qsz_mask];
-	  bi_head = bi_current = vum->rx_buffers[cpu_index][--rx_len];
-	  b_head = b_current = vlib_get_buffer (vm, bi_head);
-	  vlib_buffer_chain_init (b_head);
+	  desc_current = txvq->avail->ring[txvq->last_avail_idx & qsz_mask];
+	  vum->cpus[cpu_index].rx_buffers_len--;
+	  bi_current = (vum->cpus[cpu_index].rx_buffers)
+	    [vum->cpus[cpu_index].rx_buffers_len];
+	  b_head = b_current = vlib_get_buffer (vm, bi_current);
+	  to_next[0] = bi_current;	//We do that now so we can forget about bi_current
+	  to_next++;
+	  n_left_to_next--;
+
+	  vlib_prefetch_buffer_with_index (vm,
+					   (vum->cpus[cpu_index].rx_buffers)
+					   [vum->cpus[cpu_index].
+					    rx_buffers_len - 1], LOAD);
+
+	  /* Just preset the used descriptor id and length for later */
+	  txvq->used->ring[txvq->last_used_idx & qsz_mask].id = desc_current;
+	  txvq->used->ring[txvq->last_used_idx & qsz_mask].len = 0;
+	  vhost_user_log_dirty_ring (vui, txvq,
+				     ring[txvq->last_used_idx & qsz_mask]);
+
+	  /* The buffer should already be initialized */
+	  b_head->total_length_not_including_first_buffer = 0;
+	  b_head->flags |= VLIB_BUFFER_TOTAL_LENGTH_VALID;
+
 	  if (PREDICT_FALSE (n_trace))
 	    {
+	      //TODO: next_index is not exactly known at that point
 	      vlib_trace_buffer (vm, node, next_index, b_head,
 				 /* follow_chain */ 0);
 	      vhost_trace_t *t0 =
@@ -1526,148 +1626,173 @@ vhost_user_if_input (vlib_main_t * vm,
 	      vlib_set_trace_count (vm, node, n_trace);
 	    }
 
-	  uword offset;
+	  /* This depends on the setup but is very consistent
+	   * So I think the CPU branch predictor will make a pretty good job
+	   * at optimizing the decision. */
+	  if (txvq->desc[desc_current].flags & VIRTQ_DESC_F_INDIRECT)
+	    {
+	      desc_table = map_guest_mem (vui, txvq->desc[desc_current].addr,
+					  &map_hint);
+	      desc_current = 0;
+	      if (PREDICT_FALSE (desc_table == 0))
+		{
+		  //FIXME: Handle error by shutdown the queue
+		  goto out;
+		}
+	    }
+
 	  if (PREDICT_TRUE (vui->is_any_layout) ||
-	      (!(txvq->desc[desc_current].flags & VIRTQ_DESC_F_NEXT) &&
-	       !(txvq->desc[desc_current].flags & VIRTQ_DESC_F_INDIRECT)))
+	      (!(desc_table[desc_current].flags & VIRTQ_DESC_F_NEXT)))
 	    {
 	      /* ANYLAYOUT or single buffer */
-	      offset = vui->virtio_net_hdr_sz;
+	      desc_data_offset = vui->virtio_net_hdr_sz;
 	    }
 	  else
 	    {
 	      /* CSR case without ANYLAYOUT, skip 1st buffer */
-	      offset = txvq->desc[desc_current].len;
-	    }
-
-	  vring_desc_t *desc_table = txvq->desc;
-	  u32 desc_index = desc_current;
-	  map_guest_hint_p = &map_guest_hint_desc;
-
-	  if (txvq->desc[desc_current].flags & VIRTQ_DESC_F_INDIRECT)
-	    {
-	      desc_table = map_guest_mem (vui, txvq->desc[desc_current].addr,
-					  &map_guest_hint_desc);
-	      desc_index = 0;
-	      map_guest_hint_p = &map_guest_hint_indirect;
-	      if (PREDICT_FALSE (desc_table == 0))
-		{
-		  error = VHOST_USER_INPUT_FUNC_ERROR_MMAP_FAIL;
-		  goto out;
-		}
+	      desc_data_offset = desc_table[desc_current].len;
 	    }
 
 	  while (1)
 	    {
-	      void *buffer_addr =
-		map_guest_mem (vui, desc_table[desc_index].addr,
-			       map_guest_hint_p);
-	      if (PREDICT_FALSE (buffer_addr == 0))
+	      /* Get more input if necessary. Or end of packet. */
+	      if (desc_data_offset == desc_table[desc_current].len)
 		{
-		  error = VHOST_USER_INPUT_FUNC_ERROR_MMAP_FAIL;
-		  goto out;
-		}
-
-	      if (PREDICT_TRUE
-		  (desc_table[desc_index].flags & VIRTQ_DESC_F_NEXT))
-		{
-		  CLIB_PREFETCH (&desc_table[desc_table[desc_index].next],
-				 sizeof (vring_desc_t), STORE);
-		}
-
-	      if (desc_table[desc_index].len > offset)
-		{
-		  u16 len = desc_table[desc_index].len - offset;
-		  u16 copied = vlib_buffer_chain_append_data_with_alloc (vm,
-									 VLIB_BUFFER_DEFAULT_FREE_LIST_INDEX,
-									 b_head,
-									 &b_current,
-									 buffer_addr
-									 +
-									 offset,
-									 len);
-		  if (copied != len)
+		  if (PREDICT_FALSE (desc_table[desc_current].flags &
+				     VIRTQ_DESC_F_NEXT))
 		    {
-		      error = VHOST_USER_INPUT_FUNC_ERROR_NO_BUFFER;
-		      break;
+		      desc_current = desc_table[desc_current].next;
+		      desc_data_offset = 0;
+		    }
+		  else
+		    {
+		      goto out;
 		    }
 		}
-	      offset = 0;
 
-	      /* if next flag is set, take next desc in the chain */
-	      if ((desc_table[desc_index].flags & VIRTQ_DESC_F_NEXT))
-		desc_index = desc_table[desc_index].next;
-	      else
-		goto out;
+	      /* Get more output if necessary. Or end of packet. */
+	      if (PREDICT_FALSE
+		  (b_current->current_length == VLIB_BUFFER_DATA_SIZE))
+		{
+		  if (PREDICT_FALSE
+		      (vum->cpus[cpu_index].rx_buffers_len == 0))
+		    {
+		      /*
+		       * Checking if there are some left buffers.
+		       * If not, just rewind the used buffers and stop.
+		       * Note: Scheduled copies are not cancelled. This is
+		       * not an issue as they would still be valid. Useless,
+		       * but valid.
+		       */
+		      vhost_user_input_rewind_buffers (vm,
+						       &vum->cpus[cpu_index],
+						       b_head);
+		      n_left = 0;
+		      goto stop;
+		    }
+
+		  /* Get next output */
+		  vum->cpus[cpu_index].rx_buffers_len--;
+		  u32 bi_next =
+		    (vum->cpus[cpu_index].rx_buffers)[vum->cpus
+						      [cpu_index].rx_buffers_len];
+		  b_current->next_buffer = bi_next;
+		  b_current->flags |= VLIB_BUFFER_NEXT_PRESENT;
+		  bi_current = bi_next;
+		  b_current = vlib_get_buffer (vm, bi_current);
+		}
+
+	      /* Prepare a copy order executed later for the data */
+	      vhost_copy_t *cpy = &vum->cpus[cpu_index].copy[copy_len];
+	      copy_len++;
+	      u32 desc_data_l =
+		desc_table[desc_current].len - desc_data_offset;
+	      cpy->len = VLIB_BUFFER_DATA_SIZE - b_current->current_length;
+	      cpy->len = (cpy->len > desc_data_l) ? desc_data_l : cpy->len;
+	      cpy->dst = (uword) vlib_buffer_get_current (b_current);
+	      cpy->src = desc_table[desc_current].addr + desc_data_offset;
+
+	      desc_data_offset += cpy->len;
+
+	      b_current->current_length += cpy->len;
+	      b_head->total_length_not_including_first_buffer += cpy->len;
 	    }
+
 	out:
+	  CLIB_PREFETCH (&n_left, sizeof (n_left), LOAD);
+
+	  n_rx_bytes += b_head->total_length_not_including_first_buffer;
+	  n_rx_packets++;
+
+	  b_head->total_length_not_including_first_buffer -=
+	    b_head->current_length;
 
 	  /* consume the descriptor and return it as used */
 	  txvq->last_avail_idx++;
-	  txvq->used->ring[txvq->last_used_idx & qsz_mask].id =
-	    desc_chain_head;
-	  txvq->used->ring[txvq->last_used_idx & qsz_mask].len = 0;
-	  vhost_user_log_dirty_ring (vui, txvq,
-				     ring[txvq->last_used_idx & qsz_mask]);
 	  txvq->last_used_idx++;
-
-	  //It is important to free RX as fast as possible such that the TX
-	  //process does not drop packets
-	  if ((txvq->last_used_idx & 0x3f) == 0)	// Every 64 packets
-	    txvq->used->idx = txvq->last_used_idx;
-
-	  if (PREDICT_FALSE (b_head->current_length < 14 &&
-			     error == VHOST_USER_INPUT_FUNC_ERROR_NO_ERROR))
-	    error = VHOST_USER_INPUT_FUNC_ERROR_UNDERSIZED_FRAME;
 
 	  VLIB_BUFFER_TRACE_TRAJECTORY_INIT (b_head);
 
 	  vnet_buffer (b_head)->sw_if_index[VLIB_RX] = vui->sw_if_index;
 	  vnet_buffer (b_head)->sw_if_index[VLIB_TX] = (u32) ~ 0;
-	  b_head->error = node->errors[error];
+	  b_head->error = 0;
 
-	  if (PREDICT_FALSE (error))
-	    {
-	      drops++;
-	      next0 = VNET_DEVICE_INPUT_NEXT_DROP;
-	    }
-	  else
-	    {
-	      n_rx_bytes +=
-		b_head->current_length +
-		b_head->total_length_not_including_first_buffer;
-	      n_rx_packets++;
-	      next0 = VNET_DEVICE_INPUT_NEXT_ETHERNET_INPUT;
-	    }
+	  {
+	    u32 next0 = VNET_DEVICE_INPUT_NEXT_ETHERNET_INPUT;
 
-	  to_next[0] = bi_head;
-	  to_next++;
-	  n_left_to_next--;
+	    /* redirect if feature path enabled */
+	    vnet_feature_start_device_input_x1 (vui->sw_if_index, &next0,
+						b_head, 0);
 
-	  /* redirect if feature path enabled */
-	  vnet_feature_start_device_input_x1 (vui->sw_if_index, &next0,
-					      b_head, 0);
+	    u32 bi = to_next[-1];	//Cannot use to_next[-1] in the macro
+	    vlib_validate_buffer_enqueue_x1 (vm, node, next_index,
+					     to_next, n_left_to_next,
+					     bi, next0);
+	  }
 
-	  vlib_validate_buffer_enqueue_x1 (vm, node, next_index,
-					   to_next, n_left_to_next,
-					   bi_head, next0);
 	  n_left--;
-	  if (PREDICT_FALSE (!n_left))
+
+	  /*
+	   * Although separating memory copies from virtio ring parsing
+	   * is beneficial, we can offer to perform the copies from time
+	   * to time in order to free some space in the ring.
+	   */
+	  if (PREDICT_FALSE (copy_len >= VHOST_USER_RX_COPY_THRESHOLD))
 	    {
-	      // I NEED SOME MORE !
-	      u32 remain = (u16) (txvq->avail->idx - txvq->last_avail_idx);
-	      remain = (remain > VLIB_FRAME_SIZE - n_rx_packets) ?
-		VLIB_FRAME_SIZE - n_rx_packets : remain;
-	      remain = (remain > rx_len) ? rx_len : remain;
-	      n_left = remain;
+	      if (PREDICT_FALSE
+		  (vhost_user_input_copy (vui, vum->cpus[cpu_index].copy,
+					  copy_len, &map_hint)))
+		{
+		  clib_warning
+		    ("Memory mapping error on interface hw_if_index=%d "
+		     "(Shutting down - Switch interface down and up to restart)",
+		     vui->hw_if_index);
+		  vui->admin_up = 0;
+		  copy_len = 0;
+		  break;
+		}
+	      copy_len = 0;
+
+	      /* give buffers back to driver */
+	      CLIB_MEMORY_BARRIER ();
+	      txvq->used->idx = txvq->last_used_idx;
+	      vhost_user_log_dirty_ring (vui, txvq, idx);
 	    }
 	}
-
+    stop:
       vlib_put_next_frame (vm, node, next_index, n_left_to_next);
     }
 
-  if (PREDICT_TRUE (vum->rx_buffers[cpu_index] != 0))
-    _vec_len (vum->rx_buffers[cpu_index]) = rx_len;
+  /* Do the memory copies */
+  if (PREDICT_FALSE
+      (vhost_user_input_copy (vui, vum->cpus[cpu_index].copy,
+			      copy_len, &map_hint)))
+    {
+      clib_warning ("Memory mapping error on interface hw_if_index=%d "
+		    "(Shutting down - Switch interface down and up to restart)",
+		    vui->hw_if_index);
+      vui->admin_up = 0;
+    }
 
   /* give buffers back to driver */
   CLIB_MEMORY_BARRIER ();
@@ -1675,20 +1800,12 @@ vhost_user_if_input (vlib_main_t * vm,
   vhost_user_log_dirty_ring (vui, txvq, idx);
 
   /* interrupt (call) handling */
-  if ((txvq->callfd > -1) && !(txvq->avail->flags & 1))
+  if ((txvq->callfd_idx != ~0) && !(txvq->avail->flags & 1))
     {
       txvq->n_since_last_int += n_rx_packets;
 
       if (txvq->n_since_last_int > vum->coalesce_frames)
 	vhost_user_send_call (vm, txvq);
-    }
-
-  if (PREDICT_FALSE (drops))
-    {
-      vlib_increment_simple_counter
-	(vnet_main.interface_main.sw_if_counters
-	 + VNET_INTERFACE_COUNTER_DROP, os_get_cpu_number (),
-	 vui->sw_if_index, drops);
     }
 
   /* increase rx counters */
@@ -1717,8 +1834,6 @@ vhost_user_input (vlib_main_t * vm,
     n_rx_packets += vhost_user_if_input (vm, vum, vui, vhiq->qid, node);
   }
 
-  //TODO: One call might return more than 256 packets here.
-  //But this is supposed to be the vector size.
   return n_rx_packets;
 }
 
@@ -1763,7 +1878,7 @@ vhost_user_tx_trace (vhost_trace_t * t,
   if (rxvq->desc[desc_current].flags & VIRTQ_DESC_F_INDIRECT)
     {
       t->virtio_ring_flags |= 1 << VIRTIO_TRACE_F_INDIRECT;
-      //Header is the first here
+      /* Header is the first here */
       hdr_desc = map_guest_mem (vui, rxvq->desc[desc_current].addr, &hint);
     }
   if (rxvq->desc[desc_current].flags & VIRTQ_DESC_F_NEXT)
@@ -1779,290 +1894,348 @@ vhost_user_tx_trace (vhost_trace_t * t,
   t->first_desc_len = hdr_desc ? hdr_desc->len : 0;
 }
 
+static_always_inline u32
+vhost_user_tx_copy (vhost_user_intf_t * vui, vhost_copy_t * cpy,
+		    u16 copy_len, u32 * map_hint)
+{
+  void *dst0, *dst1, *dst2, *dst3;
+  if (PREDICT_TRUE (copy_len >= 4))
+    {
+      if (PREDICT_FALSE (!(dst2 = map_guest_mem (vui, cpy[0].dst, map_hint))))
+	return 1;
+      if (PREDICT_FALSE (!(dst3 = map_guest_mem (vui, cpy[1].dst, map_hint))))
+	return 1;
+      while (PREDICT_TRUE (copy_len >= 4))
+	{
+	  dst0 = dst2;
+	  dst1 = dst3;
+
+	  if (PREDICT_FALSE
+	      (!(dst2 = map_guest_mem (vui, cpy[2].dst, map_hint))))
+	    return 1;
+	  if (PREDICT_FALSE
+	      (!(dst3 = map_guest_mem (vui, cpy[3].dst, map_hint))))
+	    return 1;
+
+	  CLIB_PREFETCH ((void *) cpy[2].src, 64, LOAD);
+	  CLIB_PREFETCH ((void *) cpy[3].src, 64, LOAD);
+
+	  clib_memcpy (dst0, (void *) cpy[0].src, cpy[0].len);
+	  clib_memcpy (dst1, (void *) cpy[1].src, cpy[1].len);
+
+	  vhost_user_log_dirty_pages_2 (vui, cpy[0].dst, cpy[0].len, 1);
+	  vhost_user_log_dirty_pages_2 (vui, cpy[1].dst, cpy[1].len, 1);
+	  copy_len -= 2;
+	  cpy += 2;
+	}
+    }
+  while (copy_len)
+    {
+      if (PREDICT_FALSE (!(dst0 = map_guest_mem (vui, cpy->dst, map_hint))))
+	return 1;
+      clib_memcpy (dst0, (void *) cpy->src, cpy->len);
+      vhost_user_log_dirty_pages_2 (vui, cpy->dst, cpy->len, 1);
+      copy_len -= 1;
+      cpy += 1;
+    }
+  return 0;
+}
+
+
 static uword
-vhost_user_intfc_tx (vlib_main_t * vm,
-		     vlib_node_runtime_t * node, vlib_frame_t * frame)
+vhost_user_tx (vlib_main_t * vm,
+	       vlib_node_runtime_t * node, vlib_frame_t * frame)
 {
   u32 *buffers = vlib_frame_args (frame);
-  u32 n_left = 0;
+  u32 n_left = frame->n_vectors;
   vhost_user_main_t *vum = &vhost_user_main;
-  uword n_packets = 0;
   vnet_interface_output_runtime_t *rd = (void *) node->runtime_data;
   vhost_user_intf_t *vui =
-    vec_elt_at_index (vum->vhost_user_interfaces, rd->dev_instance);
+    pool_elt_at_index (vum->vhost_user_interfaces, rd->dev_instance);
   u32 qid = ~0;
   vhost_user_vring_t *rxvq;
   u16 qsz_mask;
-  u8 error = VHOST_USER_TX_FUNC_ERROR_NONE;
+  u8 error;
   u32 cpu_index = os_get_cpu_number ();
-  n_left = n_packets = frame->n_vectors;
-  u32 map_guest_hint_desc = 0;
-  u32 map_guest_hint_indirect = 0;
-  u32 *map_guest_hint_p = &map_guest_hint_desc;
-  vhost_trace_t *current_trace = 0;
-  int n_retry;
+  u32 map_hint = 0;
+  u8 retry = 8;
+  u16 copy_len;
+  u16 tx_headers_len;
 
-  if (PREDICT_FALSE (!vui->is_up || !vui->admin_up))
+  if (PREDICT_FALSE (!vui->admin_up))
+    {
+      error = VHOST_USER_TX_FUNC_ERROR_DOWN;
+      goto done3;
+    }
+
+  if (PREDICT_FALSE (!vui->is_up))
     {
       error = VHOST_USER_TX_FUNC_ERROR_NOT_READY;
       goto done3;
     }
 
   qid =
-    VHOST_VRING_IDX_RX (*vec_elt_at_index (vui->per_cpu_tx_qid, cpu_index));
+    VHOST_VRING_IDX_RX (*vec_elt_at_index
+			(vui->per_cpu_tx_qid, os_get_cpu_number ()));
   rxvq = &vui->vrings[qid];
   if (PREDICT_FALSE (vui->use_tx_spinlock))
     vhost_user_vring_lock (vui, qid);
 
-  if (PREDICT_FALSE ((rxvq->avail->idx == rxvq->last_avail_idx)))
-    {
-      error = VHOST_USER_TX_FUNC_ERROR_PKT_DROP_NOBUF;
-      goto done2;
-    }
-
   qsz_mask = rxvq->qsz - 1;	/* qsz is always power of 2 */
-  n_retry = 8;
 
-  while (n_left > 0 && n_retry--)
+retry:
+  error = VHOST_USER_TX_FUNC_ERROR_NONE;
+  tx_headers_len = 0;
+  copy_len = 0;
+  while (n_left > 0)
     {
+      vlib_buffer_t *b0, *current_b0;
+      u16 desc_head, desc_index, desc_len;
+      vring_desc_t *desc_table;
+      uword buffer_map_addr;
+      u32 buffer_len;
+      u16 bytes_left;
 
-      while (n_left > 0)
+      if (PREDICT_TRUE (n_left > 1))
+	vlib_prefetch_buffer_with_index (vm, buffers[1], LOAD);
+
+      b0 = vlib_get_buffer (vm, buffers[0]);
+
+      if (PREDICT_FALSE (b0->flags & VLIB_BUFFER_IS_TRACED))
 	{
-	  vlib_buffer_t *b0, *current_b0;
-	  u16 desc_head, desc_index, desc_len;
-	  vring_desc_t *desc_table;
-	  void *buffer_addr;
-	  u32 buffer_len;
+	  vum->cpus[cpu_index].current_trace =
+	    vlib_add_trace (vm, node, b0,
+			    sizeof (*vum->cpus[cpu_index].current_trace));
+	  vhost_user_tx_trace (vum->cpus[cpu_index].current_trace,
+			       vui, qid / 2, b0, rxvq);
+	}
 
-	  b0 = vlib_get_buffer (vm, buffers[0]);
+      if (PREDICT_FALSE (rxvq->last_avail_idx == rxvq->avail->idx))
+	{
+	  error = VHOST_USER_TX_FUNC_ERROR_PKT_DROP_NOBUF;
+	  goto done;
+	}
 
-	  if (PREDICT_FALSE (b0->flags & VLIB_BUFFER_IS_TRACED))
+      desc_table = rxvq->desc;
+      desc_head = desc_index =
+	rxvq->avail->ring[rxvq->last_avail_idx & qsz_mask];
+
+      /* Go deeper in case of indirect descriptor
+       * I don't know of any driver providing indirect for RX. */
+      if (PREDICT_FALSE (rxvq->desc[desc_head].flags & VIRTQ_DESC_F_INDIRECT))
+	{
+	  if (PREDICT_FALSE
+	      (rxvq->desc[desc_head].len < sizeof (vring_desc_t)))
 	    {
-	      current_trace = vlib_add_trace (vm, node, b0,
-					      sizeof (*current_trace));
-	      vhost_user_tx_trace (current_trace, vui, qid / 2, b0, rxvq);
-	    }
-
-	  if (PREDICT_FALSE (rxvq->last_avail_idx == rxvq->avail->idx))
-	    {
-	      error = VHOST_USER_TX_FUNC_ERROR_PKT_DROP_NOBUF;
+	      error = VHOST_USER_TX_FUNC_ERROR_INDIRECT_OVERFLOW;
 	      goto done;
 	    }
-
-	  desc_table = rxvq->desc;
-	  map_guest_hint_p = &map_guest_hint_desc;
-	  desc_head = desc_index =
-	    rxvq->avail->ring[rxvq->last_avail_idx & qsz_mask];
-	  if (rxvq->desc[desc_head].flags & VIRTQ_DESC_F_INDIRECT)
-	    {
-	      if (PREDICT_FALSE
-		  (rxvq->desc[desc_head].len < sizeof (vring_desc_t)))
-		{
-		  error = VHOST_USER_TX_FUNC_ERROR_INDIRECT_OVERFLOW;
-		  goto done;
-		}
-	      if (PREDICT_FALSE
-		  (!(desc_table =
-		     map_guest_mem (vui, rxvq->desc[desc_index].addr,
-				    &map_guest_hint_desc))))
-		{
-		  error = VHOST_USER_TX_FUNC_ERROR_MMAP_FAIL;
-		  goto done;
-		}
-	      desc_index = 0;
-	      map_guest_hint_p = &map_guest_hint_indirect;
-	    }
-
-	  desc_len = vui->virtio_net_hdr_sz;
-
 	  if (PREDICT_FALSE
-	      (!(buffer_addr =
-		 map_guest_mem (vui, desc_table[desc_index].addr,
-				map_guest_hint_p))))
+	      (!(desc_table =
+		 map_guest_mem (vui, rxvq->desc[desc_index].addr,
+				&map_hint))))
 	    {
 	      error = VHOST_USER_TX_FUNC_ERROR_MMAP_FAIL;
 	      goto done;
 	    }
-	  buffer_len = desc_table[desc_index].len;
-
-	  CLIB_PREFETCH (buffer_addr, CLIB_CACHE_LINE_BYTES, STORE);
-
-	  virtio_net_hdr_mrg_rxbuf_t *hdr =
-	    (virtio_net_hdr_mrg_rxbuf_t *) buffer_addr;
-	  hdr->hdr.flags = 0;
-	  hdr->hdr.gso_type = 0;
-	  if (vui->virtio_net_hdr_sz == 12)
-	    hdr->num_buffers = 1;
-
-	  vhost_user_log_dirty_pages (vui, desc_table[desc_index].addr,
-				      vui->virtio_net_hdr_sz);
-
-	  u16 bytes_left = b0->current_length;
-	  buffer_addr += vui->virtio_net_hdr_sz;
-	  buffer_len -= vui->virtio_net_hdr_sz;
-	  current_b0 = b0;
-	  while (1)
-	    {
-	      if (!bytes_left)
-		{		//Get new input
-		  if (current_b0->flags & VLIB_BUFFER_NEXT_PRESENT)
-		    {
-		      current_b0 =
-			vlib_get_buffer (vm, current_b0->next_buffer);
-		      bytes_left = current_b0->current_length;
-		    }
-		  else
-		    {
-		      //End of packet
-		      break;
-		    }
-		}
-
-	      if (buffer_len == 0)
-		{		//Get new output
-		  if (desc_table[desc_index].flags & VIRTQ_DESC_F_NEXT)
-		    {
-		      //Next one is chained
-		      desc_index = desc_table[desc_index].next;
-		      if (PREDICT_FALSE
-			  (!(buffer_addr =
-			     map_guest_mem (vui, desc_table[desc_index].addr,
-					    map_guest_hint_p))))
-			{
-			  rxvq->last_used_idx -= hdr->num_buffers - 1;
-			  rxvq->last_avail_idx -= hdr->num_buffers - 1;
-			  error = VHOST_USER_TX_FUNC_ERROR_MMAP_FAIL;
-			  goto done;
-			}
-		      buffer_len = desc_table[desc_index].len;
-		    }
-		  else if (vui->virtio_net_hdr_sz == 12)	//MRG is available
-		    {
-		      //Move from available to used buffer
-		      rxvq->used->ring[rxvq->last_used_idx & qsz_mask].id =
-			desc_head;
-		      rxvq->used->ring[rxvq->last_used_idx & qsz_mask].len =
-			desc_len;
-		      vhost_user_log_dirty_ring (vui, rxvq,
-						 ring[rxvq->last_used_idx &
-						      qsz_mask]);
-		      rxvq->last_avail_idx++;
-		      rxvq->last_used_idx++;
-		      hdr->num_buffers++;
-
-		      if (PREDICT_FALSE
-			  (rxvq->last_avail_idx == rxvq->avail->idx))
-			{
-			  //Dequeue queued descriptors for this packet
-			  rxvq->last_used_idx -= hdr->num_buffers - 1;
-			  rxvq->last_avail_idx -= hdr->num_buffers - 1;
-			  error = VHOST_USER_TX_FUNC_ERROR_PKT_DROP_NOBUF;
-			  goto done;
-			}
-
-		      desc_table = rxvq->desc;
-		      map_guest_hint_p = &map_guest_hint_desc;
-		      desc_head = desc_index =
-			rxvq->avail->ring[rxvq->last_avail_idx & qsz_mask];
-		      if (PREDICT_FALSE
-			  (rxvq->
-			   desc[desc_head].flags & VIRTQ_DESC_F_INDIRECT))
-			{
-			  //It is seriously unlikely that a driver will put indirect descriptor
-			  //after non-indirect descriptor.
-			  if (PREDICT_FALSE
-			      (rxvq->desc[desc_head].len <
-			       sizeof (vring_desc_t)))
-			    {
-			      error =
-				VHOST_USER_TX_FUNC_ERROR_INDIRECT_OVERFLOW;
-			      goto done;
-			    }
-			  if (PREDICT_FALSE
-			      (!(desc_table =
-				 map_guest_mem (vui,
-						rxvq->desc[desc_index].addr,
-						&map_guest_hint_desc))))
-			    {
-			      error = VHOST_USER_TX_FUNC_ERROR_MMAP_FAIL;
-			      goto done;
-			    }
-			  desc_index = 0;
-			  map_guest_hint_p = &map_guest_hint_indirect;
-			}
-
-		      if (PREDICT_FALSE
-			  (!(buffer_addr =
-			     map_guest_mem (vui, desc_table[desc_index].addr,
-					    map_guest_hint_p))))
-			{
-			  error = VHOST_USER_TX_FUNC_ERROR_MMAP_FAIL;
-			  goto done;
-			}
-		      buffer_len = desc_table[desc_index].len;
-		      CLIB_PREFETCH (buffer_addr, CLIB_CACHE_LINE_BYTES,
-				     STORE);
-		    }
-		  else
-		    {
-		      error = VHOST_USER_TX_FUNC_ERROR_PKT_DROP_NOMRG;
-		      goto done;
-		    }
-		}
-
-	      u16 bytes_to_copy = bytes_left;
-	      bytes_to_copy =
-		(bytes_to_copy > buffer_len) ? buffer_len : bytes_to_copy;
-	      clib_memcpy (buffer_addr,
-			   vlib_buffer_get_current (current_b0) +
-			   current_b0->current_length - bytes_left,
-			   bytes_to_copy);
-
-	      vhost_user_log_dirty_pages (vui,
-					  desc_table[desc_index].addr +
-					  desc_table[desc_index].len -
-					  bytes_left - bytes_to_copy,
-					  bytes_to_copy);
-
-	      CLIB_PREFETCH (rxvq, sizeof (*rxvq), STORE);
-	      bytes_left -= bytes_to_copy;
-	      buffer_len -= bytes_to_copy;
-	      buffer_addr += bytes_to_copy;
-	      desc_len += bytes_to_copy;
-	    }
-
-	  //Move from available to used ring
-	  rxvq->used->ring[rxvq->last_used_idx & qsz_mask].id = desc_head;
-	  rxvq->used->ring[rxvq->last_used_idx & qsz_mask].len = desc_len;
-	  vhost_user_log_dirty_ring (vui, rxvq,
-				     ring[rxvq->last_used_idx & qsz_mask]);
-
-	  rxvq->last_avail_idx++;
-	  rxvq->last_used_idx++;
-
-	  if (PREDICT_FALSE (b0->flags & VLIB_BUFFER_IS_TRACED))
-	    current_trace->hdr = *hdr;
-
-	  buffers++;
-	  n_left--;		//At the end for error counting when 'goto done' is invoked
+	  desc_index = 0;
 	}
 
-    done:
-      CLIB_MEMORY_BARRIER ();
-      rxvq->used->idx = rxvq->last_used_idx;
-      vhost_user_log_dirty_ring (vui, rxvq, idx);
+      desc_len = vui->virtio_net_hdr_sz;
+      buffer_map_addr = desc_table[desc_index].addr;
+      buffer_len = desc_table[desc_index].len;
+
+      {
+	// Get a header from the header array
+	virtio_net_hdr_mrg_rxbuf_t *hdr =
+	  &vum->cpus[cpu_index].tx_headers[tx_headers_len];
+	tx_headers_len++;
+	hdr->hdr.flags = 0;
+	hdr->hdr.gso_type = 0;
+	hdr->num_buffers = 1;	//This is local, no need to check
+
+	// Prepare a copy order executed later for the header
+	vhost_copy_t *cpy = &vum->cpus[cpu_index].copy[copy_len];
+	copy_len++;
+	cpy->len = vui->virtio_net_hdr_sz;
+	cpy->dst = buffer_map_addr;
+	cpy->src = (uword) hdr;
+      }
+
+      buffer_map_addr += vui->virtio_net_hdr_sz;
+      buffer_len -= vui->virtio_net_hdr_sz;
+      bytes_left = b0->current_length;
+      current_b0 = b0;
+      while (1)
+	{
+	  if (buffer_len == 0)
+	    {			//Get new output
+	      if (desc_table[desc_index].flags & VIRTQ_DESC_F_NEXT)
+		{
+		  //Next one is chained
+		  desc_index = desc_table[desc_index].next;
+		  buffer_map_addr = desc_table[desc_index].addr;
+		  buffer_len = desc_table[desc_index].len;
+		}
+	      else if (vui->virtio_net_hdr_sz == 12)	//MRG is available
+		{
+		  virtio_net_hdr_mrg_rxbuf_t *hdr =
+		    &vum->cpus[cpu_index].tx_headers[tx_headers_len - 1];
+
+		  //Move from available to used buffer
+		  rxvq->used->ring[rxvq->last_used_idx & qsz_mask].id =
+		    desc_head;
+		  rxvq->used->ring[rxvq->last_used_idx & qsz_mask].len =
+		    desc_len;
+		  vhost_user_log_dirty_ring (vui, rxvq,
+					     ring[rxvq->last_used_idx &
+						  qsz_mask]);
+
+		  rxvq->last_avail_idx++;
+		  rxvq->last_used_idx++;
+		  hdr->num_buffers++;
+		  desc_len = 0;
+
+		  if (PREDICT_FALSE
+		      (rxvq->last_avail_idx == rxvq->avail->idx))
+		    {
+		      //Dequeue queued descriptors for this packet
+		      rxvq->last_used_idx -= hdr->num_buffers - 1;
+		      rxvq->last_avail_idx -= hdr->num_buffers - 1;
+		      error = VHOST_USER_TX_FUNC_ERROR_PKT_DROP_NOBUF;
+		      goto done;
+		    }
+
+		  desc_table = rxvq->desc;
+		  desc_head = desc_index =
+		    rxvq->avail->ring[rxvq->last_avail_idx & qsz_mask];
+		  if (PREDICT_FALSE
+		      (rxvq->desc[desc_head].flags & VIRTQ_DESC_F_INDIRECT))
+		    {
+		      //It is seriously unlikely that a driver will put indirect descriptor
+		      //after non-indirect descriptor.
+		      if (PREDICT_FALSE
+			  (rxvq->desc[desc_head].len < sizeof (vring_desc_t)))
+			{
+			  error = VHOST_USER_TX_FUNC_ERROR_INDIRECT_OVERFLOW;
+			  goto done;
+			}
+		      if (PREDICT_FALSE
+			  (!(desc_table =
+			     map_guest_mem (vui,
+					    rxvq->desc[desc_index].addr,
+					    &map_hint))))
+			{
+			  error = VHOST_USER_TX_FUNC_ERROR_MMAP_FAIL;
+			  goto done;
+			}
+		      desc_index = 0;
+		    }
+		  buffer_map_addr = desc_table[desc_index].addr;
+		  buffer_len = desc_table[desc_index].len;
+		}
+	      else
+		{
+		  error = VHOST_USER_TX_FUNC_ERROR_PKT_DROP_NOMRG;
+		  goto done;
+		}
+	    }
+
+	  {
+	    vhost_copy_t *cpy = &vum->cpus[cpu_index].copy[copy_len];
+	    copy_len++;
+	    cpy->len = bytes_left;
+	    cpy->len = (cpy->len > buffer_len) ? buffer_len : cpy->len;
+	    cpy->dst = buffer_map_addr;
+	    cpy->src = (uword) vlib_buffer_get_current (current_b0) +
+	      current_b0->current_length - bytes_left;
+
+	    bytes_left -= cpy->len;
+	    buffer_len -= cpy->len;
+	    buffer_map_addr += cpy->len;
+	    desc_len += cpy->len;
+
+	    CLIB_PREFETCH (&rxvq->desc, CLIB_CACHE_LINE_BYTES, LOAD);
+	  }
+
+	  // Check if vlib buffer has more data. If not, get more or break.
+	  if (PREDICT_TRUE (!bytes_left))
+	    {
+	      if (PREDICT_FALSE
+		  (current_b0->flags & VLIB_BUFFER_NEXT_PRESENT))
+		{
+		  current_b0 = vlib_get_buffer (vm, current_b0->next_buffer);
+		  bytes_left = current_b0->current_length;
+		}
+	      else
+		{
+		  //End of packet
+		  break;
+		}
+	    }
+	}
+
+      //Move from available to used ring
+      rxvq->used->ring[rxvq->last_used_idx & qsz_mask].id = desc_head;
+      rxvq->used->ring[rxvq->last_used_idx & qsz_mask].len = desc_len;
+      vhost_user_log_dirty_ring (vui, rxvq,
+				 ring[rxvq->last_used_idx & qsz_mask]);
+      rxvq->last_avail_idx++;
+      rxvq->last_used_idx++;
+
+      if (PREDICT_FALSE (b0->flags & VLIB_BUFFER_IS_TRACED))
+	{
+	  vum->cpus[cpu_index].current_trace->hdr =
+	    vum->cpus[cpu_index].tx_headers[tx_headers_len - 1];
+	}
+
+      n_left--;			//At the end for error counting when 'goto done' is invoked
+      buffers++;
+    }
+
+done:
+  //Do the memory copies
+  if (PREDICT_FALSE
+      (vhost_user_tx_copy (vui, vum->cpus[cpu_index].copy,
+			   copy_len, &map_hint)))
+    {
+      clib_warning ("Memory mapping error on interface hw_if_index=%d "
+		    "(Shutting down - Switch interface down and up to restart)",
+		    vui->hw_if_index);
+      vui->admin_up = 0;
+    }
+
+  CLIB_MEMORY_BARRIER ();
+  rxvq->used->idx = rxvq->last_used_idx;
+  vhost_user_log_dirty_ring (vui, rxvq, idx);
+
+  /*
+   * When n_left is set, error is always set to something too.
+   * In case error is due to lack of remaining buffers, we go back up and
+   * retry.
+   * The idea is that it is better to waste some time on packets
+   * that have been processed already than dropping them and get
+   * more fresh packets with a good likelyhood that they will be dropped too.
+   * This technique also gives more time to VM driver to pick-up packets.
+   * In case the traffic flows from physical to virtual interfaces, this
+   * technique will end-up leveraging the physical NIC buffer in order to
+   * absorb the VM's CPU jitter.
+   */
+  if (n_left && (error == VHOST_USER_TX_FUNC_ERROR_PKT_DROP_NOBUF) && retry)
+    {
+      retry--;
+      goto retry;
     }
 
   /* interrupt (call) handling */
-  if ((rxvq->callfd > -1) && !(rxvq->avail->flags & 1))
+  if ((rxvq->callfd_idx != ~0) && !(rxvq->avail->flags & 1))
     {
-      rxvq->n_since_last_int += n_packets - n_left;
+      rxvq->n_since_last_int += frame->n_vectors - n_left;
 
       if (rxvq->n_since_last_int > vum->coalesce_frames)
 	vhost_user_send_call (vm, rxvq);
     }
 
-done2:
   vhost_user_vring_unlock (vui, qid);
 
 done3:
@@ -2087,7 +2260,7 @@ vhost_user_interface_admin_up_down (vnet_main_t * vnm, u32 hw_if_index,
   uword is_up = (flags & VNET_SW_INTERFACE_FLAG_ADMIN_UP) != 0;
   vhost_user_main_t *vum = &vhost_user_main;
   vhost_user_intf_t *vui =
-    vec_elt_at_index (vum->vhost_user_interfaces, hif->dev_instance);
+    pool_elt_at_index (vum->vhost_user_interfaces, hif->dev_instance);
 
   vui->admin_up = is_up;
 
@@ -2101,7 +2274,7 @@ vhost_user_interface_admin_up_down (vnet_main_t * vnm, u32 hw_if_index,
 /* *INDENT-OFF* */
 VNET_DEVICE_CLASS (vhost_user_dev_class,static) = {
   .name = "vhost-user",
-  .tx_function = vhost_user_intfc_tx,
+  .tx_function = vhost_user_tx,
   .tx_function_n_errors = VHOST_USER_TX_FUNC_N_ERROR,
   .tx_function_error_strings = vhost_user_tx_func_error_strings,
   .format_device_name = format_vhost_user_interface_name,
@@ -2111,7 +2284,7 @@ VNET_DEVICE_CLASS (vhost_user_dev_class,static) = {
 };
 
 VLIB_DEVICE_TX_FUNCTION_MULTIARCH (vhost_user_dev_class,
-				   vhost_user_intfc_tx)
+				   vhost_user_tx)
 /* *INDENT-ON* */
 
 static uword
@@ -2131,7 +2304,6 @@ vhost_user_process (vlib_main_t * vm,
   template.read_function = vhost_user_socket_read;
   template.error_function = vhost_user_socket_error;
 
-
   if (sockfd < 0)
     return 0;
 
@@ -2143,54 +2315,54 @@ vhost_user_process (vlib_main_t * vm,
 
       timeout = 3.0;
 
-      vec_foreach (vui, vum->vhost_user_interfaces)
-      {
+      /* *INDENT-OFF* */
+      pool_foreach (vui, vum->vhost_user_interfaces, {
 
-	if (vui->sock_is_server || !vui->active)
-	  continue;
+	  if (vui->unix_server_index == ~0) { //Nothing to do for server sockets
+	      if (vui->unix_file_index == ~0)
+		{
+		  /* try to connect */
+		  strncpy (sun.sun_path, (char *) vui->sock_filename,
+			   sizeof (sun.sun_path) - 1);
 
-	if (vui->unix_fd == -1)
-	  {
-	    /* try to connect */
+		  if (connect (sockfd, (struct sockaddr *) &sun,
+			       sizeof (struct sockaddr_un)) == 0)
+		    {
+		      vui->sock_errno = 0;
+		      template.file_descriptor = sockfd;
+		      template.private_data =
+			  vui - vhost_user_main.vhost_user_interfaces;
+		      vui->unix_file_index = unix_file_add (&unix_main, &template);
 
-	    strncpy (sun.sun_path, (char *) vui->sock_filename,
-		     sizeof (sun.sun_path) - 1);
+		      //Re-open for next connect
+		      if ((sockfd = socket (AF_UNIX, SOCK_STREAM, 0)) < 0) {
+			  clib_warning("Critical: Could not open unix socket");
+			  return 0;
+		      }
+		    }
+		  else
+		    {
+		      vui->sock_errno = errno;
+		    }
+		}
+	      else
+		{
+		  /* check if socket is alive */
+		  int error = 0;
+		  socklen_t len = sizeof (error);
+		  int fd = UNIX_GET_FD(vui->unix_file_index);
+		  int retval =
+		      getsockopt (fd, SOL_SOCKET, SO_ERROR, &error, &len);
 
-	    if (connect
-		(sockfd, (struct sockaddr *) &sun,
-		 sizeof (struct sockaddr_un)) == 0)
-	      {
-		vui->sock_errno = 0;
-		vui->unix_fd = sockfd;
-		template.file_descriptor = sockfd;
-		vui->unix_file_index = unix_file_add (&unix_main, &template);
-		hash_set (vum->vhost_user_interface_index_by_sock_fd, sockfd,
-			  vui - vum->vhost_user_interfaces);
-
-		sockfd = socket (AF_UNIX, SOCK_STREAM, 0);
-		if (sockfd < 0)
-		  return 0;
-	      }
-	    else
-	      {
-		vui->sock_errno = errno;
-	      }
+		  if (retval)
+		    {
+		      DBG_SOCK ("getsockopt returned %d", retval);
+		      vhost_user_if_disconnect (vui);
+		    }
+		}
 	  }
-	else
-	  {
-	    /* check if socket is alive */
-	    int error = 0;
-	    socklen_t len = sizeof (error);
-	    int retval =
-	      getsockopt (vui->unix_fd, SOL_SOCKET, SO_ERROR, &error, &len);
-
-	    if (retval)
-	      {
-		DBG_SOCK ("getsockopt returned %d", retval);
-		vhost_user_if_disconnect (vui);
-	      }
-	  }
-      }
+      });
+      /* *INDENT-ON* */
     }
   return 0;
 }
@@ -2203,58 +2375,74 @@ VLIB_REGISTER_NODE (vhost_user_process_node,static) = {
 };
 /* *INDENT-ON* */
 
-int
-vhost_user_delete_if (vnet_main_t * vnm, vlib_main_t * vm, u32 sw_if_index)
+/**
+ * Disables and reset interface structure.
+ * It can then be either init again, or removed from used interfaces.
+ */
+static void
+vhost_user_term_if (vhost_user_intf_t * vui)
 {
-  vhost_user_main_t *vum = &vhost_user_main;
-  vhost_user_intf_t *vui;
-  uword *p = NULL;
-  int rv = 0;
-
-  p = hash_get (vum->vhost_user_interface_index_by_sw_if_index, sw_if_index);
-  if (p == 0)
-    {
-      return VNET_API_ERROR_INVALID_SW_IF_INDEX;
-    }
-  else
-    {
-      vui = vec_elt_at_index (vum->vhost_user_interfaces, p[0]);
-    }
-
-  // interface is inactive
-  vui->active = 0;
   // Delete configured thread pinning
   vec_reset_length (vui->workers);
   // disconnect interface sockets
   vhost_user_if_disconnect (vui);
   vhost_user_update_iface_state (vui);
-  // add to inactive interface list
-  vec_add1 (vum->vhost_user_inactive_interfaces_index, p[0]);
 
-  // reset renumbered iface
-  if (p[0] < vec_len (vum->show_dev_instance_by_real_dev_instance))
-    vum->show_dev_instance_by_real_dev_instance[p[0]] = ~0;
+  if (vui->unix_server_index != ~0)
+    {
+      //Close server socket
+      unix_file_t *uf = pool_elt_at_index (unix_main.file_pool,
+					   vui->unix_server_index);
+      unix_file_del (&unix_main, uf);
+      vui->unix_server_index = ~0;
+    }
+}
 
+int
+vhost_user_delete_if (vnet_main_t * vnm, vlib_main_t * vm, u32 sw_if_index)
+{
+  vhost_user_main_t *vum = &vhost_user_main;
+  vhost_user_intf_t *vui;
+  int rv = 0;
+  vnet_hw_interface_t *hwif;
+
+  if (!(hwif = vnet_get_sup_hw_interface (vnm, sw_if_index)) ||
+      hwif->dev_class_index != vhost_user_dev_class.index)
+    return VNET_API_ERROR_INVALID_SW_IF_INDEX;
+
+  DBG_SOCK ("Deleting vhost-user interface %s (instance %d)",
+	    hwif->name, hwif->dev_instance);
+
+  vui = pool_elt_at_index (vum->vhost_user_interfaces, hwif->dev_instance);
+
+  // Disable and reset interface
+  vhost_user_term_if (vui);
+
+  // Back to pool
+  pool_put (vum->vhost_user_interfaces, vui);
+
+  // Reset renumbered iface
+  if (hwif->dev_instance <
+      vec_len (vum->show_dev_instance_by_real_dev_instance))
+    vum->show_dev_instance_by_real_dev_instance[hwif->dev_instance] = ~0;
+
+  // Delete ethernet interface
   ethernet_delete_interface (vnm, vui->hw_if_index);
-  DBG_SOCK ("deleted (deactivated) vhost-user interface instance %d", p[0]);
-
   return rv;
 }
 
-// init server socket on specified sock_filename
+/**
+ * Open server unix socket on specified sock_filename.
+ */
 static int
-vhost_user_init_server_sock (const char *sock_filename, int *sockfd)
+vhost_user_init_server_sock (const char *sock_filename, int *sock_fd)
 {
   int rv = 0;
   struct sockaddr_un un = { };
   int fd;
   /* create listening socket */
-  fd = socket (AF_UNIX, SOCK_STREAM, 0);
-
-  if (fd < 0)
-    {
-      return VNET_API_ERROR_SYSCALL_ERROR_1;
-    }
+  if ((fd = socket (AF_UNIX, SOCK_STREAM, 0)) < 0)
+    return VNET_API_ERROR_SYSCALL_ERROR_1;
 
   un.sun_family = AF_UNIX;
   strncpy ((char *) un.sun_path, (char *) sock_filename,
@@ -2275,49 +2463,17 @@ vhost_user_init_server_sock (const char *sock_filename, int *sockfd)
       goto error;
     }
 
-  unix_file_t template = { 0 };
-  template.read_function = vhost_user_socksvr_accept_ready;
-  template.file_descriptor = fd;
-  unix_file_add (&unix_main, &template);
-  *sockfd = fd;
-  return rv;
+  *sock_fd = fd;
+  return 0;
 
 error:
   close (fd);
   return rv;
 }
 
-// get new vhost_user_intf_t from inactive interfaces or create new one
-static vhost_user_intf_t *
-vhost_user_vui_new ()
-{
-  vhost_user_main_t *vum = &vhost_user_main;
-  vhost_user_intf_t *vui = NULL;
-  int inactive_cnt = vec_len (vum->vhost_user_inactive_interfaces_index);
-  // if there are any inactive ifaces
-  if (inactive_cnt > 0)
-    {
-      // take last
-      u32 vui_idx =
-	vum->vhost_user_inactive_interfaces_index[inactive_cnt - 1];
-      if (vec_len (vum->vhost_user_interfaces) > vui_idx)
-	{
-	  vui = vec_elt_at_index (vum->vhost_user_interfaces, vui_idx);
-	  DBG_SOCK ("reusing inactive vhost-user interface index %d",
-		    vui_idx);
-	}
-      // "remove" from inactive list
-      _vec_len (vum->vhost_user_inactive_interfaces_index) -= 1;
-    }
-
-  // vui was not retrieved from inactive ifaces - create new
-  if (!vui)
-    vec_add2 (vum->vhost_user_interfaces, vui, 1);
-
-  return vui;
-}
-
-// create ethernet interface for vhost user intf
+/**
+ * Create ethernet interface for vhost user interface.
+ */
 static void
 vhost_user_create_ethernet (vnet_main_t * vnm, vlib_main_t * vm,
 			    vhost_user_intf_t * vui, u8 * hwaddress)
@@ -2333,12 +2489,8 @@ vhost_user_create_ethernet (vnet_main_t * vnm, vlib_main_t * vm,
     }
   else
     {
-      f64 now = vlib_time_now (vm);
-      u32 rnd;
-      rnd = (u32) (now * 1e6);
-      rnd = random_u32 (&rnd);
-
-      clib_memcpy (hwaddr + 2, &rnd, sizeof (rnd));
+      random_u32 (&vum->random);
+      clib_memcpy (hwaddr + 2, &vum->random, sizeof (vum->random));
       hwaddr[0] = 2;
       hwaddr[1] = 0xfe;
     }
@@ -2349,6 +2501,7 @@ vhost_user_create_ethernet (vnet_main_t * vnm, vlib_main_t * vm,
      vui - vum->vhost_user_interfaces /* device instance */ ,
      hwaddr /* ethernet address */ ,
      &vui->hw_if_index, 0 /* flag change */ );
+
   if (error)
     clib_error_report (error);
 
@@ -2356,26 +2509,39 @@ vhost_user_create_ethernet (vnet_main_t * vnm, vlib_main_t * vm,
   hi->max_l3_packet_bytes[VLIB_RX] = hi->max_l3_packet_bytes[VLIB_TX] = 9000;
 }
 
-// initialize vui with specified attributes
+/*
+ *  Initialize vui with specified attributes
+ */
 static void
 vhost_user_vui_init (vnet_main_t * vnm,
-		     vhost_user_intf_t * vui, int sockfd,
+		     vhost_user_intf_t * vui,
+		     int server_sock_fd,
 		     const char *sock_filename,
-		     u8 is_server, u64 feature_mask, u32 * sw_if_index)
+		     u64 feature_mask, u32 * sw_if_index)
 {
   vnet_sw_interface_t *sw;
   sw = vnet_get_hw_sw_interface (vnm, vui->hw_if_index);
   int q;
 
-  vui->unix_fd = sockfd;
+  if (server_sock_fd != -1)
+    {
+      unix_file_t template = { 0 };
+      template.read_function = vhost_user_socksvr_accept_ready;
+      template.file_descriptor = server_sock_fd;
+      template.private_data = vui - vhost_user_main.vhost_user_interfaces;	//hw index
+      vui->unix_server_index = unix_file_add (&unix_main, &template);
+    }
+  else
+    {
+      vui->unix_server_index = ~0;
+    }
+
   vui->sw_if_index = sw->sw_if_index;
-  vui->sock_is_server = is_server;
   strncpy (vui->sock_filename, sock_filename,
 	   ARRAY_LEN (vui->sock_filename) - 1);
   vui->sock_errno = 0;
   vui->is_up = 0;
   vui->feature_mask = feature_mask;
-  vui->active = 1;
   vui->unix_file_index = ~0;
   vui->log_base_addr = 0;
 
@@ -2399,34 +2565,6 @@ vhost_user_vui_init (vnet_main_t * vnm,
   vhost_user_tx_thread_placement (vui);
 }
 
-// register vui and start polling on it
-static void
-vhost_user_vui_register (vlib_main_t * vm, vhost_user_intf_t * vui)
-{
-  vhost_user_main_t *vum = &vhost_user_main;
-  int cpu_index;
-  vlib_thread_main_t *tm = vlib_get_thread_main ();
-
-  hash_set (vum->vhost_user_interface_index_by_listener_fd, vui->unix_fd,
-	    vui - vum->vhost_user_interfaces);
-  hash_set (vum->vhost_user_interface_index_by_sw_if_index, vui->sw_if_index,
-	    vui - vum->vhost_user_interfaces);
-
-  /* start polling */
-  cpu_index = vum->input_cpu_first_index +
-    (vui - vum->vhost_user_interfaces) % vum->input_cpu_count;
-
-  if (tm->n_vlib_mains == 1)
-    vlib_node_set_state (vm, vhost_user_input_node.index,
-			 VLIB_NODE_STATE_POLLING);
-  else
-    vlib_node_set_state (vlib_mains[cpu_index], vhost_user_input_node.index,
-			 VLIB_NODE_STATE_POLLING);
-
-  /* tell process to start polling for sockets */
-  vlib_process_signal_event (vm, vhost_user_process_node.index, 0, 0);
-}
-
 int
 vhost_user_create_if (vnet_main_t * vnm, vlib_main_t * vm,
 		      const char *sock_filename,
@@ -2437,34 +2575,32 @@ vhost_user_create_if (vnet_main_t * vnm, vlib_main_t * vm,
 {
   vhost_user_intf_t *vui = NULL;
   u32 sw_if_idx = ~0;
-  int sockfd = -1;
   int rv = 0;
+  int server_sock_fd = -1;
 
   if (is_server)
     {
-      if ((rv = vhost_user_init_server_sock (sock_filename, &sockfd)) != 0)
+      if ((rv =
+	   vhost_user_init_server_sock (sock_filename, &server_sock_fd)) != 0)
 	{
 	  return rv;
 	}
     }
 
-  vui = vhost_user_vui_new ();
-  ASSERT (vui != NULL);
+  pool_get (vhost_user_main.vhost_user_interfaces, vui);
 
   vhost_user_create_ethernet (vnm, vm, vui, hwaddr);
-  vhost_user_vui_init (vnm, vui, sockfd, sock_filename, is_server,
+  vhost_user_vui_init (vnm, vui, server_sock_fd, sock_filename,
 		       feature_mask, &sw_if_idx);
 
   if (renumber)
-    {
-      vnet_interface_name_renumber (sw_if_idx, custom_dev_instance);
-    }
-
-  vhost_user_vui_register (vm, vui);
+    vnet_interface_name_renumber (sw_if_idx, custom_dev_instance);
 
   if (sw_if_index)
     *sw_if_index = sw_if_idx;
 
+  // Process node must connect
+  vlib_process_signal_event (vm, vhost_user_process_node.index, 0, 0);
   return rv;
 }
 
@@ -2478,43 +2614,31 @@ vhost_user_modify_if (vnet_main_t * vnm, vlib_main_t * vm,
   vhost_user_main_t *vum = &vhost_user_main;
   vhost_user_intf_t *vui = NULL;
   u32 sw_if_idx = ~0;
-  int sockfd = -1;
+  int server_sock_fd = -1;
   int rv = 0;
-  uword *p = NULL;
+  vnet_hw_interface_t *hwif;
 
-  p = hash_get (vum->vhost_user_interface_index_by_sw_if_index, sw_if_index);
-  if (p == 0)
-    {
-      return VNET_API_ERROR_INVALID_SW_IF_INDEX;
-    }
-  else
-    {
-      vui = vec_elt_at_index (vum->vhost_user_interfaces, p[0]);
-    }
+  if (!(hwif = vnet_get_sup_hw_interface (vnm, sw_if_index)) ||
+      hwif->dev_class_index != vhost_user_dev_class.index)
+    return VNET_API_ERROR_INVALID_SW_IF_INDEX;
 
-  // interface is inactive
-  vui->active = 0;
-  // disconnect interface sockets
-  vhost_user_if_disconnect (vui);
+  vui = vec_elt_at_index (vum->vhost_user_interfaces, hwif->dev_instance);
 
+  // First try to open server socket
   if (is_server)
-    {
-      if ((rv = vhost_user_init_server_sock (sock_filename, &sockfd)) != 0)
-	{
-	  return rv;
-	}
-    }
+    if ((rv = vhost_user_init_server_sock (sock_filename,
+					   &server_sock_fd)) != 0)
+      return rv;
 
-  vhost_user_vui_init (vnm, vui, sockfd, sock_filename, is_server,
-		       feature_mask, &sw_if_idx);
+  vhost_user_term_if (vui);
+  vhost_user_vui_init (vnm, vui, server_sock_fd,
+		       sock_filename, feature_mask, &sw_if_idx);
 
   if (renumber)
-    {
-      vnet_interface_name_renumber (sw_if_idx, custom_dev_instance);
-    }
+    vnet_interface_name_renumber (sw_if_idx, custom_dev_instance);
 
-  vhost_user_vui_register (vm, vui);
-
+  // Process node must connect
+  vlib_process_signal_event (vm, vhost_user_process_node.index, 0, 0);
   return rv;
 }
 
@@ -2629,22 +2753,19 @@ vhost_user_dump_ifs (vnet_main_t * vnm, vlib_main_t * vm,
   if (!out_vuids)
     return -1;
 
-  vec_foreach (vui, vum->vhost_user_interfaces)
-  {
-    if (vui->active)
-      vec_add1 (hw_if_indices, vui->hw_if_index);
-  }
+  pool_foreach (vui, vum->vhost_user_interfaces,
+		vec_add1 (hw_if_indices, vui->hw_if_index);
+    );
 
   for (i = 0; i < vec_len (hw_if_indices); i++)
     {
       hi = vnet_get_hw_interface (vnm, hw_if_indices[i]);
-      vui = vec_elt_at_index (vum->vhost_user_interfaces, hi->dev_instance);
+      vui = pool_elt_at_index (vum->vhost_user_interfaces, hi->dev_instance);
 
       vec_add2 (r_vuids, vuid, 1);
       vuid->sw_if_index = vui->sw_if_index;
       vuid->virtio_net_hdr_sz = vui->virtio_net_hdr_sz;
       vuid->features = vui->features;
-      vuid->is_server = vui->sock_is_server;
       vuid->num_regions = vui->nregions;
       vuid->sock_errno = vui->sock_errno;
       strncpy ((char *) vuid->sock_filename, (char *) vui->sock_filename,
@@ -2725,11 +2846,9 @@ show_vhost_user_command_fn (vlib_main_t * vm,
     }
   if (vec_len (hw_if_indices) == 0)
     {
-      vec_foreach (vui, vum->vhost_user_interfaces)
-      {
-	if (vui->active)
-	  vec_add1 (hw_if_indices, vui->hw_if_index);
-      }
+      pool_foreach (vui, vum->vhost_user_interfaces,
+		    vec_add1 (hw_if_indices, vui->hw_if_index);
+	);
     }
   vlib_cli_output (vm, "Virtio vhost-user interfaces");
   vlib_cli_output (vm, "Global:\n  coalesce frames %d time %e",
@@ -2738,7 +2857,7 @@ show_vhost_user_command_fn (vlib_main_t * vm,
   for (i = 0; i < vec_len (hw_if_indices); i++)
     {
       hi = vnet_get_hw_interface (vnm, hw_if_indices[i]);
-      vui = vec_elt_at_index (vum->vhost_user_interfaces, hi->dev_instance);
+      vui = pool_elt_at_index (vum->vhost_user_interfaces, hi->dev_instance);
       vlib_cli_output (vm, "Interface: %s (ifindex %d)",
 		       hi->name, hw_if_indices[i]);
 
@@ -2772,7 +2891,7 @@ show_vhost_user_command_fn (vlib_main_t * vm,
 
       vlib_cli_output (vm, " socket filename %s type %s errno \"%s\"\n\n",
 		       vui->sock_filename,
-		       vui->sock_is_server ? "server" : "client",
+		       (vui->unix_server_index != ~0) ? "server" : "client",
 		       strerror (vui->sock_errno));
 
       vlib_cli_output (vm, " rx placement: ");
@@ -2839,9 +2958,10 @@ show_vhost_user_command_fn (vlib_main_t * vm,
 			     vui->vrings[q].used->flags,
 			     vui->vrings[q].used->idx);
 
+	  int kickfd = UNIX_GET_FD (vui->vrings[q].kickfd_idx);
+	  int callfd = UNIX_GET_FD (vui->vrings[q].callfd_idx);
 	  vlib_cli_output (vm, "  kickfd %d callfd %d errfd %d\n",
-			   vui->vrings[q].kickfd,
-			   vui->vrings[q].callfd, vui->vrings[q].errfd);
+			   kickfd, callfd, vui->vrings[q].errfd);
 
 	  if (show_descr)
 	    {
@@ -3124,10 +3244,9 @@ vhost_user_unmap_all (void)
 
   if (vum->dont_dump_vhost_user_memory)
     {
-      vec_foreach (vui, vum->vhost_user_interfaces)
-      {
-	unmap_all_mem_regions (vui);
-      }
+      pool_foreach (vui, vum->vhost_user_interfaces,
+		    unmap_all_mem_regions (vui);
+	);
     }
 }
 

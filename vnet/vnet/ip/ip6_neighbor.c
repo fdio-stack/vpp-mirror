@@ -16,6 +16,7 @@
  */
 
 #include <vnet/ip/ip.h>
+#include <vnet/ip/ip6_neighbor.h>
 #include <vnet/ethernet/ethernet.h>
 #include <vppinfra/mhash.h>
 #include <vppinfra/md5.h>
@@ -31,26 +32,10 @@
  * adjacency tables and neighbor discovery logic.
  */
 
-typedef struct {
-  ip6_address_t ip6_address;
-  u32 sw_if_index;
-  u32 pad;
-} ip6_neighbor_key_t;
-
-/* can't use sizeof link_layer_address, that's 8 */ 
+/* can't use sizeof link_layer_address, that's 8 */
 #define ETHER_MAC_ADDR_LEN 6
 
-typedef struct {
-  ip6_neighbor_key_t key;
-  u8 link_layer_address[8];
-  u16 flags;
-#define IP6_NEIGHBOR_FLAG_STATIC (1 << 0)
-#define IP6_NEIGHBOR_FLAG_DYNAMIC  (2 << 0)
-  u64 cpu_time_last_updated;
-  fib_node_index_t fib_entry_index;
-} ip6_neighbor_t;
-
-/* advertised prefix option */ 
+/* advertised prefix option */
 typedef struct {
   /* basic advertised information */
   ip6_address_t prefix;
@@ -417,13 +402,15 @@ ip6_nd_mk_complete (adj_index_t ai, ip6_neighbor_t * nbr)
 }
 
 static void
-ip6_nd_mk_incomplete (adj_index_t ai, ip6_neighbor_t * nbr)
+ip6_nd_mk_incomplete (adj_index_t ai)
 {
+  ip_adjacency_t *adj = adj_get(ai);
+
   adj_nbr_update_rewrite (
       ai,
       ADJ_NBR_REWRITE_FLAG_INCOMPLETE,
       ethernet_build_rewrite (vnet_get_main (),
-			      nbr->key.sw_if_index,
+                              adj->rewrite_header.sw_if_index,
 			      adj_get_link_type(ai),
 			      VNET_REWRITE_FOR_SW_INTERFACE_ADDRESS_BROADCAST));
 }
@@ -467,9 +454,7 @@ ip6_nd_mk_complete_walk (adj_index_t ai, void *ctx)
 static adj_walk_rc_t
 ip6_nd_mk_incomplete_walk (adj_index_t ai, void *ctx)
 {
-  ip6_neighbor_t *nbr = ctx;
-
-  ip6_nd_mk_incomplete (ai, nbr);
+  ip6_nd_mk_incomplete (ai);
 
   return (ADJ_WALK_RC_CONTINUE);
 }
@@ -698,13 +683,13 @@ vnet_unset_ip6_ethernet_neighbor (vlib_main_t * vm,
     }
   
   n = pool_elt_at_index (nm->neighbor_pool, p[0]);
+  mhash_unset (&nm->neighbor_index_by_key, &n->key, 0);
 
   adj_nbr_walk_nh6 (sw_if_index,
 		    &n->key.ip6_address,
 		    ip6_nd_mk_incomplete_walk,
-		    n);
+		    NULL);
 
-  mhash_unset (&nm->neighbor_index_by_key, &n->key, 0);
   fib_table_entry_delete_index (n->fib_entry_index,  FIB_SOURCE_ADJ);
   pool_put (nm->neighbor_pool, n);
   
@@ -737,13 +722,31 @@ ip6_neighbor_sort (void *a1, void *a2)
   return cmp;
 }
 
+ip6_neighbor_t *
+ip6_neighbors_entries (u32 sw_if_index)
+{
+  ip6_neighbor_main_t * nm = &ip6_neighbor_main;
+  ip6_neighbor_t *n, *ns = 0;
+
+  /* *INDENT-OFF* */
+  pool_foreach (n, nm->neighbor_pool, ({
+    if (sw_if_index != ~0 && n->key.sw_if_index != sw_if_index)
+      continue;
+    vec_add1 (ns, n[0]);
+  }));
+  /* *INDENT-ON* */
+
+  if (ns)
+    vec_sort_with_function (ns, ip6_neighbor_sort);
+  return ns;
+}
+
 static clib_error_t *
 show_ip6_neighbors (vlib_main_t * vm,
 		    unformat_input_t * input,
 		    vlib_cli_command_t * cmd)
 {
   vnet_main_t * vnm = vnet_get_main();
-  ip6_neighbor_main_t * nm = &ip6_neighbor_main;
   ip6_neighbor_t * n, * ns;
   clib_error_t * error = 0;
   u32 sw_if_index;
@@ -752,15 +755,11 @@ show_ip6_neighbors (vlib_main_t * vm,
   sw_if_index = ~0;
   (void) unformat_user (input, unformat_vnet_sw_interface, vnm, &sw_if_index);
 
-  ns = 0;
-  pool_foreach (n, nm->neighbor_pool, ({ vec_add1 (ns, n[0]); }));
+  ns = ip6_neighbors_entries (sw_if_index);
   if (ns)
     {
-      vec_sort_with_function (ns, ip6_neighbor_sort);
       vlib_cli_output (vm, "%U", format_ip6_neighbor_ip6_entry, vm, 0);
       vec_foreach (n, ns) {
-        if (sw_if_index != ~0 && n->key.sw_if_index != sw_if_index)
-          continue;
         vlib_cli_output (vm, "%U", format_ip6_neighbor_ip6_entry, vm, n);
       }
       vec_free (ns);
@@ -1469,9 +1468,10 @@ icmp6_router_solicitation(vlib_main_t * vm,
                                    : error0);
                               next0 = is_dropped ? 
                                   next0 : ICMP6_ROUTER_SOLICITATION_NEXT_REPLY_RW;
-                              vnet_buffer (p0)->ip.adj_index[VLIB_RX] = adj_index0;
+                              vnet_buffer (p0)->ip.adj_index[VLIB_TX] = adj_index0;
                            }
                         }
+                      p0->flags |= VNET_BUFFER_LOCALLY_ORIGINATED;
 		      
 		      radv_info->n_solicitations_dropped  += is_dropped;
 		      radv_info->n_solicitations_rcvd  += is_solicitation;
@@ -2130,15 +2130,16 @@ ip6_neighbor_send_mldpv2_report(u32 sw_if_index)
 
   /* 
    * OK to override w/ no regard for actual FIB, because
-   * ip6-rewrite-local only looks at the adjacency.
+   * ip6-rewrite only looks at the adjacency.
    */
   vnet_buffer (b0)->sw_if_index[VLIB_RX] = 
     vnet_main.local_interface_sw_if_index;
   
-  vnet_buffer (b0)->ip.adj_index[VLIB_RX]  = 
+  vnet_buffer (b0)->ip.adj_index[VLIB_TX]  = 
     radv_info->all_mldv2_routers_adj_index;
+  b0->flags |= VNET_BUFFER_LOCALLY_ORIGINATED;
 
-  vlib_node_t * node = vlib_get_node_by_name (vm, (u8 *) "ip6-rewrite-local");
+  vlib_node_t * node = vlib_get_node_by_name (vm, (u8 *) "ip6-rewrite");
   
   f = vlib_get_frame_to_node (vm, node->index);
   to_next = vlib_frame_vector_args (f);
@@ -2160,7 +2161,7 @@ VLIB_REGISTER_NODE (ip6_icmp_router_solicitation_node,static) = {
   .n_next_nodes = ICMP6_ROUTER_SOLICITATION_N_NEXT,
   .next_nodes = {
     [ICMP6_ROUTER_SOLICITATION_NEXT_DROP] = "error-drop",
-    [ICMP6_ROUTER_SOLICITATION_NEXT_REPLY_RW] = "ip6-rewrite-local",
+    [ICMP6_ROUTER_SOLICITATION_NEXT_REPLY_RW] = "ip6-rewrite",
     [ICMP6_ROUTER_SOLICITATION_NEXT_REPLY_TX] = "interface-output",
   },
 };

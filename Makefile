@@ -214,12 +214,15 @@ build-vpp-api: $(BR)/.bootstrap.ok
 
 VPP_PYTHON_PREFIX=$(BR)/python
 
+
+	#$(if $(filter-out $(3),retest),make -C $(BR) PLATFORM=$(1) TAG=$(2) vpp-install ,)
 define test
 	$(if $(filter-out $(3),retest),make -C $(BR) PLATFORM=$(1) TAG=$(2) vpp-api-install plugins-install vpp-install,)
 	make -C test \
 	  VPP_TEST_BIN=$(BR)/install-$(2)-native/vpp/bin/vpp \
 	  VPP_TEST_API_TEST_BIN=$(BR)/install-$(2)-native/vpp-api-test/bin/vpp_api_test \
 	  VPP_TEST_PLUGIN_PATH=$(BR)/install-$(2)-native/plugins/lib64/vpp_plugins \
+	  VPP_TEST_INSTALL_PATH=$(BR)/install-$(2)-native/ \
 	  LD_LIBRARY_PATH=$(BR)/install-$(2)-native/vpp-api/lib64/ \
 	  WS_ROOT=$(WS_ROOT) V=$(V) TEST=$(TEST) VPP_PYTHON_PREFIX=$(VPP_PYTHON_PREFIX) $(3)
 endef
