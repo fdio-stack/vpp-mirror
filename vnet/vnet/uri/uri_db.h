@@ -76,6 +76,7 @@ typedef enum
   SESSION_STATE_LISTENING,
   SESSION_STATE_CONNECTING,
   SESSION_STATE_READY,
+  SESSION_STATE_N_STATES,
 } stream_session_state_t;
 
 typedef CLIB_PACKED(struct

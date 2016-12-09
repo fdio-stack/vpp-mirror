@@ -246,6 +246,12 @@ tcp_session_get (u32 tsi, u32 thread_index)
   return pool_elt_at_index(tcp_main.sessions[thread_index], tsi);
 }
 
+always_inline tcp_session_t *
+tcp_listener_get (u32 tsi)
+{
+  return pool_elt_at_index(tcp_main.listener_pool, tsi);
+}
+
 void
 tcp_send_ack (tcp_session_t *ts, u8 is_ip4);
 void

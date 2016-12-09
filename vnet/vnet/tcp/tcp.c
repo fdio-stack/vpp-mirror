@@ -577,53 +577,6 @@ VLIB_REGISTER_NODE (tcp6_established_node) = {
   },
 };
 
-static uword tcp46_establish_inline (vlib_main_t * vm, 
-                                     vlib_node_runtime_t * node,
-                                     vlib_frame_t * from_frame,
-                                     int is_ip4)
-{
-  clib_warning ("STUB called");
-  return 0;
-}
-
-static uword
-tcp4_establish (vlib_main_t * vm, vlib_node_runtime_t * node,
-                  vlib_frame_t * from_frame)
-{
-  return tcp46_establish_inline (vm, node, from_frame, 1 /* is_ip4 */);
-}
-
-VLIB_REGISTER_NODE (tcp4_establish_node) = {
-  .function = tcp4_establish,
-  .name = "tcp4-establish",
-  /* Takes a vector of packets. */
-  .vector_size = sizeof (u32),
-
-  .runtime_data_bytes = sizeof (tcp_input_runtime_t),
-
-  .n_errors = TCP_N_ERROR,
-  .error_strings = tcp_error_strings,
-};
-
-static uword
-tcp6_establish (vlib_main_t * vm, vlib_node_runtime_t * node,
-                  vlib_frame_t * from_frame)
-{
-  return tcp46_establish_inline (vm, node, from_frame, 0 /* is_ip4 */);
-}
-
-VLIB_REGISTER_NODE (tcp6_establish_node) = {
-  .function = tcp6_establish,
-  .name = "tcp6-establish",
-  /* Takes a vector of packets. */
-  .vector_size = sizeof (u32),
-
-  .runtime_data_bytes = sizeof (tcp_input_runtime_t),
-
-  .n_errors = TCP_N_ERROR,
-  .error_strings = tcp_error_strings,
-};
-
 #define foreach_tcp_rcv_process_next            \
   _ (DROP, "error-drop")
 
@@ -1011,8 +964,7 @@ tcp46_listen_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
           n_left_to_next -= 1;
 
           b0 = vlib_get_buffer (vm, bi0);
-          ts0 = tcp_session_get (vnet_buffer(b0)->tcp.session_index,
-                                 my_thread_index);
+          ts0 = tcp_listener_get (vnet_buffer(b0)->tcp.session_index);
 
           if (is_ip4)
             {
@@ -1141,7 +1093,7 @@ typedef enum _tcp_input_next
 {
   TCP_INPUT_NEXT_DROP,
   TCP_INPUT_NEXT_LISTEN,
-  TCP_INPUT_NEXT_ESTABLISH,
+  TCP_INPUT_NEXT_RCV_PROCESS,
   TCP_INPUT_NEXT_ESTABLISHED,
   TCP_INPUT_N_NEXT
 } tcp_input_next_t;
@@ -1149,13 +1101,13 @@ typedef enum _tcp_input_next
 #define foreach_tcp4_input_next                 \
   _ (DROP, "error-drop")                        \
   _ (LISTEN, "tcp4-listen")                     \
-  _ (ESTABLISH, "tcp4-establish")               \
+  _ (RCV_PROCESS, "tcp4-rcv-process")               \
   _ (ESTABLISHED, "tcp4-established")
 
 #define foreach_tcp6_input_next                 \
   _ (DROP, "error-drop")                        \
   _ (LISTEN, "tcp6-listen")                     \
-  _ (ESTABLISH, "tcp6-establish")               \
+  _ (RCV_PROCESS, "tcp6-rcv-process")               \
   _ (ESTABLISHED, "tcp6-established")
 
 typedef struct
@@ -1267,8 +1219,13 @@ tcp46_input_inline (vlib_main_t * vm,
           /* Session exists */
           if (PREDICT_TRUE(0 != s0))
             {
-              ts0 = tcp_session_get (s0->transport_session_index,
-                                     my_thread_index);
+              if (PREDICT_TRUE(s0->session_state == SESSION_STATE_READY))
+                ts0 = tcp_session_get (s0->transport_session_index,
+                                       my_thread_index);
+              else if (s0->session_state == SESSION_STATE_LISTENING)
+                ts0 = tcp_listener_get (s0->transport_session_index);
+              else
+                goto drop;
 
               /* Save session index */
               vnet_buffer (b0)->tcp.session_index = s0->transport_session_index;
@@ -1283,6 +1240,7 @@ tcp46_input_inline (vlib_main_t * vm,
               error0 = tm->dispatch_table[ts0->state][flags0].error;
             }
 
+         drop:
           b0->error = error0 ? node->errors[error0] : 0;
 
           if (PREDICT_FALSE(b0->flags & VLIB_BUFFER_IS_TRACED))
@@ -1326,7 +1284,7 @@ VLIB_REGISTER_NODE (tcp4_input_node) = {
   .n_next_nodes = TCP_INPUT_N_NEXT,
   .next_nodes = {
 #define _(s,n) [TCP_INPUT_NEXT_##s] = n,
-    foreach_tcp6_input_next
+    foreach_tcp4_input_next
 #undef _
   },
 
@@ -1387,7 +1345,7 @@ tcp_unregister_listener (u32 listener_index)
 
 u32
 tcp_uri_bind_ip4 (vlib_main_t * vm, u32 session_index, ip46_address_t *ip,
-                       u16 port_number_host_byte_order)
+                  u16 port_number_host_byte_order)
 {
   tcp_listener_registration_t _a, *a = &_a;
   u32 tsi;
@@ -1402,6 +1360,7 @@ tcp_uri_bind_ip4 (vlib_main_t * vm, u32 session_index, ip46_address_t *ip,
   listener = pool_elt_at_index (tcp_main.listener_pool, tsi);
   listener->s_s_index = session_index;
   listener->s_proto = SESSION_TYPE_IP4_TCP;
+  listener->state = TCP_CONNECTION_STATE_LISTEN;
 
   return tsi;
 }
@@ -1423,6 +1382,7 @@ tcp_uri_bind_ip6 (vlib_main_t * vm, u32 session_index, ip46_address_t *ip,
   listener = pool_elt_at_index (tcp_main.listener_pool, tsi);
   listener->s_s_index = session_index;
   listener->s_proto = SESSION_TYPE_IP6_TCP;
+  listener->state = TCP_CONNECTION_STATE_LISTEN;
 
   return tsi;
 }
@@ -1500,9 +1460,14 @@ const static transport_proto_vft_t tcp6_proto = {
 clib_error_t *
 tcp_lookup_init (vlib_main_t * vm)
 {
-  clib_error_t * error = 0;
   tcp_main_t *tm = vnet_get_tcp_main ();
+  vlib_thread_main_t *vtm = &vlib_thread_main;
+  clib_error_t * error = 0;
   f64 log2 = .69314718055994530941;
+  u32 num_threads;
+
+  tm->vlib_main = vm;
+  tm->vnet_main = vnet_get_main ();
 
   if ((error = vlib_call_init_function(vm, ip4_lookup_init)))
     return error;
@@ -1511,6 +1476,9 @@ tcp_lookup_init (vlib_main_t * vm)
 
   uri_register_transport (SESSION_TYPE_IP4_TCP, &tcp4_proto);
   uri_register_transport (SESSION_TYPE_IP6_TCP, &tcp6_proto);
+
+  num_threads = 1 /* main thread */ + vtm->n_eal_threads;
+  vec_validate (tm->sessions, num_threads - 1);
 
   /* Initialize dispatch table. */
   int i, j;
@@ -1529,8 +1497,8 @@ do {                                                                    \
 
   /* SYNs for new connections -> tcp-listen. */
   _(LISTEN, TCP_FLAG_SYN, TCP_INPUT_NEXT_LISTEN, TCP_ERROR_NONE);
-  /* ACK for for a SYN-ACK -> tcp-establish. */
-  _(SYN_RCVD, TCP_FLAG_ACK, TCP_INPUT_NEXT_ESTABLISH, TCP_ERROR_NONE);
+  /* ACK for for a SYN-ACK -> tcp-rcv-process. */
+  _(SYN_RCVD, TCP_FLAG_ACK, TCP_INPUT_NEXT_RCV_PROCESS, TCP_ERROR_NONE);
   /* ACK for for established connection -> tcp-established. */
   _(ESTABLISHED, TCP_FLAG_ACK, TCP_INPUT_NEXT_ESTABLISHED, TCP_ERROR_NONE);
   /* FIN for for established connection -> tcp-established. */

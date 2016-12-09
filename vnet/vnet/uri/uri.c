@@ -327,7 +327,7 @@ stream_session_create (u32 listener_index, u32 transport_session_index,
 
   /* Find the server */
   ls = pool_elt_at_index (ssm->listen_sessions[sst], listener_index);
-  ss = pool_elt_at_index(ssm->servers, ls->server_index);
+  ss = pool_elt_at_index (ssm->servers, ls->server_index);
 
   /* Check the API queue */
   if (check_api_queue_full (ss))

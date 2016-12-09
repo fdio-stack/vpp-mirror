@@ -438,7 +438,10 @@ tcp46_output_inline (vlib_main_t * vm,
           /* set fib index to default and lookup node */
           /* XXX network virtualization (vrf/vni)*/
           vnet_buffer (b0)->sw_if_index[VLIB_TX] = 0;
-          next0 = is_ip4 ? ip4_lookup_node.index : ip6_lookup_node.index;
+
+          //b0->flags |= VNET_BUFFER_LOCALLY_ORIGINATED;
+
+          next0 = is_ip4 ? TCP_OUTPUT_NEXT_IP4_LOOKUP : TCP_OUTPUT_NEXT_IP6_LOOKUP;
 
           b0->error = node->errors[error0];
           if (PREDICT_FALSE(b0->flags & VLIB_BUFFER_IS_TRACED))
