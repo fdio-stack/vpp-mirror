@@ -56,34 +56,6 @@ format_function_t format_tcp_state;
 
 typedef struct
 {
-  /* Option flags */
-  union
-  {
-    u8 mss_flag :1,     /**< MSS advertised in SYN */
-       tstamp_seen :1,  /**< Seen timestamp in last packet */
-       tstamp_flag :1,  /**< Timestamp capability advertised in SYN */
-       wscale_flag :1,  /**< Window scale capability advertised in SYN */
-       sack_flag :1,    /**< SACK capability advertised in SYN */
-       unused :3;
-    u8 flags;
-  };
-
-  /* Received options*/
-  u16 mss;              /**< Maximum segment size advertised by peer */
-  u8 wscale;            /**< Window scale advertised by peer */
-  u32 tsval;            /**< Peer's timestamp value */
-  u32 tsecr;            /**< Echoed/reflected time stamp */
-
-  /* Send options */
-  u8 wscale_snd;        /**< Window scale to advertise to peer */
-
-  /* Session variables */
-  u32 tsval_recent;     /**< last timestamp received */
-  u32 tsval_recent_age; /**< when last updated tstamp_recent*/
-} tcp_options_t;
-
-typedef struct
-{
   /* sum, sum**2 */
   f64 sum, sum_sq;
   f64 count;

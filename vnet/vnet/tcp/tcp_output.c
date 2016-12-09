@@ -74,32 +74,62 @@ tcp_actual_snd_sequence (const tcp_session_t *ts)
     return wnd_end;
 }
 
+u16
+tcp_mss_to_advertise (tcp_session_t *ts)
+{
+  /* TODO cache mss and consider PMTU discovery */
+
+  return ts->opt.mss;
+}
+
+/**
+ * Compute and return window to advertise, scaled as per RFC1323
+ */
+u32
+tcp_window_to_advertise (tcp_session_t *ts, u32 my_thread_index)
+{
+  stream_session_t *s;
+  u32 available_space, wnd;
+
+  s = stream_session_get (ts->s_s_index, my_thread_index);
+
+  available_space = svm_fifo_max_enqueue (s->server_rx_fifo);
+  wnd = clib_min (available_space, TCP_MAX_WND << ts->opt.wscale_snd);
+  ts->rcv_wnd = wnd;
+
+  return wnd >> ts->opt.wscale_snd;
+}
+
 void
 tcp_options_write (u8 *data, tcp_options_t * opts)
 {
   u32 opts_len = 0;
+  u32 buf;
 
-  if (opts->mss_flag)
+  if (tcp_opts_mss(opts))
     {
       *data++ = TCP_OPTION_MSS;
       *data++ = TCP_OPTION_LEN_MSS;
-      *data = clib_host_to_net_u16 (opts->mss);
-      data += TCP_OPTION_LEN_MSS;
+      buf = clib_host_to_net_u16 (opts->mss);
+      clib_memcpy (data, &buf, sizeof (opts->mss));
+      data += sizeof (opts->mss);
       opts_len += TCP_OPTION_LEN_MSS;
     }
 
-  if (opts->tstamp_flag)
+  if (tcp_opts_tstamp(opts))
     {
       *data++ = TCP_OPTION_TIMESTAMP;
       *data++ = TCP_OPTION_LEN_TIMESTAMP;
-      *data = clib_host_to_net_u32 (opts->tsval);
+      buf = clib_host_to_net_u32 (opts->tsval);
+      clib_memcpy (data, &buf, sizeof (opts->tsval));
       data += sizeof (opts->tsval);
-      *data = clib_host_to_net_u32 (opts->tsecr);
+      buf = clib_host_to_net_u32 (opts->tsecr);
+      clib_memcpy (data, &buf, sizeof (opts->tsecr));
       data += sizeof (opts->tsecr);
       opts_len += TCP_OPTION_LEN_TIMESTAMP;
     }
 
-  if (opts->wscale_flag)
+  if (tcp_opts_wscale(opts))
     {
       *data++ = TCP_OPTION_WINDOW_SCALE;
       *data++ = TCP_OPTION_LEN_WINDOW_SCALE;
@@ -127,25 +157,27 @@ tcp_make_syn_or_synack_options (tcp_session_t *ts, tcp_options_t *opts)
 {
   u8 len = 0;
 
-  opts->mss_flag = 1;
-  opts->mss = 1400; /*XXX discover that */
+  opts->flags |= TCP_OPTS_FLAG_MSS;
+  opts->mss = 1518; /*XXX discover that */
   len += TCP_OPTION_LEN_MSS;
 
-  if (ts->opt.wscale_flag)
+  if (tcp_opts_wscale(&ts->opt))
     {
-      opts->wscale_flag = 1;
+      opts->flags |= TCP_OPTS_FLAG_WSCALE;
       opts->wscale = ts->opt.wscale_snd;
       len += TCP_OPTION_LEN_WINDOW_SCALE;
     }
 
-  if (ts->opt.tstamp_flag)
+  if (tcp_opts_tstamp(&ts->opt))
     {
-      opts->tstamp_flag = 1;
+      opts->flags |= TCP_OPTS_FLAG_TSTAMP;
       opts->tsval = tcp_time_now ();
       opts->tsecr = ts->opt.tsval_recent;
       len += TCP_OPTION_LEN_TIMESTAMP;
     }
 
+  /* Align to needed boundary */
+  len += TCP_OPTS_ALIGN - len % TCP_OPTS_ALIGN;
   return len;
 }
 
@@ -154,13 +186,16 @@ tcp_make_established_options (tcp_session_t *ts, tcp_options_t *opts)
 {
   u8 len = 0;
 
-  if (ts->opt.tstamp_flag)
+  if (tcp_opts_tstamp(&ts->opt))
     {
-      opts->tstamp_flag = 1;
+      opts->flags |= TCP_OPTS_FLAG_TSTAMP;
       opts->tsval = tcp_time_now ();
       opts->tsecr = ts->opt.tsval_recent;
       len += TCP_OPTION_LEN_TIMESTAMP;
     }
+
+  /* Align to needed boundary */
+  len += TCP_OPTS_ALIGN - len % TCP_OPTS_ALIGN;
   return len;
 }
 
@@ -199,7 +234,7 @@ tcp_send_ack (tcp_session_t *ts, u8 is_ip4)
   th = pkt_push_tcp (vm, b, ts->s_lcl_port, ts->s_rmt_port,
                      tcp_actual_snd_sequence (ts), ts->rcv_nxt,
                      tcp_hdr_opts_len, TCP_FLAG_ACK,
-                     clib_min(ts->rcv_wnd, 65535U));
+                     tcp_window_to_advertise(ts, vm->cpu_index));
 
   tcp_options_write ((u8 *)(th + 1), snd_opts);
   ts->rcv_las = ts->rcv_nxt;
@@ -236,6 +271,8 @@ tcp_send_synack (tcp_session_t *ts, u8 is_ip4)
   tcp_header_t *th;
   u32 time_now;
 
+  memset(snd_opts, 0, sizeof (*snd_opts));
+
   if (vlib_buffer_alloc (vm, &bi, 1) != 1)
     {
       clib_warning ("Can't allocate buffer!");
@@ -257,8 +294,7 @@ tcp_send_synack (tcp_session_t *ts, u8 is_ip4)
 
   th = pkt_push_tcp (vm, b, ts->s_lcl_port, ts->s_rmt_port, ts->iss,
                      ts->rcv_nxt, tcp_hdr_opts_len, TCP_FLAG_SYN | TCP_FLAG_ACK,
-                     clib_min(ts->rcv_wnd, 65535U));
-
+                     tcp_window_to_advertise(ts, vm->cpu_index));
 
   tcp_options_write ((u8 *)(th + 1), snd_opts);
   ts->rcv_las = ts->rcv_nxt;
@@ -439,7 +475,7 @@ tcp46_output_inline (vlib_main_t * vm,
           /* XXX network virtualization (vrf/vni)*/
           vnet_buffer (b0)->sw_if_index[VLIB_TX] = 0;
 
-          //b0->flags |= VNET_BUFFER_LOCALLY_ORIGINATED;
+          b0->flags |= VNET_BUFFER_LOCALLY_ORIGINATED;
 
           next0 = is_ip4 ? TCP_OUTPUT_NEXT_IP4_LOOKUP : TCP_OUTPUT_NEXT_IP6_LOOKUP;
 
@@ -514,32 +550,6 @@ VLIB_REGISTER_NODE (tcp6_output_node) = {
   .format_buffer = format_tcp_header,
   .format_trace = format_tcp_tx_trace,
 };
-
-u16
-tcp_mss_to_advertise (tcp_session_t *ts)
-{
-  /* TODO cache mss and consider PMTU discovery */
-
-  return ts->opt.mss;
-}
-
-/**
- * Compute and return window to advertise, scaled as per RFC1323
- */
-u32
-tcp_window_to_advertise (tcp_session_t *ts, u32 my_thread_index)
-{
-  stream_session_t *s;
-  u32 available_space, wnd;
-
-  s = stream_session_get (ts->s_s_index, my_thread_index);
-
-  available_space = svm_fifo_max_enqueue (s->server_rx_fifo);
-  wnd = clib_min (available_space, 65535U << ts->opt.wscale_snd);
-  ts->rcv_wnd = wnd;
-
-  return wnd >> ts->opt.wscale_snd;
-}
 
 /**
  * Read as much data as possible from the tx fifo, build a tcp packet and

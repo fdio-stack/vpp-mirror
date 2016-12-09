@@ -106,16 +106,16 @@ tcp_options_parse (tcp_header_t *th, tcp_options_t *to)
       switch (kind)
       {
         case TCP_OPTION_MSS:
-          if (opt_len == TCP_OPTION_LEN_MSS && tcp_syn (th))
+          if ((opt_len == TCP_OPTION_LEN_MSS) && tcp_syn (th))
             {
-              to->mss_flag = 1;
+              to->flags |= TCP_OPTS_FLAG_MSS;
               to->mss = clib_net_to_host_u16 (*(u16 *) (data + 2));
             }
           break;
         case TCP_OPTION_WINDOW_SCALE:
-          if (opt_len == TCP_OPTION_LEN_WINDOW_SCALE && tcp_syn (th))
+          if ((opt_len == TCP_OPTION_LEN_WINDOW_SCALE) && tcp_syn (th))
             {
-              to->wscale_flag = 1;
+              to->flags |= TCP_OPTS_FLAG_WSCALE;
               to->wscale = data[2];
               if (to->wscale > TCP_MAX_WND_SCALE)
                 {
@@ -127,14 +127,14 @@ tcp_options_parse (tcp_header_t *th, tcp_options_t *to)
         case TCP_OPTION_TIMESTAMP:
           if (opt_len == TCP_OPTION_LEN_TIMESTAMP)
             {
-              to->tstamp_flag = 1;
+              to->flags |= TCP_OPTS_FLAG_TSTAMP;
               to->tsval = clib_net_to_host_u32 (*(u32 *)(data + 2));
               to->tsecr = clib_net_to_host_u32 (*(u32 *)(data + 6));
             }
           break;
         case TCP_OPTION_SACK_PERMITTED:
           if (opt_len == TCP_OPTION_LEN_SACK_PERMITTED && tcp_syn (th))
-            to->sack_flag = 1;
+            to->flags |= TCP_OPTS_FLAG_SACK;
           break;
         case TCP_OPTION_SACK_BLOCK:
           clib_warning ("Not implemented!");
@@ -149,7 +149,7 @@ tcp_options_parse (tcp_header_t *th, tcp_options_t *to)
 always_inline int
 tcp_segment_test_paws (tcp_session_t *ts)
 {
-  return ts->opt.tstamp_flag && ts->opt.tsval_recent
+  return tcp_opts_tstamp(&ts->opt) && ts->opt.tsval_recent
       && timestamp_lt (ts->opt.tsval, ts->opt.tsval_recent);
 }
 
@@ -925,6 +925,9 @@ typedef enum _tcp_listen_next
 vlib_node_registration_t tcp4_listen_node;
 vlib_node_registration_t tcp6_listen_node;
 
+/**
+ * LISTEN state processing as per RFC 793 p. 65
+ */
 always_inline uword
 tcp46_listen_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
                           vlib_frame_t * from_frame, int is_ip4)
@@ -949,7 +952,7 @@ tcp46_listen_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
         {
           u32 bi0;
           vlib_buffer_t * b0;
-          tcp_header_t *tcp0 = 0;
+          tcp_header_t *th0 = 0;
           tcp_session_t *ts0;
           ip4_header_t * ip40;
           ip6_header_t * ip60;
@@ -969,20 +972,33 @@ tcp46_listen_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
           if (is_ip4)
             {
               ip40 = vlib_buffer_get_current (b0);
-              tcp0 = ip4_next_header (ip40);
+              th0 = ip4_next_header (ip40);
             }
           else
             {
               ip60 = vlib_buffer_get_current (b0);
-              tcp0 = ip6_next_header (ip60);
+              th0 = ip6_next_header (ip60);
             }
 
           /* Create child session. No syn-flood protection for now */
 
+          /* 1. first check for an RST */
+          if (tcp_rst (th0))
+            goto drop;
+
+          /* 2. second check for an ACK */
+          if (tcp_ack (th0))
+            {
+              tcp_send_reset (b0, is_ip4);
+              goto drop;
+            }
+
+          /* 3. check for a SYN (did that already) */
+
           pool_get(tm->sessions[my_thread_index], child0);
           child0->s_t_index = child0 - tm->sessions[my_thread_index];
           child0->s_lcl_port = ts0->s_lcl_port;
-          child0->s_rmt_port = clib_net_to_host_u16(tcp0->src_port);
+          child0->s_rmt_port = clib_net_to_host_u16(th0->src_port);
           if (is_ip4)
             {
               child0->s_lcl_ip4.as_u32 = ip40->dst_address.as_u32;
@@ -1004,16 +1020,24 @@ tcp46_listen_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
           if (!error0)
             {
 
-              tcp_options_parse (tcp0, &child0->opt);
+              tcp_options_parse (th0, &child0->opt);
 
               child0->irs = vnet_buffer (b0)->tcp.seq_number;
               child0->rcv_nxt = vnet_buffer (b0)->tcp.seq_number + 1;
               child0->state = TCP_CONNECTION_STATE_SYN_RCVD;
 
+              /* RFC1323: TSval timestamps sent on {SYN} and {SYN,ACK}
+               * segments are used to initialize PAWS. */
+              if (tcp_opts_tstamp (&child0->opt))
+                {
+                    child0->opt.tsval_recent = child0->opt.tsval;
+                    child0->opt.tsval_recent_age = tcp_time_now ();
+                }
               /* send syn-ack */
               tcp_send_synack (child0, is_ip4);
             }
 
+         drop:
           if (PREDICT_FALSE(b0->flags & VLIB_BUFFER_IS_TRACED))
             {
 
