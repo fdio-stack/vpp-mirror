@@ -351,7 +351,7 @@ typedef struct
     {
       u32 session_index;
       u32 seq_number;
-      u32 end_seq;
+      u32 seq_end;
       u32 ack_number;
       u8 flags;
     } tcp;

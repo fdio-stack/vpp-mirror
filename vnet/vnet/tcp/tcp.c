@@ -59,16 +59,18 @@ vlib_node_registration_t tcp6_established_node;
  *      >0      >0      RCV.NXT =< SEG.SEQ < RCV.NXT+RCV.WND
  *                      or RCV.NXT =< SEG.SEQ+SEG.LEN-1 < RCV.NXT+RCV.WND
  *
- * This ultimately reduces to checking if segment falls within the window.
+ * This ultimately consists in checking if segment falls within the window.
  * The one important difference compared to RFC793 is that we use rcv_las,
  * or the rcv_nxt at last ack sent instead of rcv_nxt since that's the
  * peer's reference when computing our receive window.
+ *
+ * This accepts only segments within the window.
  */
 always_inline u8
-tcp_sequence_is_valid (tcp_session_t *ts, u32 seq, u32 end_seq)
+tcp_segment_in_window (tcp_session_t *ts, u32 seq, u32 end_seq)
 {
-  return !seq_gt (seq, ts->rcv_nxt + tcp_actual_receive_window(ts))
-      && !seq_lt (end_seq, ts->rcv_las);
+  return seq_leq (end_seq, ts->rcv_las + ts->rcv_wnd)
+      && seq_geq (seq, ts->rcv_las);
 }
 
 void
@@ -147,10 +149,12 @@ tcp_options_parse (tcp_header_t *th, tcp_options_t *to)
 }
 
 always_inline int
-tcp_segment_test_paws (tcp_session_t *ts)
+tcp_segment_check_paws (tcp_session_t *ts)
 {
-  return tcp_opts_tstamp(&ts->opt) && ts->opt.tsval_recent
-      && timestamp_lt (ts->opt.tsval, ts->opt.tsval_recent);
+  /* XXX normally test for timestamp should be lt instead of leq, but for
+   * local testing this is not enough */
+  return tcp_opts_tstamp(&ts->opt) && ts->tsval_recent
+      && timestamp_lt (ts->opt.tsval, ts->tsval_recent);
 }
 
 /**
@@ -166,7 +170,7 @@ always_inline int
 tcp_segment_validate (vlib_main_t *vm, tcp_session_t *ts0, vlib_buffer_t *tb0,
                       tcp_header_t *th0, u8 is_ip4)
 {
-  u8 paws_passed;
+  u8 paws_failed;
 
   if (PREDICT_FALSE(!tcp_ack(th0) && !tcp_rst(th0) && !tcp_syn(th0)))
     return -1;
@@ -177,15 +181,16 @@ tcp_segment_validate (vlib_main_t *vm, tcp_session_t *ts0, vlib_buffer_t *tb0,
    * timestamp to echo and it's less than tsval_recent, drop segment
    * but still send an ACK in order to retain TCP's mechanism for detecting
    * and recovering from half-open connections */
-  if ((paws_passed = tcp_segment_test_paws (ts0)))
+  paws_failed = tcp_segment_check_paws (ts0);
+  if (paws_failed)
     {
       /* If it just so happens that a segment updates tsval_recent for a
        * segment over 24 days old, invalidate tsval_recent. */
-      if (timestamp_lt(ts0->opt.tsval_recent_age + TCP_PAWS_IDLE,
+      if (timestamp_lt(ts0->tsval_recent_age + TCP_PAWS_IDLE,
                        tcp_time_now()))
         {
           /* Age isn't reset until we get a valid tsval (bsd inspired) */
-          ts0->opt.tsval_recent = 0;
+          ts0->tsval_recent = 0;
         }
       else
         {
@@ -199,8 +204,8 @@ tcp_segment_validate (vlib_main_t *vm, tcp_session_t *ts0, vlib_buffer_t *tb0,
     }
 
   /* 1st: check sequence number */
-  if (!tcp_sequence_is_valid (ts0, vnet_buffer (tb0)->tcp.seq_number,
-                              vnet_buffer (tb0)->tcp.end_seq))
+  if (!tcp_segment_in_window (ts0, vnet_buffer (tb0)->tcp.seq_number,
+                              vnet_buffer (tb0)->tcp.seq_end))
     {
       if (!tcp_rst (th0))
         {
@@ -226,10 +231,10 @@ tcp_segment_validate (vlib_main_t *vm, tcp_session_t *ts0, vlib_buffer_t *tb0,
     }
 
   /* If PAWS passed and segment in window, save timestamp */
-  if (paws_passed)
+  if (!paws_failed)
     {
-      ts0->opt.tsval_recent = ts0->opt.tsval;
-      ts0->opt.tsval_recent_age = tcp_time_now ();
+      ts0->tsval_recent = ts0->opt.tsval;
+      ts0->tsval_recent_age = tcp_time_now ();
     }
 
   return 0;
@@ -404,11 +409,12 @@ tcp_segment_rcv (tcp_session_t *ts, u32 my_thread_index, vlib_buffer_t *b,
   if (!error)
     {
       /* Update receive next */
-      ts->rcv_nxt = vnet_buffer (b)->tcp.end_seq;
+      ts->rcv_nxt = vnet_buffer (b)->tcp.seq_end;
     }
 
-  /* Send ack*/
-  tcp_send_ack (ts, is_ip4);
+  /* Send ACK if segment was not a pure ACK */
+  if (n_data_bytes)
+    tcp_send_ack (ts, is_ip4);
 
   return error;
 }
@@ -476,8 +482,8 @@ tcp46_established_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
             }
 
           /* SYNs, FINs and data consume sequence numbers */
-          vnet_buffer (b0)->tcp.end_seq = vnet_buffer (b0)->tcp.seq_number
-              + tcp_is_syn (th0) + tcp_is_fin (th0) + n_advance_bytes0;
+          vnet_buffer (b0)->tcp.seq_end = vnet_buffer (b0)->tcp.seq_number
+              + tcp_is_syn (th0) + tcp_is_fin (th0) + n_data_bytes0;
 
           error0 = tcp_session_no_space (ts0, my_thread_index, n_data_bytes0);
           if (PREDICT_FALSE(error0))
@@ -717,6 +723,10 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
               n_advance_bytes0 += sizeof(ip60[0]);
             }
 
+          /* SYNs, FINs and data consume sequence numbers */
+          vnet_buffer (b0)->tcp.seq_end = vnet_buffer (b0)->tcp.seq_number
+              + tcp_is_syn (tcp0) + tcp_is_fin (tcp0) + n_data_bytes0;
+
           /*
            * Special treatment for CLOSED and SYN-SENT
            */
@@ -889,6 +899,9 @@ VLIB_REGISTER_NODE (tcp4_rcv_process_node) = {
   /* Takes a vector of packets. */
   .vector_size = sizeof (u32),
 
+  .n_errors = TCP_N_ERROR,
+  .error_strings = tcp_error_strings,
+
   .n_next_nodes = TCP_RCV_PROCESS_N_NEXT,
   .next_nodes = {
 #define _(s,n) [TCP_RCV_PROCESS_NEXT_##s] = n,
@@ -902,6 +915,9 @@ VLIB_REGISTER_NODE (tcp6_rcv_process_node) = {
   .name = "tcp6-rcv-process",
   /* Takes a vector of packets. */
   .vector_size = sizeof (u32),
+
+  .n_errors = TCP_N_ERROR,
+  .error_strings = tcp_error_strings,
 
   .n_next_nodes = TCP_RCV_PROCESS_N_NEXT,
   .next_nodes = {
@@ -995,10 +1011,11 @@ tcp46_listen_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
 
           /* 3. check for a SYN (did that already) */
 
+          /* Create child session and send SYN-ACK */
           pool_get(tm->sessions[my_thread_index], child0);
           child0->s_t_index = child0 - tm->sessions[my_thread_index];
           child0->s_lcl_port = ts0->s_lcl_port;
-          child0->s_rmt_port = clib_net_to_host_u16(th0->src_port);
+          child0->s_rmt_port = th0->src_port;
           if (is_ip4)
             {
               child0->s_lcl_ip4.as_u32 = ip40->dst_address.as_u32;
@@ -1030,8 +1047,8 @@ tcp46_listen_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
                * segments are used to initialize PAWS. */
               if (tcp_opts_tstamp (&child0->opt))
                 {
-                    child0->opt.tsval_recent = child0->opt.tsval;
-                    child0->opt.tsval_recent_age = tcp_time_now ();
+                    child0->tsval_recent = child0->opt.tsval;
+                    child0->tsval_recent_age = tcp_time_now ();
                 }
               /* send syn-ack */
               tcp_send_synack (child0, is_ip4);
@@ -1243,13 +1260,11 @@ tcp46_input_inline (vlib_main_t * vm,
           /* Session exists */
           if (PREDICT_TRUE(0 != s0))
             {
-              if (PREDICT_TRUE(s0->session_state == SESSION_STATE_READY))
-                ts0 = tcp_session_get (s0->transport_session_index,
-                                       my_thread_index);
-              else if (s0->session_state == SESSION_STATE_LISTENING)
+              if (PREDICT_FALSE (s0->session_state == SESSION_STATE_LISTENING))
                 ts0 = tcp_listener_get (s0->transport_session_index);
               else
-                goto drop;
+                ts0 = tcp_session_get (s0->transport_session_index,
+                                       my_thread_index);
 
               /* Save session index */
               vnet_buffer (b0)->tcp.session_index = s0->transport_session_index;
@@ -1264,7 +1279,6 @@ tcp46_input_inline (vlib_main_t * vm,
               error0 = tm->dispatch_table[ts0->state][flags0].error;
             }
 
-         drop:
           b0->error = error0 ? node->errors[error0] : 0;
 
           if (PREDICT_FALSE(b0->flags & VLIB_BUFFER_IS_TRACED))

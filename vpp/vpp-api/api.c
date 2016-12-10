@@ -7036,6 +7036,8 @@ vl_api_accept_session_reply_t_handler (vl_api_accept_session_reply_t * mp)
       break;
 
     case SESSION_TYPE_IP4_TCP:
+      s->session_state = SESSION_STATE_READY;
+      break;
     case SESSION_TYPE_IP6_TCP:
     case SESSION_TYPE_IP6_UDP:
     default:

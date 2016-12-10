@@ -90,6 +90,12 @@ typedef struct _tcp_session
   u32 iss;              /**< initial sent sequence */
   u32 irs;              /**< initial remote sequence */
 
+  /* Options */
+  u8 rcv_wscale;        /**< Window scale to advertise to peer */
+  u8 snd_wscale;        /**< Window scale to use when sending */
+  u32 tsval_recent;     /**< last timestamp received */
+  u32 tsval_recent_age; /**< when last updated tstamp_recent*/
+
   u16 max_segment_size;
   u8 remote_window_scale;
   u8 local_window_scale;
@@ -245,10 +251,12 @@ tcp_end_seq (tcp_header_t *th, u32 len)
 #define seq_lt(_s1, _s2) ((i32)((_s1)-(_s2)) < 0)
 #define seq_leq(_s1, _s2) ((i32)((_s1)-(_s2)) <= 0)
 #define seq_gt(_s1, _s2) ((i32)((_s1)-(_s2)) > 0)
+#define seq_geq(_s1, _s2) ((i32)((_s1)-(_s2)) >= 0)
+
 
 /* Modulo arithmetic for timestamps */
 #define timestamp_lt(_t1, _t2) ((i32)((_t1)-(_t2)) < 0)
-
+#define timestamp_leq(_t1, _t2) ((i32)((_t1)-(_t2)) <= 0)
 
 /**
  * Compute actual receive window. Peer might have pushed more data than our

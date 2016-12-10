@@ -83,6 +83,32 @@ tcp_mss_to_advertise (tcp_session_t *ts)
 }
 
 /**
+ * Compute initial window and scale factor. As per RFC1323, window field in
+ * SYN and SYN-ACK segments is never scaled.
+ */
+u32
+tcp_initial_window_to_advertise (tcp_session_t *ts, u32 my_thread_index)
+{
+  stream_session_t *s;
+  u32 available_space;
+  u8 wnd_scale = 0;
+
+  s = stream_session_get (ts->s_s_index, my_thread_index);
+
+  /* XXX Assuming here that we got max fifo size */
+  available_space = svm_fifo_max_enqueue (s->server_rx_fifo);
+
+  while (wnd_scale < TCP_MAX_WND_SCALE
+      && (available_space >> wnd_scale) > TCP_MAX_WND)
+    wnd_scale++;
+
+  ts->rcv_wscale = wnd_scale;
+  ts->rcv_wnd = clib_min (available_space, TCP_MAX_WND << ts->rcv_wscale);
+
+  return clib_min (ts->rcv_wnd, TCP_MAX_WND);
+}
+
+/**
  * Compute and return window to advertise, scaled as per RFC1323
  */
 u32
@@ -94,13 +120,18 @@ tcp_window_to_advertise (tcp_session_t *ts, u32 my_thread_index)
   s = stream_session_get (ts->s_s_index, my_thread_index);
 
   available_space = svm_fifo_max_enqueue (s->server_rx_fifo);
-  wnd = clib_min (available_space, TCP_MAX_WND << ts->opt.wscale_snd);
+  wnd = clib_min (available_space, TCP_MAX_WND << ts->rcv_wscale);
   ts->rcv_wnd = wnd;
 
-  return wnd >> ts->opt.wscale_snd;
+  return wnd >> ts->rcv_wscale;
 }
 
-void
+/**
+ * Write TCP options to segment.
+ *
+ * It involves some magic padding of options as observed for bsd.
+ */
+u32
 tcp_options_write (u8 *data, tcp_options_t * opts)
 {
   u32 opts_len = 0;
@@ -116,8 +147,33 @@ tcp_options_write (u8 *data, tcp_options_t * opts)
       opts_len += TCP_OPTION_LEN_MSS;
     }
 
+  if (tcp_opts_wscale(opts))
+    {
+//      while (opts_len % 2)
+//        {
+//          opts_len += TCP_OPTION_LEN_NOOP;
+//          *data++ = TCP_OPTION_NOOP;
+//        }
+      *data++ = TCP_OPTION_WINDOW_SCALE;
+      *data++ = TCP_OPTION_LEN_WINDOW_SCALE;
+      *data++ = opts->wscale;
+      opts_len += TCP_OPTION_LEN_WINDOW_SCALE;
+    }
+  /* don't add sack for now */
+  if (0)
+    {
+      *data++ = TCP_OPTION_SACK_PERMITTED;
+      *data++ = TCP_OPTION_LEN_SACK_PERMITTED;
+      opts_len += TCP_OPTION_LEN_SACK_PERMITTED;
+    }
+
   if (tcp_opts_tstamp(opts))
     {
+//      while (opts_len % 4 != 2)
+//        {
+//          opts_len += TCP_OPTION_LEN_NOOP;
+//          *data++ = TCP_OPTION_NOOP;
+//        }
       *data++ = TCP_OPTION_TIMESTAMP;
       *data++ = TCP_OPTION_LEN_TIMESTAMP;
       buf = clib_host_to_net_u32 (opts->tsval);
@@ -127,14 +183,6 @@ tcp_options_write (u8 *data, tcp_options_t * opts)
       clib_memcpy (data, &buf, sizeof (opts->tsecr));
       data += sizeof (opts->tsecr);
       opts_len += TCP_OPTION_LEN_TIMESTAMP;
-    }
-
-  if (tcp_opts_wscale(opts))
-    {
-      *data++ = TCP_OPTION_WINDOW_SCALE;
-      *data++ = TCP_OPTION_LEN_WINDOW_SCALE;
-      *data++ = opts->wscale;
-      opts_len += TCP_OPTION_LEN_WINDOW_SCALE;
     }
 
   /* Terminate TCP options */
@@ -150,6 +198,7 @@ tcp_options_write (u8 *data, tcp_options_t * opts)
       *data++ = TCP_OPTION_NOOP;
       opts_len += TCP_OPTION_LEN_NOOP;
     }
+  return opts_len;
 }
 
 always_inline int
@@ -158,13 +207,13 @@ tcp_make_syn_or_synack_options (tcp_session_t *ts, tcp_options_t *opts)
   u8 len = 0;
 
   opts->flags |= TCP_OPTS_FLAG_MSS;
-  opts->mss = 1518; /*XXX discover that */
+  opts->mss = 1460; /*XXX discover that */
   len += TCP_OPTION_LEN_MSS;
 
   if (tcp_opts_wscale(&ts->opt))
     {
       opts->flags |= TCP_OPTS_FLAG_WSCALE;
-      opts->wscale = ts->opt.wscale_snd;
+      opts->wscale = ts->rcv_wscale;
       len += TCP_OPTION_LEN_WINDOW_SCALE;
     }
 
@@ -172,7 +221,7 @@ tcp_make_syn_or_synack_options (tcp_session_t *ts, tcp_options_t *opts)
     {
       opts->flags |= TCP_OPTS_FLAG_TSTAMP;
       opts->tsval = tcp_time_now ();
-      opts->tsecr = ts->opt.tsval_recent;
+      opts->tsecr = ts->tsval_recent;
       len += TCP_OPTION_LEN_TIMESTAMP;
     }
 
@@ -186,11 +235,13 @@ tcp_make_established_options (tcp_session_t *ts, tcp_options_t *opts)
 {
   u8 len = 0;
 
+  opts->flags = 0;
+
   if (tcp_opts_tstamp(&ts->opt))
     {
       opts->flags |= TCP_OPTS_FLAG_TSTAMP;
       opts->tsval = tcp_time_now ();
-      opts->tsecr = ts->opt.tsval_recent;
+      opts->tsecr = ts->tsval_recent;
       len += TCP_OPTION_LEN_TIMESTAMP;
     }
 
@@ -214,6 +265,7 @@ tcp_send_ack (tcp_session_t *ts, u8 is_ip4)
   tcp_options_t _snd_opts, *snd_opts = &_snd_opts;
   u8 tcp_opts_len, tcp_hdr_opts_len;
   tcp_header_t *th;
+  u16 wnd;
 
   if (vlib_buffer_alloc (vm, &bi, 1) != 1)
     {
@@ -226,6 +278,7 @@ tcp_send_ack (tcp_session_t *ts, u8 is_ip4)
   /* leave enough space for headers */
   vlib_buffer_make_headroom (b, MAX_HDRS_LEN);
 
+  wnd = tcp_window_to_advertise(ts, vm->cpu_index);
   /* Make and write options */
   tcp_opts_len = tcp_make_established_options (ts, snd_opts);
   tcp_hdr_opts_len = tcp_opts_len + sizeof (tcp_header_t);
@@ -234,13 +287,15 @@ tcp_send_ack (tcp_session_t *ts, u8 is_ip4)
   th = pkt_push_tcp (vm, b, ts->s_lcl_port, ts->s_rmt_port,
                      tcp_actual_snd_sequence (ts), ts->rcv_nxt,
                      tcp_hdr_opts_len, TCP_FLAG_ACK,
-                     tcp_window_to_advertise(ts, vm->cpu_index));
+                     wnd);
 
   tcp_options_write ((u8 *)(th + 1), snd_opts);
   ts->rcv_las = ts->rcv_nxt;
 
   vnet_buffer (b)->tcp.session_index = ts->s_t_index;
   vnet_buffer (b)->tcp.flags = TCP_FLAG_ACK;
+
+  b->flags |= VNET_BUFFER_LOCALLY_ORIGINATED;
 
   /* Get frame to the right node
    * XXX should we queue acks and deliver as burst? */
@@ -269,6 +324,7 @@ tcp_send_synack (tcp_session_t *ts, u8 is_ip4)
   tcp_options_t _snd_opts, *snd_opts = &_snd_opts;
   u8 tcp_opts_len, tcp_hdr_opts_len;
   tcp_header_t *th;
+  u16 initial_wnd;
   u32 time_now;
 
   memset(snd_opts, 0, sizeof (*snd_opts));
@@ -286,7 +342,12 @@ tcp_send_synack (tcp_session_t *ts, u8 is_ip4)
 
   /* Set random initial sequence */
   time_now = tcp_time_now();
+
   ts->iss = random_u32 (&time_now);
+  ts->snd_una = ts->iss;
+  ts->snd_nxt = ts->iss + 1;
+
+  initial_wnd = tcp_initial_window_to_advertise (ts, vm->cpu_index);
 
   /* Make and write options */
   tcp_opts_len = tcp_make_syn_or_synack_options (ts, snd_opts);
@@ -294,13 +355,15 @@ tcp_send_synack (tcp_session_t *ts, u8 is_ip4)
 
   th = pkt_push_tcp (vm, b, ts->s_lcl_port, ts->s_rmt_port, ts->iss,
                      ts->rcv_nxt, tcp_hdr_opts_len, TCP_FLAG_SYN | TCP_FLAG_ACK,
-                     tcp_window_to_advertise(ts, vm->cpu_index));
+                     initial_wnd);
 
   tcp_options_write ((u8 *)(th + 1), snd_opts);
   ts->rcv_las = ts->rcv_nxt;
 
   vnet_buffer (b)->tcp.session_index = ts->s_t_index;
   vnet_buffer (b)->tcp.flags = TCP_FLAG_SYN | TCP_FLAG_ACK;
+
+  b->flags |= VNET_BUFFER_LOCALLY_ORIGINATED;
 
   /* Get frame to the right node
    * XXX should we queue acks and deliver as burst? */
@@ -367,7 +430,7 @@ tcp_send_reset (vlib_buffer_t *pkt, u8 is_ip4)
     {
       flags = TCP_FLAG_RST | TCP_FLAG_ACK;
       seq = 0;
-      ack = clib_host_to_net_u32(vnet_buffer (pkt)->tcp.end_seq);
+      ack = clib_host_to_net_u32(vnet_buffer (pkt)->tcp.seq_end);
     }
 
   th = pkt_push_tcp_net_order (vm, b, pkt_th->dst_port, pkt_th->src_port, seq,
@@ -377,8 +440,7 @@ tcp_send_reset (vlib_buffer_t *pkt, u8 is_ip4)
     {
       ip4_header_t * ih, *pkt_ih;
 
-      /* XXX options */
-      pkt_ih = (ip4_header_t *)((u8 *)th - sizeof(ip4_header_t));
+      pkt_ih = vlib_buffer_get_current (b);
 
       ASSERT ((pkt_ih->ip_version_and_header_length & 0xF0) == 0x40);
 
@@ -390,8 +452,8 @@ tcp_send_reset (vlib_buffer_t *pkt, u8 is_ip4)
     {
       ip6_header_t * ih, *pkt_ih;
       int bogus = ~0;
-      /* XXX options */
-      pkt_ih = (ip6_header_t *)((u8 *)th - sizeof(ip6_header_t));
+
+      pkt_ih = vlib_buffer_get_current (b);
 
       ASSERT ((pkt_ih->ip_version_traffic_class_and_flow_label & 0xF0) == 0x60);
       ih = pkt_push_ipv6 (vm, b, &pkt_ih->dst_address, &pkt_ih->dst_address,
@@ -399,6 +461,8 @@ tcp_send_reset (vlib_buffer_t *pkt, u8 is_ip4)
       th->checksum = ip6_tcp_udp_icmp_compute_checksum (vm, b, ih, &bogus);
       ASSERT(!bogus);
     }
+
+  b->flags |= VNET_BUFFER_LOCALLY_ORIGINATED;
 
   /* Send to IP lookup */
   next_index = is_ip4 ? ip4_lookup_node.index : ip6_lookup_node.index;
@@ -563,11 +627,11 @@ tcp_uri_tx_packetize_inline (vlib_main_t *vm, stream_session_t *s,
   u32 max_dequeue, len_to_dequeue, advertise_wnd;
   u32 my_thread_index = vm->cpu_index;
   svm_fifo_t * f;
-  u8 * data;
   u16 snd_mss;
   tcp_session_t *ts;
-  u8 tcp_opts_len, tcp_hdr_opts_len;
+  u8 tcp_opts_len, tcp_hdr_opts_len, opts_write_len;
   tcp_options_t _snd_opts, *snd_opts = &_snd_opts;
+  tcp_header_t *th;
 
   ASSERT(s->session_thread_index == my_thread_index);
 
@@ -579,9 +643,7 @@ tcp_uri_tx_packetize_inline (vlib_main_t *vm, stream_session_t *s,
   /* Make room for headers */
   vlib_buffer_make_headroom (b, MAX_HDRS_LEN);
 
-  data = vlib_buffer_get_current (b);
-
-  /* TODO peek instead of dequeue since some data may not have been acked */
+  /* TODO peek instead of dequeue since some data may be lost */
   /* TODO Nagle */
 
   /* Dequeue a bunch of data into the packet buffer */
@@ -595,19 +657,27 @@ tcp_uri_tx_packetize_inline (vlib_main_t *vm, stream_session_t *s,
   /* Get the maximum segment size we're willing to accept */
   snd_mss = tcp_mss_to_advertise (ts);
 
-  /* Dequeue the actual data */
-  len_to_dequeue = max_dequeue < snd_mss ? max_dequeue : snd_mss;
-  svm_fifo_dequeue (f, 0, len_to_dequeue, data);
-
   /* Make and write options */
   tcp_opts_len = tcp_make_established_options (ts, snd_opts);
   tcp_hdr_opts_len = tcp_opts_len + sizeof (tcp_header_t);
 
   advertise_wnd = tcp_window_to_advertise (ts, my_thread_index);
 
-  pkt_push_tcp (vm, b, ts->s_lcl_port, ts->s_rmt_port,
-                tcp_actual_snd_sequence (ts), ts->rcv_nxt, tcp_hdr_opts_len,
-                TCP_FLAG_ACK, advertise_wnd);
+  th = pkt_push_tcp (vm, b, ts->s_lcl_port, ts->s_rmt_port,
+                     tcp_actual_snd_sequence (ts), ts->rcv_nxt,
+                     tcp_hdr_opts_len, TCP_FLAG_ACK, advertise_wnd);
+
+  opts_write_len = tcp_options_write ((u8 *)(th + 1), snd_opts);
+
+  ASSERT (opts_write_len == tcp_opts_len);
+
+  /* Dequeue the actual data */
+  len_to_dequeue = max_dequeue < snd_mss ? max_dequeue : snd_mss;
+  svm_fifo_dequeue (f, 0, len_to_dequeue, ((u8 *)th) + tcp_hdr_opts_len);
+  b->current_length += len_to_dequeue;
+
+  ts->rcv_las = ts->rcv_nxt;
+  ts->snd_nxt += len_to_dequeue;
 
   if (is_ip4)
     return URI_QUEUE_NEXT_TCP_IP4_OUTPUT;

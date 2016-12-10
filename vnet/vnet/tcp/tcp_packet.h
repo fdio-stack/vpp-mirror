@@ -117,6 +117,7 @@ typedef enum tcp_option_type
   _ (TSTAMP_SEEN)       /**< Seen timestamp in last packet */           \
   _ (TSTAMP)            /**< Timestamp capability advertised in SYN */  \
   _ (WSCALE)            /**< Wnd scale capability advertised in SYN */  \
+  _ (SACK_PERMITTED)    /**< SACK capability advertised in SYN */       \
   _ (SACK)              /**< SACK capability advertised in SYN */
 
 enum
@@ -143,13 +144,6 @@ typedef struct
   u8 wscale;            /**< Window scale advertised by peer */
   u32 tsval;            /**< Peer's timestamp value */
   u32 tsecr;            /**< Echoed/reflected time stamp */
-
-  /* Send options */
-  u8 wscale_snd;        /**< Window scale to advertise to peer */
-
-  /* Session variables */
-  u32 tsval_recent;     /**< last timestamp received */
-  u32 tsval_recent_age; /**< when last updated tstamp_recent*/
 } tcp_options_t;
 
 /* Flag tests that return 0 or !0 */
@@ -158,6 +152,7 @@ typedef struct
 #define tcp_opts_tstamp(_to) ((_to)->flags & TCP_OPTS_FLAG_TSTAMP)
 #define tcp_opts_wscale(_to) ((_to)->flags & TCP_OPTS_FLAG_WSCALE)
 #define tcp_opts_sack(_to) ((_to)->flags & TCP_OPTS_FLAG_SACK)
+#define tcp_opts_sack_permitted(_to) ((_to)->flags & TCP_OPTS_FLAG_SACK_PERMITTED)
 
 
 /* TCP option lengths */
@@ -169,7 +164,7 @@ typedef struct
 #define TCP_OPTION_LEN_TIMESTAMP        10
 
 #define TCP_MAX_WND                     65535U
-#define TCP_MAX_WND_SCALE               14
+#define TCP_MAX_WND_SCALE               14      /* See RFC 1323 */
 #define TCP_OPTS_ALIGN                  4
 #endif /* included_tcp_packet_h */
 

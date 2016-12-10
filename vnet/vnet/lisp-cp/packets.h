@@ -28,8 +28,8 @@ void *
 pkt_push_tcp_net_order (vlib_main_t * vm, vlib_buffer_t * b, u16 sp, u16 dp, u32 seq,
                         u32 ack, u8 tcp_hdr_opts_len, u8 flags, u16 wnd);
 void *
-pkt_push_tcp (vlib_main_t * vm, vlib_buffer_t * b, u16 sp, u16 dp, u32 seq,
-              u32 ack, u8 tcp_hdr_opts_len, u8 flags, u16 wnd);
+pkt_push_tcp (vlib_main_t * vm, vlib_buffer_t * b, u16 sp_net, u16 dp_net,
+              u32 seq, u32 ack, u8 tcp_hdr_opts_len, u8 flags, u16 wnd);
 void *
 pkt_push_ipv4 (vlib_main_t * vm, vlib_buffer_t * b, ip4_address_t * src,
                ip4_address_t * dst, int proto);
