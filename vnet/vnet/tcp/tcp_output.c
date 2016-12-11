@@ -675,6 +675,7 @@ tcp_uri_tx_packetize_inline (vlib_main_t *vm, stream_session_t *s,
   len_to_dequeue = max_dequeue < snd_mss ? max_dequeue : snd_mss;
   svm_fifo_dequeue (f, 0, len_to_dequeue, ((u8 *)th) + tcp_hdr_opts_len);
   b->current_length += len_to_dequeue;
+  vnet_buffer (b)->tcp.session_index = s->transport_session_index;
 
   ts->rcv_las = ts->rcv_nxt;
   ts->snd_nxt += len_to_dequeue;
