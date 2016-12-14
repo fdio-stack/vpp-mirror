@@ -74,6 +74,9 @@ typedef struct
 
   int i_am_master;
 
+  /* drop all packets */
+  int drop_packets;
+
   /* Our event queue */
   unix_shared_memory_queue_t * our_event_queue;
 
@@ -224,8 +227,8 @@ uri_tcp_client_test (uri_tcp_test_main_t * utm)
   clib_warning ("unimplemented");
 }
 
-void handle_fifo_event_server_rx (uri_tcp_test_main_t *utm,
-                                  fifo_event_t * e)
+void
+handle_fifo_event_server_rx (uri_tcp_test_main_t *utm, fifo_event_t * e)
 {
   svm_fifo_t * rx_fifo, * tx_fifo;
   int nbytes;
@@ -237,13 +240,21 @@ void handle_fifo_event_server_rx (uri_tcp_test_main_t *utm,
   rx_fifo = e->fifo;
   tx_fifo = utm->sessions[rx_fifo->client_session_index].server_tx_fifo;
 
-  do {
-    nbytes = svm_fifo_dequeue_nowait2 (rx_fifo, 0,
-                                       vec_len(utm->rx_buf), utm->rx_buf);
-  } while (nbytes <= 0);
-  do {
-    rv = svm_fifo_enqueue_nowait2 (tx_fifo, 0, nbytes, utm->rx_buf);
-  } while (rv == -2);
+  do
+    {
+      nbytes = svm_fifo_dequeue_nowait2 (rx_fifo, 0, vec_len(utm->rx_buf),
+                                         utm->rx_buf);
+    }
+  while (nbytes <= 0);
+
+  if (!utm->drop_packets)
+    {
+      do
+        {
+          rv = svm_fifo_enqueue_nowait2 (tx_fifo, 0, nbytes, utm->rx_buf);
+        }
+      while (rv == -2);
+    }
 
   /* Fabricate TX event, send to vpp */
   evt.fifo = tx_fifo;
@@ -255,8 +266,8 @@ void handle_fifo_event_server_rx (uri_tcp_test_main_t *utm,
   unix_shared_memory_queue_add (q, (u8 *)&evt, 0 /* do wait for mutex */);
 }
 
-
-void handle_event_queue (uri_tcp_test_main_t * utm)
+void
+handle_event_queue (uri_tcp_test_main_t * utm)
 {
   fifo_event_t _e, *e = &_e;;
 
@@ -500,7 +511,7 @@ main (int argc, char **argv)
   mheap_t *h;
   session_t * session;
   int i;
-  int i_am_master = 1;
+  int i_am_master = 1, drop_packets = 0;
 
   clib_mem_init (0, 256 << 20);
 
@@ -539,6 +550,8 @@ main (int argc, char **argv)
         i_am_master = 1;
       else if (unformat (a, "slave"))
         i_am_master = 0;
+      else if (unformat (a, "drop"))
+        drop_packets = 1;
       else
         {
           fformat (stderr, "%s: usage [master|slave]\n");
@@ -549,6 +562,7 @@ main (int argc, char **argv)
   utm->uri = format (0, "%s%c", bind_name, 0);
   utm->i_am_master = i_am_master;
   utm->segment_main = &svm_fifo_segment_main;
+  utm->drop_packets = drop_packets;
 
   setup_signal_handlers();
   uri_api_hookup (utm);

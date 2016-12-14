@@ -58,22 +58,6 @@ format_tcp_tx_trace (u8 * s, va_list * args)
   return s;
 }
 
-/**
- * Sequence number to send.
- * If window has been shrunk our snd_nxt may be outside the window. What
- * sequence number should be used is unclear. This just reproduces what
- * Linux does.
- */
-always_inline u32
-tcp_actual_snd_sequence (const tcp_session_t *ts)
-{
-  u32 wnd_end = tcp_snd_wnd_end (ts);
-  if (seq_lt (wnd_end, ts->snd_nxt))
-    return ts->snd_nxt;
-  else
-    return wnd_end;
-}
-
 u16
 tcp_mss_to_advertise (tcp_session_t *ts)
 {
@@ -82,6 +66,15 @@ tcp_mss_to_advertise (tcp_session_t *ts)
   return ts->opt.mss;
 }
 
+static u8
+tcp_window_compute_scale (u32 available_space)
+{
+  u8 wnd_scale = 0;
+  while (wnd_scale < TCP_MAX_WND_SCALE
+      && (available_space >> wnd_scale) > TCP_MAX_WND)
+    wnd_scale++;
+  return wnd_scale;
+}
 /**
  * Compute initial window and scale factor. As per RFC1323, window field in
  * SYN and SYN-ACK segments is never scaled.
@@ -91,18 +84,12 @@ tcp_initial_window_to_advertise (tcp_session_t *ts, u32 my_thread_index)
 {
   stream_session_t *s;
   u32 available_space;
-  u8 wnd_scale = 0;
 
   s = stream_session_get (ts->s_s_index, my_thread_index);
 
   /* XXX Assuming here that we got max fifo size */
   available_space = svm_fifo_max_enqueue (s->server_rx_fifo);
-
-  while (wnd_scale < TCP_MAX_WND_SCALE
-      && (available_space >> wnd_scale) > TCP_MAX_WND)
-    wnd_scale++;
-
-  ts->rcv_wscale = wnd_scale;
+  ts->rcv_wscale = tcp_window_compute_scale (available_space);
   ts->rcv_wnd = clib_min (available_space, TCP_MAX_WND << ts->rcv_wscale);
 
   return clib_min (ts->rcv_wnd, TCP_MAX_WND);
@@ -115,11 +102,18 @@ u32
 tcp_window_to_advertise (tcp_session_t *ts, u32 my_thread_index)
 {
   stream_session_t *s;
-  u32 available_space, wnd;
+  u32 available_space, wnd, scaled_space;
 
   s = stream_session_get (ts->s_s_index, my_thread_index);
 
   available_space = svm_fifo_max_enqueue (s->server_rx_fifo);
+  scaled_space = available_space >> ts->rcv_wscale;
+
+  /* Need to update scale */
+  if (PREDICT_FALSE((scaled_space == 0 && available_space != 0))
+      || (scaled_space >= TCP_MAX_WND))
+    ts->rcv_wscale = tcp_window_compute_scale (available_space);
+
   wnd = clib_min (available_space, TCP_MAX_WND << ts->rcv_wscale);
   ts->rcv_wnd = wnd;
 
@@ -250,77 +244,83 @@ tcp_make_established_options (tcp_session_t *ts, tcp_options_t *opts)
   return len;
 }
 
+#define tcp_get_free_buffer_index(tm, bidx)                             \
+do {                                                                    \
+  u32 *my_tx_buffers, n_free_buffers;                                   \
+  u32 cpu_index = tm->vlib_main->cpu_index;                             \
+  my_tx_buffers = tm->tx_buffers[cpu_index];                            \
+  if (PREDICT_FALSE(vec_len (my_tx_buffers) == 0))                      \
+    {                                                                   \
+      n_free_buffers = 32;      /* TODO config or macro */              \
+      vec_validate (my_tx_buffers, n_free_buffers - 1);                 \
+      _vec_len(my_tx_buffers) = vlib_buffer_alloc_from_free_list (      \
+          tm->vlib_main, my_tx_buffers, n_free_buffers,                 \
+          VLIB_BUFFER_DEFAULT_FREE_LIST_INDEX);                         \
+      tm->tx_buffers[cpu_index] = my_tx_buffers;                        \
+    }                                                                   \
+  /* buffer shortage */                                                 \
+  if (PREDICT_FALSE (vec_len (my_tx_buffers) == 0))                     \
+    return;                                                             \
+  *bidx = my_tx_buffers[_vec_len (my_tx_buffers)-1];                    \
+  _vec_len (my_tx_buffers) -= 1;                                        \
+} while (0)
+
+#define tcp_reuse_buffer(vm, b)                                         \
+do {                                                                    \
+  vlib_buffer_t *it = b;                                                \
+  do {                                                                  \
+      it->current_data = 0;                                             \
+      it->current_length = 0;                                           \
+      it->total_length_not_including_first_buffer = 0;                  \
+  } while ((it->flags & VLIB_BUFFER_NEXT_PRESENT)                       \
+      && (it = vlib_get_buffer (vm, it->next_buffer)));                 \
+} while (0)
+
+
 /**
  * Queue ack for sending
  */
 void
-tcp_send_ack (tcp_session_t *ts, u8 is_ip4)
+tcp_make_ack (tcp_session_t *ts, vlib_buffer_t *b)
 {
-  vlib_buffer_t *b;
-  vlib_frame_t *f;
-  u32 bi;
   tcp_main_t *tm = vnet_get_tcp_main ();
   vlib_main_t *vm = tm->vlib_main;
-  u32 *to_next, next_index;
   tcp_options_t _snd_opts, *snd_opts = &_snd_opts;
   u8 tcp_opts_len, tcp_hdr_opts_len;
   tcp_header_t *th;
   u16 wnd;
 
-  if (vlib_buffer_alloc (vm, &bi, 1) != 1)
-    {
-      clib_warning ("Can't allocate buffer!");
-      return;
-    }
-
-  b = vlib_get_buffer (vm, bi);
+  tcp_reuse_buffer (vm, b);
 
   /* leave enough space for headers */
   vlib_buffer_make_headroom (b, MAX_HDRS_LEN);
 
-  wnd = tcp_window_to_advertise(ts, vm->cpu_index);
+  wnd = tcp_window_to_advertise (ts, vm->cpu_index);
+
   /* Make and write options */
   tcp_opts_len = tcp_make_established_options (ts, snd_opts);
   tcp_hdr_opts_len = tcp_opts_len + sizeof (tcp_header_t);
 
-  /* Window in syn and syn|ack segments is not scaled */
-  th = pkt_push_tcp (vm, b, ts->s_lcl_port, ts->s_rmt_port,
-                     tcp_actual_snd_sequence (ts), ts->rcv_nxt,
-                     tcp_hdr_opts_len, TCP_FLAG_ACK,
-                     wnd);
+  th = pkt_push_tcp (vm, b, ts->s_lcl_port, ts->s_rmt_port, ts->snd_nxt,
+                     ts->rcv_nxt, tcp_hdr_opts_len, TCP_FLAG_ACK, wnd);
 
-  tcp_options_write ((u8 *)(th + 1), snd_opts);
+  tcp_options_write ((u8 *) (th + 1), snd_opts);
+
+  /* Update session and buffer */
   ts->rcv_las = ts->rcv_nxt;
 
   vnet_buffer (b)->tcp.session_index = ts->s_t_index;
   vnet_buffer (b)->tcp.flags = TCP_FLAG_ACK;
-
-  b->flags |= VNET_BUFFER_LOCALLY_ORIGINATED;
-
-  /* Get frame to the right node
-   * XXX should we queue acks and deliver as burst? */
-  next_index = is_ip4 ? tcp4_output_node.index : tcp6_output_node.index;
-  f = vlib_get_frame_to_node (vm, next_index);
-
-  /* Enqueue the packet */
-  to_next = vlib_frame_vector_args (f);
-  to_next[0] = bi;
-  f->n_vectors = 1;
-  vlib_put_frame_to_node (vm, next_index, f);
 }
 
 /**
  * Queue synack for sending
  */
 void
-tcp_send_synack (tcp_session_t *ts, u8 is_ip4)
+tcp_make_synack (tcp_session_t *ts, vlib_buffer_t *b)
 {
-  vlib_buffer_t *b;
-  vlib_frame_t *f;
-  u32 bi;
   tcp_main_t *tm = vnet_get_tcp_main ();
   vlib_main_t *vm = tm->vlib_main;
-  u32 *to_next, next_index;
   tcp_options_t _snd_opts, *snd_opts = &_snd_opts;
   u8 tcp_opts_len, tcp_hdr_opts_len;
   tcp_header_t *th;
@@ -329,13 +329,7 @@ tcp_send_synack (tcp_session_t *ts, u8 is_ip4)
 
   memset(snd_opts, 0, sizeof (*snd_opts));
 
-  if (vlib_buffer_alloc (vm, &bi, 1) != 1)
-    {
-      clib_warning ("Can't allocate buffer!");
-      return;
-    }
-
-  b = vlib_get_buffer (vm, bi);
+  tcp_reuse_buffer (vm, b);
 
   /* Leave enough space for headers */
   vlib_buffer_make_headroom (b, MAX_HDRS_LEN);
@@ -362,29 +356,16 @@ tcp_send_synack (tcp_session_t *ts, u8 is_ip4)
 
   vnet_buffer (b)->tcp.session_index = ts->s_t_index;
   vnet_buffer (b)->tcp.flags = TCP_FLAG_SYN | TCP_FLAG_ACK;
-
-  b->flags |= VNET_BUFFER_LOCALLY_ORIGINATED;
-
-  /* Get frame to the right node
-   * XXX should we queue acks and deliver as burst? */
-  next_index = is_ip4 ? tcp4_output_node.index : tcp6_output_node.index;
-  f = vlib_get_frame_to_node (vm, next_index);
-
-  /* Enqueue the packet */
-  to_next = vlib_frame_vector_args (f);
-  to_next[0] = bi;
-  f->n_vectors = 1;
-  vlib_put_frame_to_node (vm, next_index, f);
 }
 
 void
-tcp_send_dupack (tcp_session_t *ts, u8 is_ip4)
+tcp_make_dupack (tcp_session_t *ts, u8 is_ip4)
 {
   clib_warning ("unimplemented");
 }
 
 void
-tcp_send_challange_ack (tcp_session_t *ts, u8 is_ip4)
+tcp_make_challange_ack (tcp_session_t *ts, u8 is_ip4)
 {
   clib_warning ("unimplemented");
 }
@@ -405,13 +386,10 @@ tcp_send_reset (vlib_buffer_t *pkt, u8 is_ip4)
   tcp_header_t *th, * pkt_th;
   u32 seq, ack;
 
-  if (vlib_buffer_alloc (vm, &bi, 1) != 1)
-    {
-      clib_warning ("Can't allocate buffer!");
-      return;
-    }
-
+  tcp_get_free_buffer_index (tm, &bi);
   b = vlib_get_buffer (vm, bi);
+
+  clib_warning ("sending reset");
 
   /* Leave enough space for headers */
   vlib_buffer_make_headroom (b, MAX_HDRS_LEN);
@@ -502,7 +480,7 @@ tcp46_output_inline (vlib_main_t * vm,
           vlib_buffer_t * b0;
           tcp_session_t *ts0;
           tcp_header_t *th0;
-          u32 error0 = TCP_ERROR_NO_LISTENER, next0 = TCP_OUTPUT_NEXT_DROP;
+          u32 error0 = TCP_ERROR_NONE, next0 = TCP_OUTPUT_NEXT_DROP;
 
           bi0 = from[0];
           to_next[0] = bi0;
@@ -537,13 +515,14 @@ tcp46_output_inline (vlib_main_t * vm,
 
           /* set fib index to default and lookup node */
           /* XXX network virtualization (vrf/vni)*/
-          vnet_buffer (b0)->sw_if_index[VLIB_TX] = 0;
+          vnet_buffer (b0)->sw_if_index[VLIB_RX] = 0;
+          vnet_buffer (b0)->sw_if_index[VLIB_TX] = (u32) ~ 0;
 
           b0->flags |= VNET_BUFFER_LOCALLY_ORIGINATED;
 
           next0 = is_ip4 ? TCP_OUTPUT_NEXT_IP4_LOOKUP : TCP_OUTPUT_NEXT_IP6_LOOKUP;
 
-          b0->error = node->errors[error0];
+          b0->error = error0 != 0 ? node->errors[error0] : 0;
           if (PREDICT_FALSE(b0->flags & VLIB_BUFFER_IS_TRACED))
             {
 
@@ -615,6 +594,8 @@ VLIB_REGISTER_NODE (tcp6_output_node) = {
   .format_trace = format_tcp_tx_trace,
 };
 
+VLIB_NODE_FUNCTION_MULTIARCH (tcp6_output_node, tcp6_output)
+
 /**
  * Read as much data as possible from the tx fifo, build a tcp packet and
  * ask that it be sent to tcp-output
@@ -663,9 +644,9 @@ tcp_uri_tx_packetize_inline (vlib_main_t *vm, stream_session_t *s,
 
   advertise_wnd = tcp_window_to_advertise (ts, my_thread_index);
 
-  th = pkt_push_tcp (vm, b, ts->s_lcl_port, ts->s_rmt_port,
-                     tcp_actual_snd_sequence (ts), ts->rcv_nxt,
-                     tcp_hdr_opts_len, TCP_FLAG_ACK, advertise_wnd);
+  th = pkt_push_tcp (vm, b, ts->s_lcl_port, ts->s_rmt_port, ts->snd_nxt,
+                     ts->rcv_nxt, tcp_hdr_opts_len, TCP_FLAG_ACK,
+                     advertise_wnd);
 
   opts_write_len = tcp_options_write ((u8 *)(th + 1), snd_opts);
 
@@ -699,7 +680,3 @@ tcp_uri_tx_packetize_ip6 (vlib_main_t *vm, stream_session_t *s,
 {
   return tcp_uri_tx_packetize_inline (vm, s, b, 0);
 }
-
-
-
-VLIB_NODE_FUNCTION_MULTIARCH (tcp6_output_node, tcp6_output)

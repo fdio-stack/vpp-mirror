@@ -172,6 +172,7 @@ uri_queue_node_fn (vlib_main_t * vm,
           bi0 = my_tx_buffers[buffer_freelist_index];
           buffer_freelist_index--;
           b0 = vlib_get_buffer (vm, bi0);
+          b0->error = 0;
 
           /* RX on the local interface. tx in default fib */
 	  vnet_buffer (b0)->sw_if_index[VLIB_RX] = 0;
@@ -260,7 +261,6 @@ VLIB_REGISTER_NODE (uri_queue_node) = {
     [URI_QUEUE_NEXT_IP6_LOOKUP] = "ip6-lookup",
     [URI_QUEUE_NEXT_TCP_IP4_OUTPUT] = "tcp4-output",
     [URI_QUEUE_NEXT_TCP_IP6_OUTPUT] = "tcp6-output",
-
   },
 };
 

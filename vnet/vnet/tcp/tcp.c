@@ -34,7 +34,9 @@ tcp_error_strings[] =
 };
 
 #define foreach_tcp_established_next            \
-  _ (DROP, "error-drop")
+  _ (DROP, "error-drop")                        \
+  _ (TCP4_OUTPUT, "tcp4-output")                \
+  _ (TCP6_OUTPUT, "tcp6-output")
 
 typedef enum _tcp_established_next
 {
@@ -43,6 +45,18 @@ typedef enum _tcp_established_next
 #undef _
   TCP_ESTABLISHED_N_NEXT,
 } tcp_established_next_t;
+
+#define foreach_tcp_rcv_process_next            \
+  _ (DROP, "error-drop")                        \
+  _ (TCP4_OUTPUT, "tcp4-output")                \
+  _ (TCP6_OUTPUT, "tcp6-output")
+typedef enum _tcp_rcv_process_next
+{
+#define _(s,n) TCP_RCV_PROCESS_NEXT_##s,
+  foreach_tcp_rcv_process_next
+#undef _
+  TCP_RCV_PROCESS_N_NEXT,
+} tcp_rcv_process_next_t;
 
 vlib_node_registration_t tcp4_established_node;
 vlib_node_registration_t tcp6_established_node;
@@ -148,6 +162,17 @@ tcp_options_parse (tcp_header_t *th, tcp_options_t *to)
     }
 }
 
+always_inline void
+tcp_set_output_next_index (u32 *node, u8 is_est, u8 is_ip4)
+{
+  if (is_est)
+    *node = is_ip4 ? TCP_ESTABLISHED_NEXT_TCP4_OUTPUT
+        : TCP_ESTABLISHED_NEXT_TCP6_OUTPUT;
+  else
+    *node = is_ip4 ? TCP_RCV_PROCESS_NEXT_TCP4_OUTPUT
+        : TCP_RCV_PROCESS_NEXT_TCP6_OUTPUT;
+}
+
 always_inline int
 tcp_segment_check_paws (tcp_session_t *ts)
 {
@@ -167,8 +192,8 @@ tcp_segment_check_paws (tcp_session_t *ts)
  * @return 0 if segments passes validation.
  */
 always_inline int
-tcp_segment_validate (vlib_main_t *vm, tcp_session_t *ts0, vlib_buffer_t *tb0,
-                      tcp_header_t *th0, u8 is_ip4)
+tcp_segment_validate (vlib_main_t *vm, tcp_session_t *ts0, vlib_buffer_t *b0,
+                      tcp_header_t *th0, u32 *next0, u8 is_est, u8 is_ip4)
 {
   u8 paws_failed;
 
@@ -197,19 +222,21 @@ tcp_segment_validate (vlib_main_t *vm, tcp_session_t *ts0, vlib_buffer_t *tb0,
           /* Drop after ack if not rst */
           if (!tcp_rst (th0))
             {
-              tcp_send_dupack (ts0, is_ip4);
+              tcp_make_ack (ts0, b0);
               return -1;
             }
         }
     }
 
   /* 1st: check sequence number */
-  if (!tcp_segment_in_window (ts0, vnet_buffer (tb0)->tcp.seq_number,
-                              vnet_buffer (tb0)->tcp.seq_end))
+  if (!tcp_segment_in_window (ts0, vnet_buffer (b0)->tcp.seq_number,
+                              vnet_buffer (b0)->tcp.seq_end))
     {
       if (!tcp_rst (th0))
         {
-          tcp_send_dupack (ts0, is_ip4);
+          /* Send dup ack */
+          tcp_make_ack(ts0, b0);
+          tcp_set_output_next_index (next0, is_est, is_ip4);
         }
       return -1;
     }
@@ -262,7 +289,7 @@ tcp_incoming_ack_established (tcp_session_t *ts0, vlib_buffer_t *tb0,
    * ACK, drop the segment, and return  */
   if (seq_lt(vnet_buffer (tb0)->tcp.ack_number, ts0->snd_nxt))
     {
-      tcp_send_ack (ts0, is_ip4);
+      tcp_make_ack (ts0, tb0);
       return -1;
     }
 
@@ -293,7 +320,7 @@ tcp_session_no_space (tcp_session_t *ts, u32 my_thread_index, u16 data_len0)
 }
 
 /** Enqueue data for delivery to application */
-always_inline int
+always_inline u32
 tcp_session_enqueue_data (stream_session_t *s0, u8 *data0, u16 data_len0)
 {
   stream_server_main_t *ssm = &stream_server_main;
@@ -388,9 +415,19 @@ send_enqueue_events (vlib_main_t *vm, u32 my_thread_index, u8 is_ip4)
     session_indices_to_enqueue;
 }
 
+/**
+ * Check if ACK could be delayed
+ */
+always_inline int
+tcp_should_send_ack (tcp_session_t *ts)
+{
+  /* TODO properly once we have timers */
+  return 1;
+}
+
 always_inline int
 tcp_segment_rcv (tcp_session_t *ts, u32 my_thread_index, vlib_buffer_t *b,
-                 u16 n_data_bytes, u8 is_ip4)
+                 u16 n_data_bytes, u32 *next0, u8 is_est, u8 is_ip4)
 {
   stream_session_t *s = stream_session_get (ts->s_s_index, my_thread_index);
 
@@ -404,6 +441,7 @@ tcp_segment_rcv (tcp_session_t *ts, u32 my_thread_index, vlib_buffer_t *b,
   else
     {
       /* TODO take care of OOO */
+      return TCP_ERROR_SEGMENT_INVALID;
     }
 
   if (!error)
@@ -412,9 +450,13 @@ tcp_segment_rcv (tcp_session_t *ts, u32 my_thread_index, vlib_buffer_t *b,
       ts->rcv_nxt = vnet_buffer (b)->tcp.seq_end;
     }
 
-  /* Send ACK if segment was not a pure ACK */
-  if (n_data_bytes)
-    tcp_send_ack (ts, is_ip4);
+  /* Send ACK if segment was not a pure ACK and it can't be delayed */
+  if (n_data_bytes && tcp_should_send_ack (ts))
+    {
+      tcp_set_output_next_index (next0, is_est, is_ip4);
+      tcp_make_ack (ts, b);
+      error = TCP_ERROR_ENQUEUED;
+    }
 
   return error;
 }
@@ -492,7 +534,7 @@ tcp46_established_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
           /* TODO header prediction fast path */
 
           /* 1-4: check SEQ, RST, SYN */
-          if (PREDICT_FALSE(tcp_segment_validate (vm, ts0, b0, th0, is_ip4)))
+          if (PREDICT_FALSE(tcp_segment_validate (vm, ts0, b0, th0, &next0, 1, is_ip4)))
             {
               error0 = TCP_ERROR_SEGMENT_INVALID;
               goto drop;
@@ -507,7 +549,7 @@ tcp46_established_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
           /* 7: process the segment text */
           vlib_buffer_advance (b0, n_advance_bytes0);
           error0 = tcp_segment_rcv (ts0, my_thread_index, b0, n_data_bytes0,
-                                    is_ip4);
+                                    &next0, 1, is_ip4);
 
         drop:
           b0->error = error0 ? node->errors[error0] : 0;
@@ -582,17 +624,6 @@ VLIB_REGISTER_NODE (tcp6_established_node) = {
 #undef _
   },
 };
-
-#define foreach_tcp_rcv_process_next            \
-  _ (DROP, "error-drop")
-
-typedef enum _tcp_rcv_process_next
-{
-#define _(s,n) TCP_RCV_PROCESS_NEXT_##s,
-  foreach_tcp_rcv_process_next
-#undef _
-  TCP_RCV_PROCESS_N_NEXT,
-} tcp_rcv_process_next_t;
 
 VLIB_NODE_FUNCTION_MULTIARCH (tcp6_established_node, tcp6_established)
 
@@ -745,7 +776,8 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
            */
 
           /* 1-4: check SEQ, RST, SYN */
-          if (PREDICT_FALSE(tcp_segment_validate (vm, ts0, b0, tcp0, is_ip4)))
+          if (PREDICT_FALSE(
+              tcp_segment_validate (vm, ts0, b0, tcp0, &next0, 0, is_ip4)))
             {
               error0 = TCP_ERROR_SEGMENT_INVALID;
               goto drop;
@@ -850,7 +882,8 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
             case TCP_CONNECTION_STATE_ESTABLISHED:
             case TCP_CONNECTION_STATE_FIN_WAIT_1:
             case TCP_CONNECTION_STATE_FIN_WAIT_2:
-              tcp_segment_rcv (ts0, my_thread_index, b0, n_data_bytes0, is_ip4);
+              tcp_segment_rcv (ts0, my_thread_index, b0, n_data_bytes0, &next0,
+                               0, is_ip4);
               break;
             case TCP_CONNECTION_STATE_CLOSE_WAIT:
             case TCP_CONNECTION_STATE_CLOSING:
@@ -927,8 +960,10 @@ VLIB_REGISTER_NODE (tcp6_rcv_process_node) = {
   },
 };
 
-#define foreach_tcp_listen_next            \
-  _ (DROP, "error-drop")
+#define foreach_tcp_listen_next                 \
+  _ (DROP, "error-drop")                        \
+  _(TCP4_OUTPUT, "tcp4-output")                 \
+  _(TCP6_OUTPUT, "tcp6-output")
 
 typedef enum _tcp_listen_next
 {
@@ -1050,8 +1085,10 @@ tcp46_listen_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
                     child0->tsval_recent = child0->opt.tsval;
                     child0->tsval_recent_age = tcp_time_now ();
                 }
-              /* send syn-ack */
-              tcp_send_synack (child0, is_ip4);
+              /* Reuse buffer to make syn-ack and send */
+              tcp_make_synack (child0, b0);
+              next0 = is_ip4 ? TCP_LISTEN_NEXT_TCP4_OUTPUT
+                  : TCP_LISTEN_NEXT_TCP6_OUTPUT;
             }
 
          drop:
@@ -1541,12 +1578,18 @@ do {                                                                    \
   _(ESTABLISHED, TCP_FLAG_ACK, TCP_INPUT_NEXT_ESTABLISHED, TCP_ERROR_NONE);
   /* FIN for for established connection -> tcp-established. */
   _(ESTABLISHED, TCP_FLAG_FIN, TCP_INPUT_NEXT_ESTABLISHED, TCP_ERROR_NONE);
+  _(ESTABLISHED, TCP_FLAG_FIN | TCP_FLAG_ACK, TCP_INPUT_NEXT_ESTABLISHED,
+    TCP_ERROR_NONE);
 #undef _
 
   /* Initialize clocks per tick for TCP timestamp. Used to compute
    * monotonically increasing timestamps. */
   tm->log2_tstamp_clocks_per_tick = flt_round_nearest (
       log (TCP_TSTAMP_RESOLUTION / vm->clib_time.seconds_per_clock) / log2);
+
+  /* Initialize per worker thread tx buffers (used for control messages) */
+  vec_validate (tm->tx_buffers, num_threads - 1);
+
   return error;
 }
 

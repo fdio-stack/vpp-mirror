@@ -200,6 +200,9 @@ typedef struct _tcp_main
 
   u8 log2_tstamp_clocks_per_tick;
 
+  /** per-worker tx buffer free lists */
+  u32 **tx_buffers;
+
   /* convenience */
   vlib_main_t * vlib_main;
   vnet_main_t * vnet_main;
@@ -231,13 +234,13 @@ tcp_listener_get (u32 tsi)
 }
 
 void
-tcp_send_ack (tcp_session_t *ts, u8 is_ip4);
+tcp_make_ack (tcp_session_t *ts, vlib_buffer_t *b);
 void
-tcp_send_synack (tcp_session_t *ts, u8 is_ip4);
+tcp_make_synack (tcp_session_t *ts, vlib_buffer_t *b);
 void
-tcp_send_dupack (tcp_session_t *ts, u8 is_ip4);
+tcp_make_dupack (tcp_session_t *ts, u8 is_ip4);
 void
-tcp_send_challange_ack (tcp_session_t *ts, u8 is_ip4);
+tcp_make_challange_ack (tcp_session_t *ts, u8 is_ip4);
 void
 tcp_send_reset (vlib_buffer_t *pkt, u8 is_ip4);
 
