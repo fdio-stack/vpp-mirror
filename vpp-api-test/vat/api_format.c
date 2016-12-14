@@ -10372,6 +10372,11 @@ api_vxlan_add_del_tunnel (vat_main_t * vam)
       errmsg ("tunnel nonexistent multicast device\n");
       return -99;
     }
+  if (grp_set == 0 && ip46_address_is_multicast (&dst))
+    {
+      errmsg ("tunnel dst address must be unicast\n");
+      return -99;
+    }
 
 
   if (ipv4_set && ipv6_set)
@@ -11140,7 +11145,7 @@ api_vxlan_gpe_add_del_tunnel (vat_main_t * vam)
 
   mp->encap_vrf_id = ntohl (encap_vrf_id);
   mp->decap_vrf_id = ntohl (decap_vrf_id);
-  mp->protocol = ntohl (protocol);
+  mp->protocol = protocol;
   mp->vni = ntohl (vni);
   mp->is_add = is_add;
   mp->is_ipv6 = ipv6_set;

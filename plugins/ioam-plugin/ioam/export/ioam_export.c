@@ -20,14 +20,13 @@
 
 #include <vnet/vnet.h>
 #include <vnet/plugin/plugin.h>
-#include <ioam/export/ioam_export.h>
+#include <ioam/export-common/ioam_export.h>
 
 #include <vlibapi/api.h>
 #include <vlibmemory/api.h>
 #include <vlibsocket/api.h>
 #include <vnet/ip/ip6_hop_by_hop.h>
 
-#include "ioam_export.h"
 
 /* define message IDs */
 #include <ioam/export/ioam_export_msg_enum.h>
@@ -115,9 +114,9 @@ ioam_export_ip6_enable_disable (ioam_export_main_t * em,
 
   if (is_disable == 0)
     {
-      if (1 == ioam_export_header_create (collector_address, src_address))
+      if (1 == ioam_export_header_create (em, collector_address, src_address))
 	{
-	  ioam_export_thread_buffer_init (vm);
+	  ioam_export_thread_buffer_init (em, vm);
 	  ip6_hbh_set_next_override (em->my_hbh_slot);
 	  /* Turn on the export buffer check process */
 	  vlib_process_signal_event (vm, em->export_process_node_index, 1, 0);
@@ -131,8 +130,8 @@ ioam_export_ip6_enable_disable (ioam_export_main_t * em,
   else
     {
       ip6_hbh_set_next_override (IP6_LOOKUP_NEXT_POP_HOP_BY_HOP);
-      ioam_export_header_cleanup (collector_address, src_address);
-      ioam_export_thread_buffer_free ();
+      ioam_export_header_cleanup (em, collector_address, src_address);
+      ioam_export_thread_buffer_free (em);
       /* Turn off the export buffer check process */
       vlib_process_signal_event (vm, em->export_process_node_index, 2, 0);
 
@@ -150,8 +149,8 @@ static void vl_api_ioam_export_ip6_enable_disable_t_handler
   int rv;
 
   rv = ioam_export_ip6_enable_disable (sm, (int) (mp->is_disable),
-				       (ip4_address_t *) mp->
-				       collector_address,
+				       (ip4_address_t *)
+				       mp->collector_address,
 				       (ip4_address_t *) mp->src_address);
 
   REPLY_MACRO (VL_API_IOAM_EXPORT_IP6_ENABLE_DISABLE_REPLY);
@@ -234,11 +233,13 @@ set_ioam_export_ipfix_command_fn (vlib_main_t * vm,
   return 0;
 }
 
+/* *INDENT-OFF* */
 VLIB_CLI_COMMAND (set_ipfix_command, static) =
 {
 .path = "set ioam export ipfix",.short_help =
     "set ioam export ipfix collector <ip4-address> src <ip4-address>",.
     function = set_ioam_export_ipfix_command_fn,};
+/* *INDENT-ON* */
 
 
 static clib_error_t *
@@ -272,3 +273,11 @@ ioam_export_init (vlib_main_t * vm)
 }
 
 VLIB_INIT_FUNCTION (ioam_export_init);
+
+/*
+ * fd.io coding-style-patch-verification: ON
+ *
+ * Local Variables:
+ * eval: (c-set-style "gnu")
+ * End:
+ */
