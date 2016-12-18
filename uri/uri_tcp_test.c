@@ -245,7 +245,7 @@ handle_fifo_event_server_rx (uri_tcp_test_main_t *utm, fifo_event_t * e)
       nbytes = svm_fifo_dequeue_nowait2 (rx_fifo, 0, vec_len(utm->rx_buf),
                                          utm->rx_buf);
     }
-  while (nbytes <= 0);
+  while (nbytes < 0);
 
   if (!utm->drop_packets)
     {
@@ -254,16 +254,16 @@ handle_fifo_event_server_rx (uri_tcp_test_main_t *utm, fifo_event_t * e)
           rv = svm_fifo_enqueue_nowait2 (tx_fifo, 0, nbytes, utm->rx_buf);
         }
       while (rv == -2);
-    }
 
-  /* Fabricate TX event, send to vpp */
-  evt.fifo = tx_fifo;
-  evt.event_type = FIFO_EVENT_SERVER_TX;
-  /* $$$$ for event logging */
-  evt.enqueue_length = nbytes;
-  evt.event_id = e->event_id;
-  q = utm->vpp_event_queue;
-  unix_shared_memory_queue_add (q, (u8 *)&evt, 0 /* do wait for mutex */);
+      /* Fabricate TX event, send to vpp */
+      evt.fifo = tx_fifo;
+      evt.event_type = FIFO_EVENT_SERVER_TX;
+      /* $$$$ for event logging */
+      evt.enqueue_length = nbytes;
+      evt.event_id = e->event_id;
+      q = utm->vpp_event_queue;
+      unix_shared_memory_queue_add (q, (u8 *) &evt, 0 /* do wait for mutex */);
+    }
 }
 
 void

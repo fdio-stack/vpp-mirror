@@ -1500,6 +1500,8 @@ ip4_local_inline (vlib_main_t * vm,
 	  to_next += 2;
 	  n_left_to_next -= 2;
 
+          next0 = next1 = IP_LOCAL_NEXT_DROP;
+
 	  p0 = vlib_get_buffer (vm, pi0);
 	  p1 = vlib_get_buffer (vm, pi1);
 
@@ -1712,6 +1714,8 @@ ip4_local_inline (vlib_main_t * vm,
 	  n_left_from -= 1;
 	  to_next += 1;
 	  n_left_to_next -= 1;
+
+          next0 = IP_LOCAL_NEXT_DROP;
 
 	  p0 = vlib_get_buffer (vm, pi0);
 
