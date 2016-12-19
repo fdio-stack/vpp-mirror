@@ -156,15 +156,13 @@ stream_session_lookup_add (stream_server_main_t *ssm, stream_session_t * s,
 }
 
 int
-stream_session_lookup_del (stream_server_main_t *ssm, stream_session_t *s)
+transport_session_lookup_del (stream_server_main_t *ssm, u8 sst,
+                              transport_session_t * ts)
 {
   session_kv4_t kv4;
   session_kv6_t kv6;
-  transport_session_t * ts;
 
-  ts = tp_vfts[s->session_type].get_session (s->transport_session_index,
-                                              s->session_thread_index);
-  switch (s->session_type)
+  switch (sst)
   {
     case SESSION_TYPE_IP4_UDP:
     case SESSION_TYPE_IP4_TCP:
@@ -184,6 +182,16 @@ stream_session_lookup_del (stream_server_main_t *ssm, stream_session_t *s)
   }
 
   return 0;
+}
+
+int
+stream_session_lookup_del (stream_server_main_t *ssm, stream_session_t *s)
+{
+  transport_session_t * ts;
+
+  ts = tp_vfts[s->session_type].get_session (s->transport_session_index,
+                                             s->session_thread_index);
+  return transport_session_lookup_del (ssm, s->session_type, ts);
 }
 
 stream_session_t *
@@ -623,7 +631,7 @@ stream_server_listen (stream_server_main_t *ssm, stream_server_t *ss,
   s->transport_session_index = tsi;
   ts = tp_vfts[ss->session_type].get_listener (tsi);
 
-  ss->listen_session_index = s - ssm->listen_sessions[ss->session_type];
+  ss->listen_session_index = s->session_index;
 
   /* Add to the main lookup table */
   transport_session_lookup_add (ssm, s->session_type, ts, s->session_index);
@@ -635,15 +643,18 @@ void
 stream_server_listen_stop (stream_server_main_t *ssm, stream_server_t *ss)
 {
   stream_session_t *listener;
+  transport_session_t *ts;
 
   listener = pool_elt_at_index(ssm->listen_sessions[ss->session_type],
                                ss->listen_session_index);
-  stream_session_lookup_del (ssm, listener);
 
-  pool_put(ssm->listen_sessions[ss->session_type], listener);
+  ts = tp_vfts[ss->session_type].get_listener (
+      listener->transport_session_index);
+  transport_session_lookup_del (ssm, listener->session_type, ts);
 
   tp_vfts[ss->session_type].unbind (ssm->vlib_main,
                                     listener->transport_session_index);
+  pool_put(ssm->listen_sessions[ss->session_type], listener);
 }
 
 int
