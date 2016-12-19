@@ -19,22 +19,6 @@
  *  @brief TCP timer implementation
  */
 
-/** construct a stop-timer handle */
-static inline u32
-make_stop_timer_handle (u32 ring, u32 ring_offset, u32 index_in_slot)
-{
-  u32 handle;
-
-  ASSERT (ring < TW_N_RINGS);
-  ASSERT (ring_offset < TW_SLOTS_PER_RING);
-  ASSERT (index_in_slot < (1 << 23));
-
-  /* handle: 1 bit ring id | 9 bit ring_offset | 22 bit index_in_slot */
-
-  handle = (ring << 31) | (ring_offset << 22) | index_in_slot;
-  return handle;
-}
-
 /** construct an internal (pool-index, timer-id) handle */
 static inline u32
 make_internal_timer_handle (u32 pool_index, u32 timer_id)
@@ -48,6 +32,48 @@ make_internal_timer_handle (u32 pool_index, u32 timer_id)
   return handle;
 }
 
+static inline void
+timer_addhead (tcp_timer_t * pool, u32 head_index, u32 new_index)
+{
+  tcp_timer_t *head = pool_elt_at_index (pool, head_index);
+  tcp_timer_t *old_first;
+  u32 old_first_index;
+  tcp_timer_t *new;
+
+  new = pool_elt_at_index (pool, new_index);
+
+  if (PREDICT_FALSE (head->next == head_index))
+    {
+      head->next = head->prev = new_index;
+      new->next = new->prev = head_index;
+      return;
+    }
+
+  old_first_index = head->next;
+  old_first = pool_elt_at_index (pool, old_first_index);
+
+  new->next = old_first_index;
+  new->prev = old_first->prev;
+  old_first->prev = new_index;
+  head->next = new_index;
+}
+
+static inline void
+timer_remove (tcp_timer_t * pool, u32 index)
+{
+  tcp_timer_t *elt = pool_elt_at_index (pool, index);
+  tcp_timer_t *next_elt, *prev_elt;
+
+  ASSERT (elt->user_handle != ~0);
+
+  next_elt = pool_elt_at_index (pool, elt->next);
+  prev_elt = pool_elt_at_index (pool, elt->prev);
+
+  next_elt->prev = elt->prev;
+  prev_elt->next = elt->next;
+
+  elt->prev = elt->next = ~0;
+}
 
 /**
  * @brief Start a Tcp Timer
@@ -63,12 +89,15 @@ tcp_timer_start (tcp_timer_wheel_t * tw, u32 pool_index, u32 timer_id,
 {
   u16 slow_ring_offset, fast_ring_offset;
   tcp_timer_wheel_slot_t *ts;
-  u32 index_in_slot;
   u32 carry;
-  u32 timer_handle;
-  u32 rv;
+  tcp_timer_t *t;
 
   ASSERT (interval);
+
+  pool_get (tw->timers, t);
+  t->next = t->prev = ~0;
+  t->fast_ring_offset = ~0;
+  t->user_handle = make_internal_timer_handle (pool_index, timer_id);  
 
   fast_ring_offset = interval & TW_RING_MASK;
   fast_ring_offset += tw->current_index[TW_RING_FAST];
@@ -84,48 +113,23 @@ tcp_timer_start (tcp_timer_wheel_t * tw, u32 pool_index, u32 timer_id,
     {
       slow_ring_offset += tw->current_index[TW_RING_SLOW];
       slow_ring_offset %= TW_SLOTS_PER_RING;
+
+      /* We'll want the fast ring offset later... */
+      t->fast_ring_offset = fast_ring_offset;
+      ASSERT(t->fast_ring_offset < TW_SLOTS_PER_RING);
+
       ts = &tw->w[TW_RING_SLOW][slow_ring_offset];
 
-      index_in_slot = clib_bitmap_first_clear (ts->busy_slot_bitmap);
-      ts->busy_slot_bitmap =
-	clib_bitmap_set (ts->busy_slot_bitmap, index_in_slot, 1);
+      timer_addhead (tw->timers, ts->head_index, t - tw->timers);
 
-      timer_handle = make_internal_timer_handle (pool_index, timer_id);
-
-      vec_validate (ts->timer_handles, index_in_slot);
-      vec_validate (ts->fast_ring_offsets, index_in_slot);
-
-      ts->timer_handles[index_in_slot] = timer_handle;
-      /*
-       * Remember the fast ring offset, needed when we demote
-       * the timer to the fast wheel
-       */
-      ts->fast_ring_offsets[index_in_slot] = fast_ring_offset;
-
-      /* Return the user timer-cancellation handle */
-      rv = make_stop_timer_handle (TW_RING_SLOW, slow_ring_offset,
-				   index_in_slot);
-      return rv;
+      return t - tw->timers;
     }
 
   /* Timer expires less than 51.2 seconds from now */
   ts = &tw->w[TW_RING_FAST][fast_ring_offset];
 
-  /* Allocate a handle element vector slot */
-  index_in_slot = clib_bitmap_first_clear (ts->busy_slot_bitmap);
-  ts->busy_slot_bitmap =
-    clib_bitmap_set (ts->busy_slot_bitmap, index_in_slot, 1);
-
-  timer_handle = make_internal_timer_handle (pool_index, timer_id);
-
-  vec_validate (ts->timer_handles, index_in_slot);
-
-  ts->timer_handles[index_in_slot] = timer_handle;
-
-  /* Give the user a handle to cancel the timer */
-  rv = make_stop_timer_handle (TW_RING_FAST, fast_ring_offset, index_in_slot);
-
-  return rv;
+  timer_addhead (tw->timers, ts->head_index, t - tw->timers);
+  return t - tw->timers;
 }
 
 /**
@@ -137,35 +141,18 @@ tcp_timer_start (tcp_timer_wheel_t * tw, u32 pool_index, u32 timer_id,
  */
 
 void
-tcp_timer_stop (tcp_timer_wheel_t * tw, u32 pool_index, u32 timer_id,
-		u32 handle)
+tcp_timer_stop (tcp_timer_wheel_t * tw, u32 handle)
 {
-  u32 ring, slot, index_in_slot;
-  tcp_timer_wheel_slot_t *ts;
+  tcp_timer_t * t;
 
-  ring = (handle >> 31);
-  slot = (handle >> 22) & TW_RING_MASK;
-  index_in_slot = handle & ((1 << 22) - 1);
+  t = pool_elt_at_index (tw->timers, handle);
 
-  ts = &tw->w[ring][slot];
+  /* in case of idiotic handle (e.g. passing a listhead index) */
+  ASSERT (t->user_handle != ~0);
 
-  /* slot must be busy */
-  ASSERT (clib_bitmap_get (ts->busy_slot_bitmap, index_in_slot) != 0);
+  timer_remove (tw->timers, handle);
 
-  /* handle must match */
-  ASSERT (ts->timer_handles[index_in_slot]
-	  == make_internal_timer_handle (pool_index, timer_id));
-
-  /* Cancel the timer */
-  ts->busy_slot_bitmap
-    = clib_bitmap_set (ts->busy_slot_bitmap, index_in_slot, 0);
-
-#if CLIB_DEBUG > 0
-  /* Poison the slot */
-  ts->timer_handles[index_in_slot] = ~0;
-  if (ring == TW_RING_SLOW)
-    ts->fast_ring_offsets[index_in_slot] = ~0;
-#endif
+  pool_put_index (tw->timers, handle);
 }
 
 /**
@@ -180,12 +167,25 @@ tcp_timer_stop (tcp_timer_wheel_t * tw, u32 pool_index, u32 timer_id,
  */
 void
 tcp_timer_wheel_init (tcp_timer_wheel_t * tw,
-		      void *expired_timer_callback,
-		      void *new_stop_timer_handle_callback)
+		      void *expired_timer_callback)
 {
+  int ring, slot;
+  tcp_timer_wheel_slot_t * ts;
+  tcp_timer_t *t;
   memset (tw, 0, sizeof (*tw));
   tw->expired_timer_callback = expired_timer_callback;
-  tw->new_stop_timer_handle_callback = new_stop_timer_handle_callback;
+
+  for (ring = 0; ring < TW_N_RINGS; ring++)
+    {
+      for (slot = 0; slot < TW_SLOTS_PER_RING; slot++)
+        {
+	  ts = &tw->w[ring][slot];
+          pool_get (tw->timers, t);
+          memset (t, 0xff, sizeof (*t));
+          t->next = t->prev = t - tw->timers;
+          ts->head_index = t - tw->timers;
+        }
+    }
 }
 
 /**
@@ -197,21 +197,26 @@ tcp_timer_wheel_free (tcp_timer_wheel_t * tw)
 {
   int i, j;
   tcp_timer_wheel_slot_t *ts;
+  tcp_timer_t *head, *t;
+  u32 next_index;
 
   for (i = 0; i < TW_N_RINGS; i++)
     {
       for (j = 0; j < TW_SLOTS_PER_RING; j++)
 	{
 	  ts = &tw->w[i][j];
-	  vec_free (ts->busy_slot_bitmap);
-	  vec_free (ts->timer_handles);
-	  vec_free (ts->fast_ring_offsets);
+          head = pool_elt_at_index (tw->timers, ts->head_index);
+          next_index = head->next;
+
+          while (next_index != ts->head_index)
+            {
+              t = pool_elt_at_index (tw->timers, next_index);
+              next_index = t->next;
+              pool_put (tw->timers, t);
+            }
+          pool_put (tw->timers, head);
 	}
     }
-  vec_free (tw->demoted_timer_handles);
-  vec_free (tw->demoted_timer_offsets);
-  vec_free (tw->stop_timer_callback_args);
-
   memset (tw, 0, sizeof (*tw));
 }
 
@@ -224,14 +229,11 @@ tcp_timer_wheel_free (tcp_timer_wheel_t * tw)
 void
 tcp_timer_expire_timers (tcp_timer_wheel_t * tw, f64 now)
 {
-  u32 nticks, i, j;
+  u32 nticks, i;
   tcp_timer_wheel_slot_t *ts;
+  tcp_timer_t *t, *head;
   u32 fast_wheel_index, slow_wheel_index;
-  u32 fast_ring_offset;
-  u32 timer_index;
-  u32 timer_handle;
-  u32 index_in_slot;
-  u32 new_stop_timer_handle;
+  u32 next_index;
 
   /* Shouldn't happen */
   if (PREDICT_FALSE (now < tw->next_run_time))
@@ -265,89 +267,46 @@ tcp_timer_expire_timers (tcp_timer_wheel_t * tw, f64 now)
 
 	  ts = &tw->w[TW_RING_SLOW][slow_wheel_index];
 
-	  vec_reset_length (tw->demoted_timer_handles);
-	  vec_reset_length (tw->demoted_timer_offsets);
+          head = pool_elt_at_index (tw->timers, ts->head_index);
+          next_index = head->next;
 
-          /* *INDENT-OFF* */
-	  clib_bitmap_foreach (timer_index, ts->busy_slot_bitmap,
-          ({
-            timer_handle = ts->timer_handles [timer_index];
-            fast_ring_offset = ts->fast_ring_offsets [timer_index];
-            vec_add1 (tw->demoted_timer_handles, timer_handle);
-            vec_add1 (tw->demoted_timer_offsets, fast_ring_offset);
-#if CLIB_DEBUG > 0
-            /* Poison the slot */
-            ts->timer_handles [timer_index] = ~0;
-            ts->fast_ring_offsets [timer_index] = ~0;
-#endif
-          }));
-          /* *INDENT-ON* */
-	  /* Clear the slow-ring slot busy bitmap */
-	  for (j = 0; j < vec_len (ts->busy_slot_bitmap); j++)
-	    ts->busy_slot_bitmap[j] = 0;
-	  vec_reset_length (ts->busy_slot_bitmap);
+          /* Make slot empty */
+          head->next = head->prev = ts->head_index;
+          
+          /* traverse slot, deal timers into fast ring */
+          while (next_index != head - tw->timers)
+            {
+              t = pool_elt_at_index (tw->timers, next_index);
+              next_index = t->next;
 
-	  /*
-	   * Deal slow-ring elements into the fast ring.
-	   * Hand out new timer-cancellation handles
-	   */
-	  vec_reset_length (tw->stop_timer_callback_args);
-	  for (j = 0; j < vec_len (tw->demoted_timer_offsets); j++)
-	    {
-	      new_stop_timer_callback_args_t *a;
-	      /*
-	       * By construction, the fast ring is processing slot 0
-	       */
-	      fast_ring_offset = tw->demoted_timer_offsets[j];
-	      timer_handle = tw->demoted_timer_handles[j];
-
-	      ts = &tw->w[TW_RING_FAST][fast_ring_offset];
-
-	      /* Allocate a fast-ring handle slot */
-	      index_in_slot = clib_bitmap_first_clear (ts->busy_slot_bitmap);
-	      ts->busy_slot_bitmap =
-		clib_bitmap_set (ts->busy_slot_bitmap, index_in_slot, 1);
-
-	      vec_validate (ts->timer_handles, index_in_slot);
-
-	      /* Our internal handle doesn't change */
-	      ts->timer_handles[index_in_slot] = timer_handle;
-
-	      /* But the user's stop-timer handle must change */
-	      new_stop_timer_handle =
-		make_stop_timer_handle (TW_RING_FAST, fast_ring_offset,
-					index_in_slot);
-
-	      vec_add2 (tw->stop_timer_callback_args, a, 1);
-	      a->pool_index = timer_handle & 0x0FFFFFFF;
-	      a->timer_id = timer_handle >> 28;
-	      a->new_stop_timer_handle = new_stop_timer_handle;
-	    }
-	  /* Give the user new stop-timer handles */
-	  if (vec_len (tw->stop_timer_callback_args))
-	    tw->new_stop_timer_handle_callback (tw->stop_timer_callback_args);
+              /* Remove from slow ring slot (hammer) */
+              t->next = t->prev = ~0;
+              ASSERT (t->fast_ring_offset < TW_SLOTS_PER_RING);
+              /* Add to fast ring */
+	      ts = &tw->w[TW_RING_FAST][t->fast_ring_offset];
+              timer_addhead (tw->timers, ts->head_index, t - tw->timers);
+            }
 	}
 
       /* Handle the fast ring */
       vec_reset_length (tw->expired_timer_handles);
 
       ts = &tw->w[TW_RING_FAST][fast_wheel_index];
-      /* *INDENT-OFF* */
-      clib_bitmap_foreach (timer_index, ts->busy_slot_bitmap,
-      ({
-        timer_handle = ts->timer_handles [timer_index];
-#if CLIB_DEBUG > 0
-        /* Poison the slot */
-        ts->timer_handles [timer_index] = ~0;
-#endif
-        vec_add1 (tw->expired_timer_handles, timer_handle);
-      }));
-      /* *INDENT-ON* */
 
-      /* Clear the fast-ring slot busy bitmap */
-      for (j = 0; j < vec_len (ts->busy_slot_bitmap); j++)
-	ts->busy_slot_bitmap[j] = 0;
-      vec_reset_length (ts->busy_slot_bitmap);
+      head = pool_elt_at_index (tw->timers, ts->head_index);
+      next_index = head->next;
+
+      /* Make slot empty */
+      head->next = head->prev = ts->head_index;
+
+      /* Construct vector of expired timer handles to give the user */
+      while (next_index != ts->head_index)
+        {
+          t = pool_elt_at_index (tw->timers, next_index);
+          next_index = t->next;
+          vec_add1 (tw->expired_timer_handles, t->user_handle);
+          pool_put (tw->timers, t);
+        }
 
       /* If any timers expired, tell the user */
       if (vec_len (tw->expired_timer_handles))
@@ -433,31 +392,6 @@ expired_timer_callback (u32 * expired_timers)
     }
 }
 
-/**
- * @brief Canonical wheel demotion handle reset callback
- * @param new_stop_timer_callback_args_t * a_vec
- *
- * Real applications can just about steal this callback verbatim.
- * Change tcp_timer_test_elt_t to <whatever>, and off you go
- */
-static void
-new_stop_timer_handle_callback (new_stop_timer_callback_args_t * a_vec)
-{
-  int i;
-  new_stop_timer_callback_args_t *a;
-  tcp_timer_test_main_t *tm = &tcp_timer_test_main;
-  tcp_timer_test_elt_t *e;
-
-  for (i = 0; i < vec_len (a_vec); i++)
-    {
-      a = a_vec + i;
-
-      e = pool_elt_at_index (tm->test_elts, a->pool_index);
-      ASSERT (a->timer_id == 3);
-      e->stop_timer_handle = a->new_stop_timer_handle;
-    }
-}
-
 static clib_error_t *
 test2 (vlib_main_t * vm, tcp_timer_test_main_t * tm)
 {
@@ -470,8 +404,7 @@ test2 (vlib_main_t * vm, tcp_timer_test_main_t * tm)
   u32 adds = 0, deletes = 0;
   f64 before, after;
 
-  tcp_timer_wheel_init (&tm->wheel, expired_timer_callback,
-			new_stop_timer_handle_callback);
+  tcp_timer_wheel_init (&tm->wheel, expired_timer_callback);
 
   /* Prime offset */
   initial_wheel_offset = 757;
@@ -517,9 +450,7 @@ test2 (vlib_main_t * vm, tcp_timer_test_main_t * tm)
       /* *INDENT-OFF* */
       pool_foreach (e, tm->test_elts,
       ({
-        tcp_timer_stop (&tm->wheel, e - tm->test_elts,
-                        3 /* timer id */,
-                        e->stop_timer_handle);
+        tcp_timer_stop (&tm->wheel, e->stop_timer_handle);
         vec_add1 (deleted_indices, e - tm->test_elts);
         if (++j >= tm->ntimers / 4)
           goto del_and_re_add;
@@ -593,8 +524,8 @@ test1 (vlib_main_t * vm, tcp_timer_test_main_t * tm)
   tcp_timer_test_elt_t *e;
   u32 offset;
 
-  tcp_timer_wheel_init (&tm->wheel, expired_timer_callback,
-			new_stop_timer_handle_callback);
+  tcp_timer_wheel_init (&tm->wheel, expired_timer_callback);
+
 
   /*
    * Prime offset, to make sure that the wheel starts in a

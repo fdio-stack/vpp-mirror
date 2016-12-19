@@ -29,12 +29,20 @@
 
 typedef struct
 {
-  /** Busy indices in timer_handles, fast_ring_offsets */
-  uword *busy_slot_bitmap;
-  /** Timers which expire in this interval */
-  u32 *timer_handles;
-  /** Slow ring only, saved when timer added to ring */
-  u16 *fast_ring_offsets;
+  /** next, previous pool indices */
+  u32 next;
+  u32 prev;
+  /** fast ring offset, only valid in the slow ring */
+  u16 fast_ring_offset;
+  u16 pad;
+  /** user timer handle */
+  u32 user_handle;
+} tcp_timer_t;
+
+typedef struct
+{
+  /** Listhead of timers which expire in this interval */
+  u32 head_index;
 } tcp_timer_wheel_slot_t;
 
 typedef enum
@@ -53,18 +61,9 @@ typedef enum
 
 typedef struct
 {
-  /** pool index which needs a new timer cancellation handle */
-  u32 pool_index;
+  /** Timer pool */
+  tcp_timer_t * timers;
 
-  /** new timer cancellation handle */
-  u32 new_stop_timer_handle;
-
-  /** timer which needs a new cancellation handle */
-  u8 timer_id;
-} new_stop_timer_callback_args_t;
-
-typedef struct
-{
   /** Next time the wheel should run */
   f64 next_run_time;
 
@@ -83,9 +82,6 @@ typedef struct
   /** expired timer callback, receives a vector of handles */
   void (*expired_timer_callback) (u32 * expired_timer_handles);
 
-  /** new stop-timer handle callback, receives a vector */
-  void (*new_stop_timer_handle_callback) (new_stop_timer_callback_args_t *);
-
   /** vector of expired timers */
   u32 *expired_timer_handles;
 
@@ -96,8 +92,6 @@ typedef struct
       slow wheel to the fast wheel */
   u32 *demoted_timer_offsets;
 
-  /** vector of new stop-timer handles, used during move to fast wheel */
-  new_stop_timer_callback_args_t *stop_timer_callback_args;
 } tcp_timer_wheel_t;
 
 /** start a tcp timer */
@@ -105,14 +99,11 @@ u32 tcp_timer_start (tcp_timer_wheel_t * tw, u32 pool_index, u32 timer_id,
 		     u32 interval);
 
 /** Stop a tcp timer */
-void tcp_timer_stop (tcp_timer_wheel_t * tw, u32 pool_index, u32 timer_id,
-		     u32 handle);
+void tcp_timer_stop (tcp_timer_wheel_t * tw, u32 handle);
 
 /** Initialize a tcp timer wheel */
 void
-tcp_timer_wheel_init (tcp_timer_wheel_t * tw,
-		      void *expired_timer_callback,
-		      void *new_stop_timer_handle_callback);
+tcp_timer_wheel_init (tcp_timer_wheel_t * tw, void *expired_timer_callback);
 
 /** free a tcp timer wheel */
 void tcp_timer_wheel_free (tcp_timer_wheel_t * tw);
