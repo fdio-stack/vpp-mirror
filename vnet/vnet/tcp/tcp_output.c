@@ -453,12 +453,48 @@ tcp_send_reset (vlib_buffer_t *pkt, u8 is_ip4)
   vlib_put_frame_to_node (vm, next_index, f);
 }
 
+/* Send delayed ACK when timer expires */
+void
+timer_delack_handler (u32 index)
+{
+  tcp_main_t *tm = vnet_get_tcp_main ();
+  vlib_main_t *vm = tm->vlib_main;
+  tcp_session_t *ts;
+  vlib_buffer_t *b;
+  vlib_frame_t *f;
+  u32 bi, *to_next, next_index;
+
+  ts = tcp_session_get (index, vm->cpu_index);
+
+  /* Get buffer */
+  tcp_get_free_buffer_index (tm, &bi);
+  b = vlib_get_buffer (vm, bi);
+
+  /* Fill in the ACK */
+  tcp_make_ack (ts, b);
+
+  ts->timers[TCP_TIMER_DELACK] = TCP_TIMER_HANDLE_INVALID;
+  ts->flags &= ~TCP_CONN_DELACK;
+
+  /* Decide where to send the packet */
+  next_index = ts->is_ip4 ? tcp4_output_node.index : tcp6_output_node.index;
+  f = vlib_get_frame_to_node (vm, next_index);
+
+  /* Enqueue the packet */
+  b->flags |= VNET_BUFFER_LOCALLY_ORIGINATED;
+  to_next = vlib_frame_vector_args (f);
+  to_next[0] = bi;
+  f->n_vectors = 1;
+  vlib_put_frame_to_node (vm, next_index, f);
+}
+
 always_inline uword
 tcp46_output_inline (vlib_main_t * vm,
                     vlib_node_runtime_t * node,
                     vlib_frame_t * from_frame,
                     int is_ip4)
 {
+  tcp_main_t *tm = vnet_get_tcp_main ();
   u32 n_left_from, next_index, * from, * to_next;
   u32 my_thread_index = vm->cpu_index;
 
@@ -511,6 +547,18 @@ tcp46_output_inline (vlib_main_t * vm,
               th0->checksum = ip6_tcp_udp_icmp_compute_checksum (vm, b0, ih0,
                                                                  &bogus);
               ASSERT (!bogus);
+            }
+
+          /* If an ACK stop DELACK timer and fix flags */
+          if (PREDICT_FALSE(ts0->flags & TCP_CONN_SNDACK))
+            {
+              u32 handle = ts0->timers[TCP_TIMER_DELACK];
+              ts0->flags &= ~(TCP_CONN_SNDACK | TCP_CONN_DELACK);
+              if (TCP_TIMER_HANDLE_INVALID != handle)
+                {
+                  tcp_timer_stop (&tm->timer_wheel, handle);
+                  ts0->timers[TCP_TIMER_DELACK] = TCP_TIMER_HANDLE_INVALID;
+                }
             }
 
           /* set fib index to default and lookup node */

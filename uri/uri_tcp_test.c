@@ -345,8 +345,8 @@ uri_tcp_bind (uri_tcp_test_main_t *utm)
   bmp->initial_segment_size = 256<<20;    /* size of initial segment */
   bmp->options[URI_OPTIONS_FLAGS] =
     URI_OPTIONS_FLAGS_USE_FIFO | URI_OPTIONS_FLAGS_ADD_SEGMENT;
-  bmp->options[URI_OPTIONS_RX_FIFO_SIZE] = 256<<10;
-  bmp->options[URI_OPTIONS_TX_FIFO_SIZE] = 256<<10;
+  bmp->options[URI_OPTIONS_RX_FIFO_SIZE] = 3<<20;
+  bmp->options[URI_OPTIONS_TX_FIFO_SIZE] = 3<<20;
   bmp->options[URI_OPTIONS_ADD_SEGMENT_SIZE] = 128<<20;
   memcpy (bmp->uri, utm->uri, vec_len (utm->uri));
   vl_msg_api_send_shmem (utm->vl_input_queue, (u8 *)&bmp);

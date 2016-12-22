@@ -18,7 +18,8 @@
 #include <vnet/pg/pg.h>
 #include <vnet/ip/ip.h>
 
-#include "uri.h"
+#include <vnet/uri/uri.h>
+#include <vnet/tcp/tcp.h>
 
 #include <vppinfra/hash.h>
 #include <vppinfra/error.h>
@@ -84,6 +85,9 @@ uri_queue_node_fn (vlib_main_t * vm,
   u32 my_thread_index = vm->cpu_index;
   u32 n_trace = vlib_get_trace_count (vm, node);
   u32 next0;
+
+  /* Update TCP time */
+  tcp_update_time (vlib_time_now (vm));
 
   q = ssm->vpp_event_queues[my_thread_index];
   if (PREDICT_FALSE (q == 0))

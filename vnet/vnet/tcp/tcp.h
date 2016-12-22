@@ -19,6 +19,7 @@
 #include <vnet/vnet.h>
 #include <vnet/ip/ip.h>
 #include <vnet/tcp/tcp_packet.h>
+#include <vnet/tcp/tcp_timer.h>
 #include <vnet/uri/transport.h>
 #include <vnet/uri/uri.h>
 
@@ -26,9 +27,6 @@
 #define TCP_TSTAMP_RESOLUTION 1e-3
 #define TCP_PAWS_IDLE 24 * 24 * 60 * 60 / TCP_TSTAMP_RESOLUTION /* 24 days */
 #define TCP_MAX_OPTION_SPACE 40
-
-/* Provisionally assume 32-bit timers */
-typedef u32 tcp_timer_t;
 
 /** TCP FSM state definitions as per RFC793. */
 #define foreach_tcp_fsm_state   \
@@ -54,6 +52,58 @@ typedef enum _tcp_fsm_states
 
 format_function_t format_tcp_state;
 
+/** TCP timers */
+#define foreach_tcp_timer       \
+  _(RETRANSMIT, "RETRANSMIT")   \
+  _(DELACK, "DELAYED ACK")      \
+  _(PERSIST, "PERSIST")         \
+  _(KEEP, "KEEP")               \
+  _(2MSL, "2MSL")
+
+typedef enum _tcp_timers
+{
+#define _(sym, str) TCP_TIMER_##sym,
+  foreach_tcp_timer
+#undef _
+  TCP_N_TIMERS
+} tcp_timers_e;
+
+typedef void
+(*timer_expiration_handler) (u32 index);
+
+void
+timer_delack_handler (u32 index);
+
+#define TCP_TIMER_HANDLE_INVALID ((u32) ~0)
+
+/** TCP connection flags */
+#define foreach_tcp_connection_flag             \
+  _(DELACK, "Delay ACK")                        \
+  _(SNDACK, "Send ACK")                       \
+  _(SENT_RCV_WND0, "Sent 0 receive window")
+
+typedef enum _tcp_connection_flag_bits
+{
+#define _(sym, str) TCP_CONN_##sym##_BIT,
+  foreach_tcp_connection_flag
+#undef _
+  TCP_CONN_N_FLAG_BITS
+} tcp_connection_flag_bits_e;
+
+typedef enum _tcp_connection_flag
+{
+#define _(sym, str) TCP_CONN_##sym = 1 << TCP_CONN_##sym##_BIT,
+  foreach_tcp_connection_flag
+#undef _
+  TCP_CONN_N_FLAGS
+} tcp_connection_flags_e;
+
+/* Timer delays as multiples of 100ms */
+#define TCP_DELACK_TIME 1     /* 0.1 ms */
+
+void
+tcp_update_time (f64 now);
+
 typedef struct
 {
   /* sum, sum**2 */
@@ -63,12 +113,10 @@ typedef struct
 
 typedef struct _tcp_session
 {
-  transport_session_t session;          /** must be first */
+  transport_session_t session;  /**< Common transport conn data. First! */
 
-  /* our timer is in the dense parallel vector */
-  tcp_timer_t remote_timestamp_net_byte_order;
-
-  u8 state;   /* tcp_state_t */
+  u8 state;                     /**< TCP state as per tcp_state_t */
+  u32 timers[TCP_N_TIMERS];     /**< Timer handles into timer wheel */
 
   /* TODO RFC4898 */
 
@@ -93,23 +141,22 @@ typedef struct _tcp_session
   /* Options */
   u8 rcv_wscale;        /**< Window scale to advertise to peer */
   u8 snd_wscale;        /**< Window scale to use when sending */
-  u32 tsval_recent;     /**< last timestamp received */
-  u32 tsval_recent_age; /**< when last updated tstamp_recent*/
+  u32 tsval_recent;     /**< Last timestamp received */
+  u32 tsval_recent_age; /**< When last updated tstamp_recent*/
 
   u16 max_segment_size;
-  u8 remote_window_scale;
-  u8 local_window_scale;
-
-  u32 n_tx_unacked_bytes;
 
   /* Set if connected to another tcp46_session_t */
   u32 connected_session_index;
 
   u16 flags;
 
+  u8 is_ip4;            /**< Flag to indicate if connection uses IP4 */
+
   /* tos, ttl to use on tx */
   u8 tos;
   u8 ttl;
+
   u8 worker_thread_index;
 
   tcp_rtt_stats_t stats;
@@ -203,6 +250,12 @@ typedef struct _tcp_main
   /** per-worker tx buffer free lists */
   u32 **tx_buffers;
 
+  /* Timer wheel for session timers */
+  tcp_timer_wheel_t timer_wheel;
+
+  /* Convenience vector of connections to DELACK */
+  u32 *delack_connections;
+
   /* convenience */
   vlib_main_t * vlib_main;
   vnet_main_t * vnet_main;
@@ -210,7 +263,7 @@ typedef struct _tcp_main
   ip6_main_t * ip6_main;
 } tcp_main_t;
 
-tcp_main_t tcp_main;
+extern tcp_main_t tcp_main;
 
 extern vlib_node_registration_t tcp4_output_node;
 extern vlib_node_registration_t tcp6_output_node;
