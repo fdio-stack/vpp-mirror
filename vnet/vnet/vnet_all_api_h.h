@@ -29,12 +29,24 @@
 #include <vlibmemory/vl_memory_api_h.h>
 #endif /* included_from_layer_3 */
 
+#include <vnet/devices/af_packet/af_packet.api.h>
+#include <vnet/devices/netmap/netmap.api.h>
+#include <vnet/devices/virtio/vhost_user.api.h>
+#include <vnet/gre/gre.api.h>
 #include <vnet/interface.api.h>
 #include <vnet/map/map.api.h>
 #include <vnet/l2/l2.api.h>
+#include <vnet/l2tp/l2tp.api.h>
 #include <vnet/span/span.api.h>
 #include <vnet/ip/ip.api.h>
 #include <vnet/unix/tap.api.h>
+#include <vnet/vxlan/vxlan.api.h>
+#include <vnet/vxlan-gpe/vxlan_gpe.api.h>
+#include <vnet/bfd/bfd.api.h>
+#include <vnet/ipsec/ipsec.api.h>
+#include <vnet/ipsec-gre/ipsec_gre.api.h>
+#include <vnet/lisp-cp/lisp.api.h>
+#include <vnet/lisp-gpe/lisp_gpe.api.h>
 
 /*
  * fd.io coding-style-patch-verification: ON

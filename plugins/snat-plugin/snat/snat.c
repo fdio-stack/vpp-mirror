@@ -221,7 +221,7 @@ void snat_add_address (snat_main_t *sm, ip4_address_t *addr)
 
   vec_add2 (sm->addresses, ap, 1);
   ap->addr = *addr;
-
+  clib_bitmap_alloc (ap->busy_port_bitmap, 65535);
 }
 
 static int is_snat_address_used_in_static_mapping (snat_main_t *sm,
@@ -399,10 +399,9 @@ int snat_add_static_mapping(ip4_address_t l_addr, ip4_address_t e_addr,
                 {
                   a = sm->addresses + i;
                   /* External port must be unused */
-                  if (clib_bitmap_get (a->busy_port_bitmap, e_port))
+                  if (clib_bitmap_get_no_check (a->busy_port_bitmap, e_port))
                     return VNET_API_ERROR_INVALID_VALUE;
-                  a->busy_port_bitmap = clib_bitmap_set (a->busy_port_bitmap,
-                                                         e_port, 1);
+                  clib_bitmap_set_no_check (a->busy_port_bitmap, e_port, 1);
                   if (e_port > 1024)
                     a->busy_ports++;
 
@@ -483,8 +482,7 @@ int snat_add_static_mapping(ip4_address_t l_addr, ip4_address_t e_addr,
               if (sm->addresses[i].addr.as_u32 == e_addr.as_u32)
                 {
                   a = sm->addresses + i;
-                  a->busy_port_bitmap = clib_bitmap_set (a->busy_port_bitmap,
-                                                         e_port, 0);
+                  clib_bitmap_set_no_check (a->busy_port_bitmap, e_port, 0);
                   a->busy_ports--;
 
                   break;
@@ -976,13 +974,13 @@ vl_api_snat_show_config_t_handler
 
   REPLY_MACRO2(VL_API_SNAT_SHOW_CONFIG_REPLY,
   ({
-    rmp->translation_buckets = htons (sm->translation_buckets);
-    rmp->translation_memory_size = htons (sm->translation_memory_size);
-    rmp->user_buckets = htons (sm->user_buckets);
-    rmp->user_memory_size = htons (sm->user_memory_size);
-    rmp->max_translations_per_user = htons (sm->max_translations_per_user);
-    rmp->outside_vrf_id = htons (sm->outside_vrf_id);
-    rmp->inside_vrf_id = htons (sm->inside_vrf_id);
+    rmp->translation_buckets = htonl (sm->translation_buckets);
+    rmp->translation_memory_size = htonl (sm->translation_memory_size);
+    rmp->user_buckets = htonl (sm->user_buckets);
+    rmp->user_memory_size = htonl (sm->user_memory_size);
+    rmp->max_translations_per_user = htonl (sm->max_translations_per_user);
+    rmp->outside_vrf_id = htonl (sm->outside_vrf_id);
+    rmp->inside_vrf_id = htonl (sm->inside_vrf_id);
     rmp->static_mapping_only = sm->static_mapping_only;
     rmp->static_mapping_connection_tracking =
       sm->static_mapping_connection_tracking;
@@ -1223,10 +1221,10 @@ void snat_free_outside_address_and_port (snat_main_t * sm,
 
   a = sm->addresses + address_index;
 
-  ASSERT (clib_bitmap_get (a->busy_port_bitmap, port_host_byte_order) == 1);
+  ASSERT (clib_bitmap_get_no_check (a->busy_port_bitmap,
+    port_host_byte_order) == 1);
 
-  a->busy_port_bitmap = clib_bitmap_set (a->busy_port_bitmap, 
-                                         port_host_byte_order, 0);
+  clib_bitmap_set_no_check (a->busy_port_bitmap, port_host_byte_order, 0);
   a->busy_ports--;
 }  
 
@@ -1311,10 +1309,9 @@ int snat_alloc_outside_address_and_port (snat_main_t * sm,
               portnum &= 0xFFFF;
               if (portnum < 1024)
                 continue;
-              if (clib_bitmap_get (a->busy_port_bitmap, portnum))
+              if (clib_bitmap_get_no_check (a->busy_port_bitmap, portnum))
                 continue;
-              a->busy_port_bitmap = clib_bitmap_set (a->busy_port_bitmap,
-                                                     portnum, 1);
+              clib_bitmap_set_no_check (a->busy_port_bitmap, portnum, 1);
               a->busy_ports++;
               /* Caller sets protocol and fib index */
               k->addr = a->addr;
@@ -1822,6 +1819,7 @@ show_snat_command_fn (vlib_main_t * vm,
   snat_user_t * u;
   snat_static_mapping_t *m;
   snat_interface_t *i;
+  snat_address_t * ap;
   vnet_main_t *vnm = vnet_get_main();
   snat_main_per_thread_data_t *tsm;
   u32 users_num = 0, sessions_num = 0, *worker;
@@ -1853,6 +1851,17 @@ show_snat_command_fn (vlib_main_t * vm,
                          vnet_get_sw_interface (vnm, i->sw_if_index),
                          i->is_inside ? "in" : "out");
       }));
+
+      vec_foreach (ap, sm->addresses)
+        {
+          u8 * s = format (0, "");
+          vlib_cli_output (vm, "%U", format_ip4_address, &ap->addr);
+          clib_bitmap_foreach (j, ap->busy_port_bitmap,
+            ({
+              s = format (s, " %d", j);
+            }));
+          vlib_cli_output (vm, "  %d busy ports:%s", ap->busy_ports, s);
+        }
     }
 
   if (sm->num_workers > 1)

@@ -26,7 +26,7 @@ License: MIT
 Version: %{_version}
 Release: %{_release}
 Requires: vpp-lib = %{_version}-%{_release}, net-tools, pciutils, python
-BuildRequires: systemd
+BuildRequires: systemd, chrpath
 
 Source: %{name}-%{_version}-%{_release}.tar.gz
 
@@ -160,9 +160,9 @@ done;
 
 # sample plugin
 mkdir -p -m755 %{buildroot}/usr/share/doc/vpp/examples/sample-plugin/sample
-for file in $(cd %{_mu_build_dir}/%{_vpp_install_dir}/../../sample-plugin && find -type f -print)
+for file in $(cd %{_mu_build_dir}/%{_vpp_install_dir}/../../plugins/sample-plugin && git ls-files .)
 do
-	install -p -m 644 %{_mu_build_dir}/%{_vpp_install_dir}/../../sample-plugin/$file \
+	install -p -m 644 %{_mu_build_dir}/%{_vpp_install_dir}/../../plugins/sample-plugin/$file \
 	   %{buildroot}/usr/share/doc/vpp/examples/sample-plugin/$file
 done
 
@@ -188,6 +188,11 @@ for file in $(find %{_mu_build_dir}/%{_vpp_install_dir}/plugins -type f -name '*
 do
 	install -p -m 644 $file %{buildroot}/usr/share/vpp/api
 done
+
+#
+# remove RPATH from ELF binaries
+#
+%{_mu_build_dir}/scripts/remove-rpath %{buildroot}
 
 %post
 sysctl --system

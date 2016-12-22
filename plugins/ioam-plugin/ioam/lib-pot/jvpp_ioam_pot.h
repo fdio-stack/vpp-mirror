@@ -22,9 +22,9 @@
 #include <vlibmemory/api.h>
 #include <jni.h>
 
-/* Global state for JVPP-IOAM-TRACE */
+/* Global state for JVPP-IOAM-POT */
 typedef struct {
-    /* Base message index for the nsh plugin */
+    /* Base message index for the pot plugin */
     u16 msg_id_base;
 
     /* Pointer to shared memory queue */
