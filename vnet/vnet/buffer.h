@@ -349,7 +349,7 @@ typedef struct
     /* TCP */
     struct
     {
-      u32 session_index;
+      u32 connection_index;
       u32 seq_number;
       u32 seq_end;
       u32 ack_number;

@@ -111,7 +111,7 @@ typedef struct
   f64 count;
 } tcp_rtt_stats_t;
 
-typedef struct _tcp_session
+typedef struct _tcp_connection
 {
   transport_session_t session;  /**< Common transport conn data. First! */
 
@@ -167,7 +167,7 @@ typedef struct _tcp_session
    * a few high-throughput flows
    */
   u32 rewrite_template_index;
-} tcp_session_t;
+} tcp_connection_t;
 
 typedef enum {
   TCP_IP4,
@@ -183,64 +183,21 @@ typedef enum _tcp_error
   TCP_N_ERROR,
 } tcp_error_t;
 
-typedef struct tcp_listener
+typedef struct _tcp_lookup_dispatch
 {
-  /* Bitmap indicating which of local (interface) addresses
-   we should listen on for this destination port. */
-  uword * valid_local_adjacency_bitmap;
-
-  /* Destination port to listen for connections. */
-  u16 dst_port;
-
-  u16 next_index[TCP_N_AF];
-
-  u32 flags;
-
-  /* Connection indices for which event in event_function applies to. */
-  u32 * event_connections[TCP_N_AF];
-  u32 * eof_connections[TCP_N_AF];
-  u32 * close_connections[TCP_N_AF];
-
-//  tcp_event_function_t * event_function;
-} tcp_listener_t;
-
-typedef struct tcp_listener_registration
-{
-  /* Listen on this port. */
-  u16 port;
-
-  /* Listen at this addresses */
-  ip46_address_t ip_address;
-
-  u8 is_ip4;
-  /* TODO options? */
-} tcp_listener_registration_t;
-
-typedef struct {
   u8 next, error;
 } tcp_lookup_dispatch_t;
-
-u32
-tcp_register_listener (tcp_listener_registration_t * r);
-void
-tcp_unregister_listener (u32 listener_index);
 
 typedef struct _tcp_main
 {
   /* Per-worker thread tcp connection pools */
-  tcp_session_t **sessions;
+  tcp_connection_t **connections;
 
   /* Per-worker thread timer vectors, parallel to connection pools */
   tcp_timer_t **timers;
 
-  /* Hash tables mapping name/protocol to protocol info index. */
-  uword * dst_port_info_by_name[TCP_N_AF];
-  uword * dst_port_info_by_dst_port[TCP_N_AF];
-
   /* Pool of listeners. */
-  tcp_session_t *listener_pool;
-
-  u32 *listener_index_by_dst_port;
+  tcp_connection_t *listener_pool;
 
   /** Dispatch table by state and flags */
   tcp_lookup_dispatch_t dispatch_table[TCP_N_CONNECTION_STATE][64];
@@ -250,11 +207,17 @@ typedef struct _tcp_main
   /** per-worker tx buffer free lists */
   u32 **tx_buffers;
 
-  /* Timer wheel for session timers */
+  /* Timer wheel for connections timers */
   tcp_timer_wheel_t timer_wheel;
 
   /* Convenience vector of connections to DELACK */
   u32 *delack_connections;
+
+  /* TODO decide if needed */
+
+  /* Hash tables mapping name/protocol to protocol info index. */
+  uword * dst_port_info_by_name[TCP_N_AF];
+  uword * dst_port_info_by_dst_port[TCP_N_AF];
 
   /* convenience */
   vlib_main_t * vlib_main;
@@ -264,7 +227,8 @@ typedef struct _tcp_main
 } tcp_main_t;
 
 extern tcp_main_t tcp_main;
-
+extern vlib_node_registration_t tcp4_input_node;
+extern vlib_node_registration_t tcp6_input_node;
 extern vlib_node_registration_t tcp4_output_node;
 extern vlib_node_registration_t tcp6_output_node;
 
@@ -274,26 +238,32 @@ vnet_get_tcp_main ()
   return &tcp_main;
 }
 
-always_inline tcp_session_t *
-tcp_session_get (u32 tsi, u32 thread_index)
+always_inline tcp_connection_t *
+tcp_connection_get (u32 tsi, u32 thread_index)
 {
-  return pool_elt_at_index(tcp_main.sessions[thread_index], tsi);
+  return pool_elt_at_index(tcp_main.connections[thread_index], tsi);
 }
 
-always_inline tcp_session_t *
-tcp_listener_get (u32 tsi)
+always_inline void
+tcp_connection_delete (u32 index, u32 my_thread_index)
 {
-  return pool_elt_at_index(tcp_main.listener_pool, tsi);
+  pool_put_index(tcp_main.connections[my_thread_index], index);
+}
+
+always_inline tcp_connection_t *
+tcp_listener_get (u32 tli)
+{
+  return pool_elt_at_index(tcp_main.listener_pool, tli);
 }
 
 void
-tcp_make_ack (tcp_session_t *ts, vlib_buffer_t *b);
+tcp_make_ack (tcp_connection_t *ts, vlib_buffer_t *b);
 void
-tcp_make_synack (tcp_session_t *ts, vlib_buffer_t *b);
+tcp_make_synack (tcp_connection_t *ts, vlib_buffer_t *b);
 void
-tcp_make_dupack (tcp_session_t *ts, u8 is_ip4);
+tcp_make_dupack (tcp_connection_t *ts, u8 is_ip4);
 void
-tcp_make_challange_ack (tcp_session_t *ts, u8 is_ip4);
+tcp_make_challange_ack (tcp_connection_t *ts, u8 is_ip4);
 void
 tcp_send_reset (vlib_buffer_t *pkt, u8 is_ip4);
 
@@ -319,7 +289,7 @@ tcp_end_seq (tcp_header_t *th, u32 len)
  * window since the last ack we sent, in which case, receive window is 0.
  */
 always_inline u32
-tcp_actual_receive_window (const tcp_session_t *ts)
+tcp_actual_receive_window (const tcp_connection_t *ts)
 {
   i32 rcv_wnd = ts->rcv_wnd + ts->rcv_las - ts->rcv_nxt;
   if (rcv_wnd < 0)
@@ -328,7 +298,7 @@ tcp_actual_receive_window (const tcp_session_t *ts)
 }
 
 always_inline u32
-tcp_snd_wnd_end (const tcp_session_t *ts)
+tcp_snd_wnd_end (const tcp_connection_t *ts)
 {
   return ts->snd_una + ts->snd_wnd;
 }
@@ -337,12 +307,6 @@ always_inline u32
 tcp_time_now (void)
 {
   return clib_cpu_time_now () >> tcp_main.log2_tstamp_clocks_per_tick;
-}
-
-always_inline void
-tcp_session_delete (u32 session_index, u32 my_thread_index)
-{
-  pool_put_index(tcp_main.sessions[my_thread_index], session_index);
 }
 
 u32
