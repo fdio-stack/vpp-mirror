@@ -28,6 +28,9 @@
 
 #include <vlibmemory/api.h>
 
+/* Per-worker thread udp connection pools. TODO move to main*/
+extern udp_session_t **udp_sessions;
+
 typedef struct 
 {
   u32 session;
@@ -251,12 +254,12 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
 
               us->mtu = 1024; /* $$$$ policy */
 
-              us->s_lcl_ip4.as_u32 = ip0->dst_address.as_u32;
-              us->s_rmt_ip4.as_u32 = ip0->src_address.as_u32;
-              us->s_lcl_port = udp0->dst_port;
-              us->s_rmt_port = udp0->src_port;
-              us->s_proto = SESSION_TYPE_IP4_UDP;
-              us->s_t_index = us - udp_sessions[my_thread_index];
+              us->c_lcl_ip4.as_u32 = ip0->dst_address.as_u32;
+              us->c_rmt_ip4.as_u32 = ip0->src_address.as_u32;
+              us->c_lcl_port = udp0->dst_port;
+              us->c_rmt_port = udp0->src_port;
+              us->c_proto = SESSION_TYPE_IP4_UDP;
+              us->c_c_index = us - udp_sessions[my_thread_index];
 
               /*
                * create stream session and attach the udp session to it

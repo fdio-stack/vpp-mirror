@@ -230,7 +230,7 @@ tcp_segment_validate (vlib_main_t *vm, tcp_connection_t *tc0, vlib_buffer_t *b0,
         {
           /* Send dup ack */
           tcp_make_ack(tc0, b0);
-          tcp_set_output_next_index (next0, is_est, tc0->is_ip4);
+          tcp_set_output_next_index (next0, is_est, tc0->c_is_ip4);
         }
       return -1;
     }
@@ -284,7 +284,7 @@ tcp_incoming_ack_established (tcp_connection_t *tc0, vlib_buffer_t *tb0,
   if (seq_lt(vnet_buffer (tb0)->tcp.ack_number, tc0->snd_nxt))
     {
       tcp_make_ack (tc0, tb0);
-      tcp_set_output_next_index (next0, is_est, tc0->is_ip4);
+      tcp_set_output_next_index (next0, is_est, tc0->c_is_ip4);
       return -1;
     }
 
@@ -303,7 +303,7 @@ tcp_incoming_ack_established (tcp_connection_t *tc0, vlib_buffer_t *tb0,
 always_inline u8
 tcp_session_no_space (tcp_connection_t *tc, u32 my_thread_index, u16 data_len0)
 {
-  stream_session_t *s = stream_session_get (tc->s_s_index, my_thread_index);
+  stream_session_t *s = stream_session_get (tc->c_s_index, my_thread_index);
 
   if (PREDICT_FALSE(s->session_state != SESSION_STATE_READY))
     return TCP_ERROR_NOT_READY;
@@ -436,7 +436,7 @@ static int
 tcp_segment_rcv (tcp_main_t *tm, tcp_connection_t *tc, u32 my_thread_index,
                  vlib_buffer_t *b, u16 n_data_bytes, u32 *next0, u8 is_est)
 {
-  stream_session_t *s = stream_session_get (tc->s_s_index, my_thread_index);
+  stream_session_t *s = stream_session_get (tc->c_s_index, my_thread_index);
 
   u32 error = 0;
 
@@ -470,7 +470,7 @@ tcp_segment_rcv (tcp_main_t *tm, tcp_connection_t *tc, u32 my_thread_index,
        * add it to the list and flag it */
       if (!tc->flags & TCP_CONN_DELACK)
         {
-          vec_add1 (tm->delack_connections, tc->s_t_index);
+          vec_add1 (tm->delack_connections, tc->c_c_index);
           tc->flags |= TCP_CONN_DELACK;
         }
     }
@@ -482,7 +482,7 @@ tcp_segment_rcv (tcp_main_t *tm, tcp_connection_t *tc, u32 my_thread_index,
        * to output where it will be converted into an ACK */
       if ((tc->flags & TCP_CONN_SNDACK) == 0)
         {
-          tcp_set_output_next_index (next0, is_est, tc->is_ip4);
+          tcp_set_output_next_index (next0, is_est, tc->c_is_ip4);
           tcp_make_ack (tc, b);
           error = TCP_ERROR_ENQUEUED;
 
@@ -732,7 +732,7 @@ tcp_notify_accept_server (tcp_connection_t *tc, u32 my_thread_index)
   stream_server_t *ss;
   stream_session_t *s;
 
-  s = stream_session_get (tc->s_s_index, my_thread_index);
+  s = stream_session_get (tc->c_s_index, my_thread_index);
 
   /* Get session's server */
   ss = pool_elt_at_index(ssm->servers, s->server_index);
@@ -1111,27 +1111,27 @@ tcp46_listen_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
 
           /* Create child session and send SYN-ACK */
           pool_get(tm->connections[my_thread_index], child0);
-          child0->s_t_index = child0 - tm->connections[my_thread_index];
-          child0->s_lcl_port = tc0->s_lcl_port;
-          child0->s_rmt_port = th0->src_port;
-          child0->is_ip4 = is_ip4;
+          child0->c_c_index = child0 - tm->connections[my_thread_index];
+          child0->c_lcl_port = tc0->c_lcl_port;
+          child0->c_rmt_port = th0->src_port;
+          child0->c_is_ip4 = is_ip4;
           tcp_timers_init (child0);
 
           if (is_ip4)
             {
-              child0->s_lcl_ip4.as_u32 = ip40->dst_address.as_u32;
-              child0->s_rmt_ip4.as_u32 = ip40->src_address.as_u32;
+              child0->c_lcl_ip4.as_u32 = ip40->dst_address.as_u32;
+              child0->c_rmt_ip4.as_u32 = ip40->src_address.as_u32;
             }
           else
             {
-              clib_memcpy (&child0->s_lcl_ip6, &ip60->dst_address,
+              clib_memcpy (&child0->c_lcl_ip6, &ip60->dst_address,
                            sizeof(ip6_address_t));
-              clib_memcpy (&child0->s_rmt_ip6, &ip60->src_address,
+              clib_memcpy (&child0->c_rmt_ip6, &ip60->src_address,
                            sizeof(ip6_address_t));
             }
 
           error0 = stream_session_create (
-              tc0->s_s_index, child0->s_t_index, my_thread_index,
+              tc0->c_s_index, child0->c_c_index, my_thread_index,
               is_ip4 ? SESSION_TYPE_IP4_TCP : SESSION_TYPE_IP6_TCP,
               /* notify */0);
 
@@ -1360,13 +1360,13 @@ tcp46_input_inline (vlib_main_t * vm,
           if (PREDICT_TRUE(0 != s0))
             {
               if (PREDICT_FALSE (s0->session_state == SESSION_STATE_LISTENING))
-                tc0 = tcp_listener_get (s0->transport_session_index);
+                tc0 = tcp_listener_get (s0->connection_index);
               else
-                tc0 = tcp_connection_get (s0->transport_session_index,
+                tc0 = tcp_connection_get (s0->connection_index,
                                        my_thread_index);
 
               /* Save session index */
-              vnet_buffer (b0)->tcp.connection_index = s0->transport_session_index;
+              vnet_buffer (b0)->tcp.connection_index = s0->connection_index;
               vnet_buffer (b0)->tcp.seq_number = clib_net_to_host_u32 (
                   tcp0->seq_number);
               vnet_buffer (b0)->tcp.ack_number = clib_net_to_host_u32 (

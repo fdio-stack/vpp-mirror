@@ -6983,7 +6983,7 @@ vl_api_disconnect_session_t_handler (vl_api_disconnect_session_t * mp)
   vl_api_disconnect_session_reply_t * rmp;
   int rv;
 
-  rv = vnet_disconnect_uri_session (mp->client_index, mp->session_index,
+  rv = vnet_disconnect_uri (mp->client_index, mp->session_index,
                                     mp->session_thread_index);
 
   REPLY_MACRO (VL_API_DISCONNECT_SESSION_REPLY);
@@ -7002,7 +7002,7 @@ vl_api_disconnect_session_reply_t_handler
       return;
     }
 
-  rv = vnet_disconnect_uri_session (mp->client_index, mp->session_index,
+  rv = vnet_disconnect_uri (mp->client_index, mp->session_index,
                                     mp->session_thread_index);
 
   if (rv)

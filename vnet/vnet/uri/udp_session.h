@@ -41,7 +41,7 @@ typedef CLIB_PACKED (struct
 
 typedef struct
 {
-  transport_session_t session;          /** must be first */
+  transport_connection_t connection;          /** must be first */
 
   /** ersatz MTU to limit fifo pushes to test data size */
   u32 mtu;

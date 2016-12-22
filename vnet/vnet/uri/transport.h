@@ -18,7 +18,7 @@
 
 #include <vnet/vnet.h>
 
-typedef struct _transport_session transport_session_t;
+typedef struct _transport_connection transport_connection_t;
 
 /* 16 octets */
 typedef CLIB_PACKED (struct
@@ -39,7 +39,7 @@ typedef CLIB_PACKED (struct
     };
     u64 as_u64[2];
   };
-}) v4_session_key_t;
+}) v4_connection_key_t;
 
 typedef CLIB_PACKED(struct
 {
@@ -57,50 +57,37 @@ typedef CLIB_PACKED(struct
     };
     u64 as_u64[6];
   };
-}) v6_session_key_t;
-
-typedef void
-(*tp_session_create) (void *);
-
-typedef void
-(*tp_session_delete) (transport_session_t * s);
-
-/** TODO decide if fwd slowdown is worth generalizing uri_*_node */
-typedef struct _transport_session_vft
-{
-  tp_session_create create;
-  tp_session_delete delete;
-} transport_session_vft_t;
+}) v6_connection_key_t;
 
 /*
  * Protocol independent transport properties associated to a session
  */
-struct _transport_session
+struct _transport_connection
 {
   ip46_address_t remote_ip;
   ip46_address_t local_ip;
   u16 local_port;
   u16 remote_port;
-  u8 proto;                     /**< transport protocol id */
+  u8 proto;                     /**< Transport protocol id */
 
-  u8 state;                     /**< transport session state */
-  u32 session_index;            /**< parent session index */
-  u32 transport_session_index;  /**< index in transport pool */
+  u8 state;                     /**< Transport session state */
+  u32 session_index;            /**< Parent session index */
+  u32 connection_index;         /**< Index in transport pool */
+  u8 is_ip4;                    /**< Flag if IP4 connection */
 
-  const transport_session_vft_t *ts_vft;   /**< virtual function table */
-
-  /** Macros for 'derived classes' where base is named "session" */
-#define s_lcl_ip4 session.local_ip.ip4
-#define s_rmt_ip4 session.remote_ip.ip4
-#define s_lcl_ip6 session.local_ip.ip6
-#define s_rmt_ip6 session.remote_ip.ip6
-#define s_lcl_port session.local_port
-#define s_rmt_port session.remote_port
-#define s_proto session.proto
-#define s_state session.state
-#define s_s_index session.session_index
-#define s_t_index session.transport_session_index
-#define s_vft session.ts_vft
+  /** Macros for 'derived classes' where base is named "connection" */
+#define c_lcl_ip4 connection.local_ip.ip4
+#define c_rmt_ip4 connection.remote_ip.ip4
+#define c_lcl_ip6 connection.local_ip.ip6
+#define c_rmt_ip6 connection.remote_ip.ip6
+#define c_lcl_port connection.local_port
+#define c_rmt_port connection.remote_port
+#define c_proto connection.proto
+#define c_state connection.state
+#define c_s_index connection.session_index
+#define c_c_index connection.connection_index
+#define c_vft connection.ts_vft
+#define c_is_ip4 connection.is_ip4
 
 };
 

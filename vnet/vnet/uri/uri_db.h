@@ -96,8 +96,13 @@ typedef struct _stream_session_t
   /** State */
   u8 session_state;
 
+  /** Session index in per_thread pool */
+  u32 session_index;
+
   /** Transport specific */
-  u32 transport_session_index;
+  u32 connection_index;
+
+  u8 session_thread_index;
 
   /** Application specific */
   u32 pid;
@@ -106,16 +111,11 @@ typedef struct _stream_session_t
   svm_fifo_t * server_rx_fifo;
   svm_fifo_t * server_tx_fifo;
 
-  u8 session_thread_index;
-
   /** To avoid n**2 "one event per frame" check */
   u8 enqueue_epoch;
 
   /** used during unbind processing */
   u8 is_deleted;
-
-  /** Session index in per_thread pool */
-  u32 session_index;
 
   /** stream server pool index */
   u32 server_index;
@@ -292,16 +292,16 @@ typedef u32
 (*tp_application_send) (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b);
 
 typedef u8 *
-(*tp_session_format) (u8 *s, va_list *args);
+(*tp_connection_format) (u8 *s, va_list *args);
 
-typedef transport_session_t *
-(*tp_session_get) (u32 session_index, u32 my_thread_index);
+typedef transport_connection_t *
+(*tp_connection_get) (u32 session_index, u32 my_thread_index);
 
-typedef transport_session_t *
-(*tp_listen_session_get) (u32 session_index);
+typedef transport_connection_t *
+(*tp_listen_connection_get) (u32 session_index);
 
 typedef void
-(*tp_session_del) (u32 session_index, u32 my_thread_index);
+(*tp_connection_del) (u32 session_index, u32 my_thread_index);
 
 /*
  * Transport protocol virtual function table
@@ -311,10 +311,10 @@ typedef struct _transport_proto_vft
   tp_application_bind bind;
   tp_application_unbind unbind;
   tp_application_send send;
-  tp_session_format format_session;
-  tp_session_get get_session;
-  tp_listen_session_get get_listener;
-  tp_session_del delete_session;
+  tp_connection_format format_connection;
+  tp_connection_get get_connection;
+  tp_listen_connection_get get_listener;
+  tp_connection_del delete_connection;
 } transport_proto_vft_t;
 
 void
@@ -323,26 +323,6 @@ uri_register_transport (u8 type, const transport_proto_vft_t *vft);
 transport_proto_vft_t *
 uri_get_transport (u8 type);
 
-void
-transport_session_make_v4_kv (session_kv4_t *kv, transport_session_t *t);
-
-void
-stream_session_make_v4_kv (session_kv4_t *kv, ip4_address_t * lcl,
-                           ip4_address_t * rmt, u16 lcl_port, u16 rmt_port,
-                           u8 proto);
-void
-make_listener_v4_kv (session_kv4_t *kv, ip4_address_t * lcl, u16 lcl_port,
-                     u8 proto);
-void
-transport_session_make_v6_kv (session_kv6_t *kv, transport_session_t *t);
-
-void
-stream_session_make_v6_kv (session_kv6_t *kv, ip6_address_t * lcl,
-                           ip6_address_t * rmt, u16 lcl_port, u16 rmt_port,
-                           u8 proto);
-void
-make_listener_v6_kv (session_kv6_t *kv, ip6_address_t * lcl, u16 lcl_port,
-                     u8 proto);
 /*
  * fd.io coding-style-patch-verification: ON
  *

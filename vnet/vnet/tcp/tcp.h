@@ -113,7 +113,7 @@ typedef struct
 
 typedef struct _tcp_connection
 {
-  transport_session_t session;  /**< Common transport conn data. First! */
+  transport_connection_t connection;  /**< Common transport data. First! */
 
   u8 state;                     /**< TCP state as per tcp_state_t */
   u32 timers[TCP_N_TIMERS];     /**< Timer handles into timer wheel */
@@ -150,8 +150,6 @@ typedef struct _tcp_connection
   u32 connected_session_index;
 
   u16 flags;
-
-  u8 is_ip4;            /**< Flag to indicate if connection uses IP4 */
 
   /* tos, ttl to use on tx */
   u8 tos;
