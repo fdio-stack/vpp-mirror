@@ -816,19 +816,23 @@ nobase_include_HEADERS +=			\
 # URI connection managmeent
 ########################################
 
-libvnet_la_SOURCES +=					\
-  vnet/uri/uri.c					\
-  vnet/uri/uri_hashes.c					\
-  vnet/uri/uri_queue.c					\
-  vnet/uri/uri_udp4_node.c				\
-  vnet/uri/uri_udp_builtin_server.c			\
-  vnet/uri/uri_udp.c
+libvnet_la_SOURCES +=				\
+  vnet/uri/uri.c				\
+  vnet/uri/uri_hashes.c				\
+  vnet/uri/uri_queue.c				\
+  vnet/uri/uri_udp4_node.c			\
+  vnet/uri/uri_udp_builtin_server.c		\
+  vnet/uri/uri_udp.c				\
+  vnet/uri/uri_api.c
 
 nobase_include_HEADERS +=			\
   vnet/uri/uri.h				\
   vnet/uri/uri_db.h				\
   vnet/uri/transport.h				\
-  vnet/uri/udp_session.h
+  vnet/uri/udp_session.h			\
+  vnet/uri/uri.api.h
+
+API_FILES += vnet/uri/uri.api
 
 ########################################
 # Linux packet interface
