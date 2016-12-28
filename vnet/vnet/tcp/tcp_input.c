@@ -316,21 +316,38 @@ tcp_session_no_space (tcp_connection_t *tc, u32 my_thread_index, u16 data_len0)
 
 /** Enqueue data for delivery to application */
 always_inline u32
-tcp_session_enqueue_data (stream_session_t *s0, u8 *data0, u16 data_len0)
+tcp_session_enqueue_data (tcp_connection_t *tc, vlib_buffer_t *b, u16 data_len0)
 {
   stream_server_main_t *ssm = &stream_server_main;
+  stream_session_t *s0;
   svm_fifo_t *f0;
   u8 my_enqueue_epoch;
+  int written;
+
+  s0 = stream_session_get (tc->c_s_index, tc->c_thread_index);
 
   /* Make sure there's enough space left. We might've filled the pipes */
-  if (PREDICT_FALSE(data_len0 > svm_fifo_max_enqueue (s0->server_rx_fifo)))
+  if (PREDICT_FALSE (data_len0 > svm_fifo_max_enqueue (s0->server_rx_fifo)))
     return TCP_ERROR_FIFO_FULL;
 
   my_enqueue_epoch = ++ssm->current_enqueue_epoch[s0->session_thread_index];
 
   f0 = s0->server_rx_fifo;
 
-  svm_fifo_enqueue_nowait2 (f0, s0->pid, data_len0, (u8 *) data0);
+  written = svm_fifo_enqueue_nowait2 (f0, s0->pid, data_len0,
+                                      vlib_buffer_get_current (b));
+
+  /* Update rcv_nxt. If more data written than expected, account for
+   * out-of-order bytes. */
+  if (PREDICT_TRUE (written == data_len0))
+    tc->rcv_nxt = vnet_buffer (b)->tcp.seq_end;
+  else if (written > data_len0)
+    tc->rcv_nxt = vnet_buffer (b)->tcp.seq_end + written - data_len0;
+  else
+    {
+      ASSERT(0);
+      return TCP_ERROR_FIFO_FULL;
+    }
 
   /* We need to send an RX event on this fifo */
   if (s0->enqueue_epoch != my_enqueue_epoch)
@@ -341,7 +358,22 @@ tcp_session_enqueue_data (stream_session_t *s0, u8 *data0, u16 data_len0)
           s0 - ssm->sessions[s0->session_thread_index]);
     }
 
-  return 0;
+  return TCP_ERROR_ENQUEUED;
+}
+
+/** Enqueue out-of-order data */
+always_inline u32
+tcp_session_enqueue_ooo (tcp_connection_t *tc, u32 offset, u8 *data0,
+                         u16 data_len0)
+{
+  stream_session_t *s0;
+  s0 = stream_session_get (tc->c_s_index, tc->c_thread_index);
+
+  if (svm_fifo_enqueue_with_offset2 (s0->server_rx_fifo, s0->pid, offset,
+                                     data_len0, (u8 *) data0))
+    return TCP_ERROR_FIFO_FULL;
+
+  return TCP_ERROR_ENQUEUED;
 }
 
 void
@@ -426,7 +458,8 @@ tcp_can_delack (tcp_connection_t *tc)
   /* If there's no DELACK timer set and the last window sent wasn't 0 we
    * can safely delay. */
   if (!tcp_timer_is_active (tc, TCP_TIMER_DELACK)
-      && (tc->flags & TCP_CONN_SENT_RCV_WND0) == 0)
+      && (tc->flags & TCP_CONN_SENT_RCV_WND0) == 0
+      && (tc->flags & TCP_CONN_SNDACK) == 0)
     return 1;
 
   return 0;
@@ -436,34 +469,41 @@ static int
 tcp_segment_rcv (tcp_main_t *tm, tcp_connection_t *tc, u32 my_thread_index,
                  vlib_buffer_t *b, u16 n_data_bytes, u32 *next0, u8 is_est)
 {
-  stream_session_t *s = stream_session_get (tc->c_s_index, my_thread_index);
+  u32 error = 0, offset;
 
-  u32 error = 0;
-
-  /* If in order just push data */
-  if (vnet_buffer (b)->tcp.seq_number == tc->rcv_nxt)
+  /* Handle out-of-order data */
+  if (PREDICT_FALSE (vnet_buffer (b)->tcp.seq_number != tc->rcv_nxt))
     {
-      error = tcp_session_enqueue_data (s, vlib_buffer_get_current (b),
-                                        n_data_bytes);
+      offset = vnet_buffer (b)->tcp.seq_number - tc->rcv_nxt;
+      error = tcp_session_enqueue_ooo (tc, offset, vlib_buffer_get_current (b),
+                                       n_data_bytes);
+
+      /* RFC2581: Send DUPACK for fast retransmit */
+      tcp_make_ack (tc, b);
+      tcp_set_output_next_index (next0, is_est, tc->c_is_ip4);
+
+      /* Mark as DUPACK. We may filter these in output */
+      vnet_buffer (b)->tcp.flags = TCP_BUF_FLAG_DUPACK;
+
+      /* Don't send more than 3 dupacks per burst */
+      tc->snt_dupacks = 0;
+
+      goto done;
     }
-  else
-    {
-      clib_warning ("OOR");
-      /* TODO take care of OOO */
-      return TCP_ERROR_SEGMENT_INVALID;
-    }
 
-  if (!error)
+  /* Pure ACK. Update rcv_nxt and be done. */
+  if (PREDICT_FALSE (n_data_bytes == 0))
     {
-      /* Update receive next */
       tc->rcv_nxt = vnet_buffer (b)->tcp.seq_end;
+      goto try_delack;
     }
 
-  /* Pure ACK, nothing more to do */
-  if (n_data_bytes == 0)
-    goto done;
+  /* In order data, enqueue. Fifo figures out by itself if any out-of-order
+   * segments can be enqueued after fifo tail offset changes. */
+  error = tcp_session_enqueue_data (tc, b, n_data_bytes);
 
-  /* Check if segment can be delayed */
+ try_delack:
+  /* Check if ACK can be delayed */
   if (tcp_can_delack (tc))
     {
       /* If connection has not been previously marked for delay ack
@@ -507,7 +547,8 @@ delack_timers_init (tcp_main_t *tm)
       tc = pool_elt_at_index (tm->connections[my_thread_index], conns[i]);
       ASSERT(0 != tc);
 
-      tc->timers[TCP_TIMER_DELACK] = tcp_timer_start (&tm->timer_wheel, conns[i],
+      tc->timers[TCP_TIMER_DELACK] = tcp_timer_start (&tm->timer_wheel,
+                                                      conns[i],
                                                       TCP_TIMER_DELACK,
                                                       TCP_DELACK_TIME);
     }
@@ -864,6 +905,12 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
               /* Shoulder tap the server */
               tcp_notify_accept_server (tc0, my_thread_index);
               break;
+            case TCP_CONNECTION_STATE_ESTABLISHED:
+              /* Packets may have been enqueued before state change */
+              if (tcp_incoming_ack_established (tc0, b0, tcp0, &next0, 0) < 0)
+                goto drop;
+
+              break;
             case TCP_CONNECTION_STATE_FIN_WAIT_1:
               /* In addition to the processing for the ESTABLISHED state, if
                * our FIN is now acknowledged then enter FIN-WAIT-2 and
@@ -935,8 +982,8 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
             case TCP_CONNECTION_STATE_ESTABLISHED:
             case TCP_CONNECTION_STATE_FIN_WAIT_1:
             case TCP_CONNECTION_STATE_FIN_WAIT_2:
-              tcp_segment_rcv (tm, tc0, my_thread_index, b0, n_data_bytes0,
-                               &next0, 0);
+              error0 = tcp_segment_rcv (tm, tc0, my_thread_index, b0,
+                                        n_data_bytes0, &next0, 0);
               break;
             case TCP_CONNECTION_STATE_CLOSE_WAIT:
             case TCP_CONNECTION_STATE_CLOSING:
@@ -1115,6 +1162,7 @@ tcp46_listen_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
           child0->c_lcl_port = tc0->c_lcl_port;
           child0->c_rmt_port = th0->src_port;
           child0->c_is_ip4 = is_ip4;
+          child0->c_thread_index = my_thread_index;
           tcp_timers_init (child0);
 
           if (is_ip4)

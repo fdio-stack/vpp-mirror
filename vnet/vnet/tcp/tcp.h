@@ -104,6 +104,26 @@ typedef enum _tcp_connection_flag
 void
 tcp_update_time (f64 now);
 
+/** TCP buffer flags */
+#define foreach_tcp_buf_flag                            \
+  _ (ACK)       /**< Sending ACK. */                    \
+  _ (DUPACK)    /**< Sending DUPACK. */                 \
+
+enum
+{
+#define _(f) TCP_BUF_BIT_##f,
+  foreach_tcp_buf_flag
+#undef _
+  TCP_N_BUF_BITS,
+};
+
+enum
+{
+#define _(f) TCP_BUF_FLAG_##f = 1 << TCP_BUF_BIT_##f,
+  foreach_tcp_buf_flag
+#undef _
+};
+
 typedef struct
 {
   /* sum, sum**2 */
@@ -120,7 +140,7 @@ typedef struct _tcp_connection
 
   /* TODO RFC4898 */
 
-  /** Send sequence variables RFC793*/
+  /** Send sequence variables RFC793 */
   u32 snd_una;          /**< oldest unacknowledged sequence number */
   u16 snd_wnd;          /**< send window */
   u32 snd_wl1;          /**< seq number used for last snd.wnd update */
@@ -132,30 +152,30 @@ typedef struct _tcp_connection
   u32 rcv_wnd;          /**< receive window we expect */
 
   u32 rcv_las;          /**< rcv_nxt at last ack sent/rcv_wnd update */
-
-  tcp_options_t opt;    /**< send/receive and session options */
-
   u32 iss;              /**< initial sent sequence */
   u32 irs;              /**< initial remote sequence */
 
   /* Options */
+  tcp_options_t opt;    /**< Send/receive connection options */
   u8 rcv_wscale;        /**< Window scale to advertise to peer */
   u8 snd_wscale;        /**< Window scale to use when sending */
   u32 tsval_recent;     /**< Last timestamp received */
   u32 tsval_recent_age; /**< When last updated tstamp_recent*/
+
+  u16 flags;            /**< Connection flags (see tcp_conn_flags_e) */
+
+  u8 snt_dupacks;       /**< Number of DUPACKs sent in a burst */
+
+  /* XXX Everything lower may be removed */
 
   u16 max_segment_size;
 
   /* Set if connected to another tcp46_session_t */
   u32 connected_session_index;
 
-  u16 flags;
-
   /* tos, ttl to use on tx */
   u8 tos;
   u8 ttl;
-
-  u8 worker_thread_index;
 
   tcp_rtt_stats_t stats;
 

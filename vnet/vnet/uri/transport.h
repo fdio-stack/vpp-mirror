@@ -74,6 +74,7 @@ struct _transport_connection
   u32 session_index;            /**< Parent session index */
   u32 connection_index;         /**< Index in transport pool */
   u8 is_ip4;                    /**< Flag if IP4 connection */
+  u32 thread_index;             /**< Worker-thread index */
 
   /** Macros for 'derived classes' where base is named "connection" */
 #define c_lcl_ip4 connection.local_ip.ip4
@@ -88,7 +89,7 @@ struct _transport_connection
 #define c_c_index connection.connection_index
 #define c_vft connection.ts_vft
 #define c_is_ip4 connection.is_ip4
-
+#define c_thread_index connection.thread_index
 };
 
 

@@ -30,11 +30,17 @@ typedef enum
   SVM_FIFO_TAG_ENQUEUE,
 } svm_lock_tag_t;
 
+/** Out-of-order segment */
 typedef struct
 {
-  u32 fifo_position;
-  u32 length;
-} offset_enqueue_t;
+  u32 next;     /**< Next linked-list element pool index */
+  u32 prev;     /**< Previous linked-list element pool index */
+
+  u32 fifo_position;    /**< Start of segment, normalized*/
+  u32 length;           /**< Length of segment */
+} ooo_segment_t;
+
+#define OOO_SEGMENT_INVALID_INDEX ((u32)~0)
 
 typedef struct
 {
@@ -44,6 +50,7 @@ typedef struct
   svm_lock_tag_t tag;
   volatile u32 cursize;
   u32 nitems;
+
   /* Backpointers */
   u32 server_session_index;
   u32 client_session_index;
@@ -52,9 +59,13 @@ typedef struct
   CLIB_CACHE_LINE_ALIGN_MARK(end_shared);
   u32 head;
   CLIB_CACHE_LINE_ALIGN_MARK(end_consumer);
+
   /* producer */
   u32 tail;
-  offset_enqueue_t *offset_enqueues;
+
+  ooo_segment_t *ooo_segments;    /**< Pool of ooo segments */
+  u32 ooos_list_head;             /** Head of out-of-order linked-list */
+
  CLIB_CACHE_LINE_ALIGN_MARK (data);
 } svm_fifo_t;
 
@@ -88,6 +99,11 @@ static inline u32 svm_fifo_max_dequeue (svm_fifo_t * f)
 static inline u32 svm_fifo_max_enqueue (svm_fifo_t * f)
 {
   return f->nitems - f->cursize;
+}
+
+static inline u8 svm_fifo_has_ooo_data (svm_fifo_t *f)
+{
+  return f->ooos_list_head != OOO_SEGMENT_INVALID_INDEX;
 }
 
 svm_fifo_t * 

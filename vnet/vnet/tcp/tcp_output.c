@@ -310,7 +310,7 @@ tcp_make_ack (tcp_connection_t *tc, vlib_buffer_t *b)
   tc->rcv_las = tc->rcv_nxt;
 
   vnet_buffer (b)->tcp.connection_index = tc->c_c_index;
-  vnet_buffer (b)->tcp.flags = TCP_FLAG_ACK;
+  vnet_buffer (b)->tcp.flags = TCP_BUF_FLAG_ACK;
 }
 
 /**
@@ -355,7 +355,7 @@ tcp_make_synack (tcp_connection_t *tc, vlib_buffer_t *b)
   tc->rcv_las = tc->rcv_nxt;
 
   vnet_buffer (b)->tcp.connection_index = tc->c_c_index;
-  vnet_buffer (b)->tcp.flags = TCP_FLAG_SYN | TCP_FLAG_ACK;
+  vnet_buffer (b)->tcp.flags = TCP_BUF_FLAG_ACK;
 }
 
 void
@@ -488,6 +488,13 @@ timer_delack_handler (u32 index)
   vlib_put_frame_to_node (vm, next_index, f);
 }
 
+always_inline u32
+tcp_session_has_ooo_data (tcp_connection_t *tc)
+{
+  stream_session_t *s = stream_session_get (tc->c_s_index, tc->c_thread_index);
+  return svm_fifo_has_ooo_data (s->server_rx_fifo);
+}
+
 always_inline uword
 tcp46_output_inline (vlib_main_t * vm,
                     vlib_node_runtime_t * node,
@@ -561,6 +568,17 @@ tcp46_output_inline (vlib_main_t * vm,
                 }
             }
 
+          /* Filter DUPACKs if there are no OOO segments left */
+          if (PREDICT_FALSE(vnet_buffer (b0)->tcp.flags & TCP_BUF_FLAG_DUPACK))
+            {
+              if (!tcp_session_has_ooo_data (tc0) || tc0->snt_dupacks >= 3)
+                {
+                  next0 = TCP_OUTPUT_NEXT_DROP;
+                  goto done;
+                }
+              tc0->snt_dupacks++;
+            }
+
           /* set fib index to default and lookup node */
           /* XXX network virtualization (vrf/vni)*/
           vnet_buffer (b0)->sw_if_index[VLIB_RX] = 0;
@@ -570,6 +588,7 @@ tcp46_output_inline (vlib_main_t * vm,
 
           next0 = is_ip4 ? TCP_OUTPUT_NEXT_IP4_LOOKUP : TCP_OUTPUT_NEXT_IP6_LOOKUP;
 
+         done:
           b0->error = error0 != 0 ? node->errors[error0] : 0;
           if (PREDICT_FALSE(b0->flags & VLIB_BUFFER_IS_TRACED))
             {

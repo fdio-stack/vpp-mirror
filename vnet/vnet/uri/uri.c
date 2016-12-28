@@ -327,7 +327,7 @@ stream_server_add_segment (stream_server_main_t *ssm, stream_server_t * ss)
  * Create a stream session. Optionally ping the server by callback.
  */
 int
-stream_session_create (u32 listener_index, u32 transport_session_index,
+stream_session_create (u32 listener_index, u32 connection_index,
                        u32 my_thread_index, u8 sst, u8 notify)
 {
   stream_server_main_t *ssm = &stream_server_main;
@@ -352,7 +352,7 @@ stream_session_create (u32 listener_index, u32 transport_session_index,
   if (check_api_queue_full (ss))
     return URI_INPUT_ERROR_API_QUEUE_FULL;
 
-  /* Allocate fifos */
+  /* Allocate svm fifos */
   ASSERT(vec_len(ss->segment_indices));
 
  again:
@@ -436,10 +436,10 @@ stream_session_create (u32 listener_index, u32 transport_session_index,
   s->session_index = pool_index;
 
   /* Attach transport to session */
-  s->connection_index = transport_session_index;
+  s->connection_index = connection_index;
 
   /* Attach session to transport */
-  tc = tp_vfts[sst].get_connection(transport_session_index, my_thread_index);
+  tc = tp_vfts[sst].get_connection(connection_index, my_thread_index);
   tc->session_index = pool_index;
 
   /* Add to the main lookup table */
