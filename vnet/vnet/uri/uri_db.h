@@ -264,8 +264,24 @@ stream_session_get (u64 si, u32 thread_index)
   return pool_elt_at_index(stream_server_main.sessions[thread_index], si);
 }
 
+int
+stream_session_enqueue_data (stream_session_t *s0, u8 *data, u16 len,
+                             u8 queue_event);
+
+int
+stream_session_enqueue_notify (stream_session_t *s, u8 block);
+
+always_inline stream_server_main_t *
+stream_server_get_main ()
+{
+  return &stream_server_main;
+}
+
+int
+stream_server_flush_enqueue_events (u32 my_thread_index);
+
 always_inline int
-check_api_queue_full (stream_server_t *ss)
+stream_server_api_queue_is_full (stream_server_t *ss)
 {
   unix_shared_memory_queue_t * q;
 

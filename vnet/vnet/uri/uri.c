@@ -266,7 +266,7 @@ stream_session_t *
 stream_session_lookup6 (ip6_address_t * lcl, ip6_address_t * rmt, u16 lcl_port,
                         u16 rmt_port, u8 proto, u32 my_thread_index)
 {
-  stream_server_main_t *ssm = &stream_server_main;
+  stream_server_main_t *ssm = stream_server_get_main ();
   session_kv6_t kv6;
   int rv;
 
@@ -287,6 +287,143 @@ stream_session_lookup_listener (ip46_address_t * lcl, u16 lcl_port, u8 proto,
     return stream_session_lookup_listener4 (&lcl->ip4, lcl_port, proto);
   else
     return stream_session_lookup_listener6 (&lcl->ip6, lcl_port, proto);
+}
+
+/*
+ * Enqueue data for delivery to session peer. Does not notify peer of enqueue
+ * event but on request can queue notification events for later delivery by
+ * calling stream_server_flush_enqueue_events().
+ *
+ * @param s Stream session which is to be enqueued data
+ * @param data Data to be enqueued
+ * @param len Length of data to be enqueued
+ * @param queue_event Flag to indicate if peer is to be notified or if event
+ *                    is to be queued. The former is useful when more data is
+ *                    enqueued and only one event is to be generated.
+ * @return Number of bytes enqueued or a negative value if enqueueing failed.
+ */
+int
+stream_session_enqueue_data (stream_session_t *s, u8 *data, u16 len,
+                             u8 queue_event)
+{
+  int enqueued;
+
+  /* Make sure there's enough space left. We might've filled the pipes */
+  if (PREDICT_FALSE(len > svm_fifo_max_enqueue (s->server_rx_fifo)))
+    return -1;
+
+  enqueued = svm_fifo_enqueue_nowait2 (s->server_rx_fifo, s->pid, len, data);
+
+  if (queue_event)
+    {
+      /* Queue RX event on this fifo. Eventually these will need to be flushed
+       * by calling stream_server_flush_enqueue_events () */
+      stream_server_main_t *ssm = stream_server_get_main ();
+      u32 thread_index = s->session_thread_index;
+      u32 my_enqueue_epoch = ssm->current_enqueue_epoch[thread_index];
+
+      if (s->enqueue_epoch != my_enqueue_epoch)
+        {
+          s->enqueue_epoch = my_enqueue_epoch;
+          vec_add1(ssm->session_indices_to_enqueue_by_thread[thread_index],
+                   s - ssm->sessions[thread_index]);
+        }
+    }
+
+  return enqueued;
+}
+
+/**
+ * Notify session peer that new data has been enqueued.
+ *
+ * @param s Stream session for which the event is to be generated.
+ * @param block Flag to indicate if call should block if event queue is full.
+ *
+ * @return 0 on succes or negative number if failed to send notification.
+ */
+int
+stream_session_enqueue_notify (stream_session_t *s0, u8 block)
+{
+  stream_server_main_t *ssm = stream_server_get_main ();
+  stream_server_t *ss0;
+  fifo_event_t evt;
+  unix_shared_memory_queue_t * q;
+  static u32 serial_number;
+
+  /* Get session's server */
+  ss0 = pool_elt_at_index (ssm->servers, s0->server_index);
+
+  /* Fabricate event */
+  evt.fifo = s0->server_rx_fifo;
+  evt.event_type = FIFO_EVENT_SERVER_RX;
+  evt.event_id = serial_number++;
+  evt.enqueue_length = svm_fifo_max_dequeue (s0->server_rx_fifo);
+
+  /* Add event to server's event queue */
+  q = ss0->event_queue;
+
+  /* Based on request block (or not) for lack of space */
+  if (block || PREDICT_TRUE (q->cursize < q->maxsize))
+    unix_shared_memory_queue_add (ss0->event_queue, (u8 *)&evt,
+                                  0 /* do wait for mutex */);
+  else
+    return -1;
+
+  if (1)
+    {
+      ELOG_TYPE_DECLARE(e) =
+        {
+          .format = "evt-enqueue: id %d length %d",
+          .format_args = "i4i4",
+        };
+      struct { u32 data[2];} * ed;
+      ed = ELOG_DATA (&vlib_global_main.elog_main, e);
+      ed->data[0] = evt.event_id;
+      ed->data[1] = evt.enqueue_length;
+    }
+
+  return 0;
+}
+
+/**
+ * Flushes queue of sessions that are to be notified of new data
+ * enqueued events.
+ *
+ * @param thread_index Thread index for which the flush is to be performed.
+ * @return 0 on success or a positive number indicating the number of
+ *         failures due to API queue being full.
+ */
+int
+stream_server_flush_enqueue_events (u32 my_thread_index)
+{
+  stream_server_main_t *ssm = stream_server_get_main ();
+  u32 *session_indices_to_enqueue;
+  int i, errors = 0;
+
+  session_indices_to_enqueue =
+      ssm->session_indices_to_enqueue_by_thread[my_thread_index];
+
+  for (i = 0; i < vec_len(session_indices_to_enqueue); i++)
+    {
+      stream_session_t * s0;
+
+      /* Get session */
+      s0 = stream_session_get (session_indices_to_enqueue[i], my_thread_index);
+      if (stream_session_enqueue_notify (s0, 0 /* don't block */))
+        {
+          errors++;
+        }
+    }
+
+  vec_reset_length(session_indices_to_enqueue);
+
+  ssm->session_indices_to_enqueue_by_thread[my_thread_index] =
+      session_indices_to_enqueue;
+
+  /* Increment enqueue epoch for next round */
+  ssm->current_enqueue_epoch[my_thread_index] ++;
+
+  return errors;
 }
 
 static int
@@ -349,7 +486,7 @@ stream_session_create (u32 listener_index, u32 connection_index,
   ss = pool_elt_at_index (ssm->servers, ls->server_index);
 
   /* Check the API queue */
-  if (check_api_queue_full (ss))
+  if (stream_server_api_queue_is_full (ss))
     return URI_INPUT_ERROR_API_QUEUE_FULL;
 
   /* Allocate svm fifos */

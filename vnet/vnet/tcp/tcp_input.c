@@ -78,7 +78,7 @@ always_inline u8
 tcp_segment_in_window (tcp_connection_t *tc, u32 seq, u32 end_seq)
 {
   return seq_leq (end_seq, tc->rcv_las + tc->rcv_wnd)
-      && seq_geq (seq, tc->rcv_las);
+      && seq_geq (seq, tc->rcv_nxt);
 }
 
 void
@@ -210,6 +210,7 @@ tcp_segment_validate (vlib_main_t *vm, tcp_connection_t *tc0, vlib_buffer_t *b0,
         {
           /* Age isn't reset until we get a valid tsval (bsd inspired) */
           tc0->tsval_recent = 0;
+          ASSERT (0);
         }
       else
         {
@@ -217,6 +218,8 @@ tcp_segment_validate (vlib_main_t *vm, tcp_connection_t *tc0, vlib_buffer_t *b0,
           if (!tcp_rst (th0))
             {
               tcp_make_ack (tc0, b0);
+              tcp_set_output_next_index (next0, is_est, tc0->c_is_ip4);
+
               return -1;
             }
         }
@@ -271,12 +274,14 @@ tcp_incoming_ack_is_acceptable (tcp_connection_t *tc0, vlib_buffer_t *tb0)
 
 always_inline int
 tcp_incoming_ack_established (tcp_connection_t *tc0, vlib_buffer_t *tb0,
-                              tcp_header_t *tcp0, u32 *next0, u8 is_est)
+                              tcp_header_t *tcp0, u32 *next0, u32 *error0,
+                              u8 is_est)
 {
   /* If the ACK is a duplicate (SEG.ACK < SND.UNA), it can be ignored.*/
   if (seq_lt(vnet_buffer (tb0)->tcp.ack_number, tc0->snd_una))
     {
-      return 1;
+      *error0 = TCP_ERROR_ACK_DUP;
+      return -1;
     }
 
   /* If the ACK acks something not yet sent (SEG.ACK > SND.NXT) then send an
@@ -285,6 +290,7 @@ tcp_incoming_ack_established (tcp_connection_t *tc0, vlib_buffer_t *tb0,
     {
       tcp_make_ack (tc0, tb0);
       tcp_set_output_next_index (next0, is_est, tc0->c_is_ip4);
+      *error0 = TCP_ERROR_ACK_INVALID;
       return -1;
     }
 
@@ -318,44 +324,31 @@ tcp_session_no_space (tcp_connection_t *tc, u32 my_thread_index, u16 data_len0)
 always_inline u32
 tcp_session_enqueue_data (tcp_connection_t *tc, vlib_buffer_t *b, u16 data_len0)
 {
-  stream_server_main_t *ssm = &stream_server_main;
   stream_session_t *s0;
-  svm_fifo_t *f0;
-  u8 my_enqueue_epoch;
   int written;
 
   s0 = stream_session_get (tc->c_s_index, tc->c_thread_index);
 
-  /* Make sure there's enough space left. We might've filled the pipes */
-  if (PREDICT_FALSE (data_len0 > svm_fifo_max_enqueue (s0->server_rx_fifo)))
-    return TCP_ERROR_FIFO_FULL;
+  written = stream_session_enqueue_data (s0, vlib_buffer_get_current (b),
+                                         data_len0, 1 /* queue event */);
 
-  my_enqueue_epoch = ++ssm->current_enqueue_epoch[s0->session_thread_index];
-
-  f0 = s0->server_rx_fifo;
-
-  written = svm_fifo_enqueue_nowait2 (f0, s0->pid, data_len0,
-                                      vlib_buffer_get_current (b));
-
-  /* Update rcv_nxt. If more data written than expected, account for
-   * out-of-order bytes. */
-  if (PREDICT_TRUE (written == data_len0))
-    tc->rcv_nxt = vnet_buffer (b)->tcp.seq_end;
+  /* Update rcv_nxt */
+  if (PREDICT_TRUE(written == data_len0))
+    {
+      tc->rcv_nxt = vnet_buffer (b)->tcp.seq_end;
+    }
+  /* If more data written than expected, account for out-of-order bytes.*/
   else if (written > data_len0)
-    tc->rcv_nxt = vnet_buffer (b)->tcp.seq_end + written - data_len0;
+    {
+      tc->rcv_nxt = vnet_buffer (b)->tcp.seq_end + written - data_len0;
+
+      /* Send ACK confirming the update */
+      tc->flags |= TCP_CONN_SNDACK;
+    }
   else
     {
       ASSERT(0);
       return TCP_ERROR_FIFO_FULL;
-    }
-
-  /* We need to send an RX event on this fifo */
-  if (s0->enqueue_epoch != my_enqueue_epoch)
-    {
-      s0->enqueue_epoch = my_enqueue_epoch;
-      vec_add1(
-          ssm->session_indices_to_enqueue_by_thread[s0->session_thread_index],
-          s0 - ssm->sessions[s0->session_thread_index]);
     }
 
   return TCP_ERROR_ENQUEUED;
@@ -374,72 +367,6 @@ tcp_session_enqueue_ooo (tcp_connection_t *tc, u32 offset, u8 *data0,
     return TCP_ERROR_FIFO_FULL;
 
   return TCP_ERROR_ENQUEUED;
-}
-
-void
-send_enqueue_events (vlib_main_t *vm, u32 my_thread_index, u8 is_ip4)
-{
-  u32 *session_indices_to_enqueue;
-  stream_server_main_t *ssm = &stream_server_main;
-  int i;
-  static u32 serial_number;
-
-  session_indices_to_enqueue =
-    ssm->session_indices_to_enqueue_by_thread[my_thread_index];
-
-  for (i = 0; i < vec_len (session_indices_to_enqueue); i++)
-    {
-      fifo_event_t evt;
-      unix_shared_memory_queue_t * q;
-      stream_session_t * s0;
-      stream_server_t *ss0;
-
-      /* Get session */
-      s0 = stream_session_get (session_indices_to_enqueue[i], my_thread_index);
-
-      /* Get session's server */
-      ss0 = pool_elt_at_index (ssm->servers, s0->server_index);
-
-      /* Fabricate event */
-      evt.fifo = s0->server_rx_fifo;
-      evt.event_type = FIFO_EVENT_SERVER_RX;
-      evt.event_id = serial_number++;
-      evt.enqueue_length = svm_fifo_max_dequeue (s0->server_rx_fifo);
-
-      /* Add event to server's event queue */
-      q = ss0->event_queue;
-
-      /* Don't block for lack of space */
-      if (PREDICT_TRUE (q->cursize < q->maxsize))
-        unix_shared_memory_queue_add (ss0->event_queue, (u8 *)&evt,
-                                      0 /* do wait for mutex */);
-      else
-        {
-          if (is_ip4)
-            vlib_node_increment_counter (vm, tcp4_established_node.index,
-                                         TCP_ERROR_FIFO_FULL, 1);
-          else
-            vlib_node_increment_counter (vm, tcp6_established_node.index,
-                                         TCP_ERROR_FIFO_FULL, 1);
-        }
-      if (1)
-        {
-          ELOG_TYPE_DECLARE(e) =
-            {
-              .format = "evt-enqueue: id %d length %d",
-              .format_args = "i4i4",
-            };
-          struct { u32 data[2];} * ed;
-          ed = ELOG_DATA (&vlib_global_main.elog_main, e);
-          ed->data[0] = evt.event_id;
-          ed->data[1] = evt.enqueue_length;
-        }
-    }
-
-  vec_reset_length (session_indices_to_enqueue);
-
-  ssm->session_indices_to_enqueue_by_thread[my_thread_index] =
-    session_indices_to_enqueue;
 }
 
 always_inline u8
@@ -478,15 +405,19 @@ tcp_segment_rcv (tcp_main_t *tm, tcp_connection_t *tc, u32 my_thread_index,
       error = tcp_session_enqueue_ooo (tc, offset, vlib_buffer_get_current (b),
                                        n_data_bytes);
 
-      /* RFC2581: Send DUPACK for fast retransmit */
-      tcp_make_ack (tc, b);
-      tcp_set_output_next_index (next0, is_est, tc->c_is_ip4);
-
-      /* Mark as DUPACK. We may filter these in output */
-      vnet_buffer (b)->tcp.flags = TCP_BUF_FLAG_DUPACK;
-
       /* Don't send more than 3 dupacks per burst */
-      tc->snt_dupacks = 0;
+      if (tc->snt_dupacks < 3)
+        {
+          /* RFC2581: Send DUPACK for fast retransmit */
+          tcp_make_ack (tc, b);
+          tcp_set_output_next_index (next0, is_est, tc->c_is_ip4);
+
+          /* Mark as DUPACK. We may filter these in output if
+           * the burst fills the holes. */
+          vnet_buffer (b)->tcp.flags = TCP_BUF_FLAG_DUPACK;
+
+          tc->snt_dupacks++;
+        }
 
       goto done;
     }
@@ -517,16 +448,17 @@ tcp_segment_rcv (tcp_main_t *tm, tcp_connection_t *tc, u32 my_thread_index,
   /* If it can't be delayed */
   else
     {
-      /* Check if a packet has already been enqueued to output.
-       * If yes, then drop this one, otherwise, let it pass through
-       * to output where it will be converted into an ACK */
-      if ((tc->flags & TCP_CONN_SNDACK) == 0)
+      /* Check if a packet has already been enqueued to output for burst.
+       * If yes, then drop this one, otherwise, let it pass through for
+       * delivery */
+      if ((tc->flags & TCP_CONN_BURSTACK) == 0)
         {
           tcp_set_output_next_index (next0, is_est, tc->c_is_ip4);
           tcp_make_ack (tc, b);
           error = TCP_ERROR_ENQUEUED;
 
-          tc->flags |= TCP_CONN_SNDACK;
+          /* TODO: maybe add counter to ensure N acks will be sent/burst */
+          tc->flags |= TCP_CONN_BURSTACK;
         }
     }
 
@@ -560,7 +492,7 @@ tcp46_established_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
                           vlib_frame_t * from_frame, int is_ip4)
 {
   u32 n_left_from, next_index, * from, * to_next;
-  u32 my_thread_index = vm->cpu_index;
+  u32 my_thread_index = vm->cpu_index, errors = 0;
   tcp_main_t *tm = vnet_get_tcp_main ();
 
   from = vlib_frame_vector_args (from_frame);
@@ -622,10 +554,6 @@ tcp46_established_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
           vnet_buffer (b0)->tcp.seq_end = vnet_buffer (b0)->tcp.seq_number
               + tcp_is_syn (th0) + tcp_is_fin (th0) + n_data_bytes0;
 
-          error0 = tcp_session_no_space (tc0, my_thread_index, n_data_bytes0);
-          if (PREDICT_FALSE(error0))
-            goto drop;
-
           /* TODO header prediction fast path */
 
           /* 1-4: check SEQ, RST, SYN */
@@ -636,8 +564,10 @@ tcp46_established_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
             }
 
           /* 5: check the ACK field  */
-          if (tcp_incoming_ack_established (tc0, b0, th0, &next0, 1) < 0)
-            goto drop;
+          if (tcp_incoming_ack_established (tc0, b0, th0, &next0, &error0, 1))
+            {
+              goto drop;
+            }
 
           /* 6: check the URG bit TODO */
 
@@ -646,9 +576,8 @@ tcp46_established_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
           error0 = tcp_segment_rcv (tm, tc0, my_thread_index, b0, n_data_bytes0,
                                     &next0, 1);
 
-        drop:
-          b0->error = error0 ? node->errors[error0] : 0;
-
+       drop:
+          b0->error = node->errors[error0];
           if (PREDICT_FALSE(b0->flags & VLIB_BUFFER_IS_TRACED))
             {
 
@@ -661,7 +590,16 @@ tcp46_established_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
       vlib_put_next_frame (vm, node, next_index, n_left_to_next);
     }
 
-  send_enqueue_events (vm, my_thread_index, is_ip4);
+  errors = stream_server_flush_enqueue_events (my_thread_index);
+  if (errors)
+    {
+      if (is_ip4)
+        vlib_node_increment_counter (vm, tcp4_established_node.index,
+                                     TCP_ERROR_EVENT_FIFO_FULL, errors);
+      else
+        vlib_node_increment_counter (vm, tcp6_established_node.index,
+                                     TCP_ERROR_EVENT_FIFO_FULL, errors);
+    }
 
   delack_timers_init (tm);
 
@@ -791,7 +729,7 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
 {
   tcp_main_t *tm = vnet_get_tcp_main ();
   u32 n_left_from, next_index, * from, * to_next;
-  u32 my_thread_index = vm->cpu_index;
+  u32 my_thread_index = vm->cpu_index, errors = 0;
 
   from = vlib_frame_vector_args (from_frame);
   n_left_from = from_frame->n_vectors;
@@ -906,16 +844,18 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
               tcp_notify_accept_server (tc0, my_thread_index);
               break;
             case TCP_CONNECTION_STATE_ESTABLISHED:
-              /* Packets may have been enqueued before state change */
-              if (tcp_incoming_ack_established (tc0, b0, tcp0, &next0, 0) < 0)
+              /* XXX Packets may have been enqueued before state change */
+              if (tcp_incoming_ack_established (tc0, b0, tcp0, &next0, &error0,
+                                                0))
                 goto drop;
 
               break;
             case TCP_CONNECTION_STATE_FIN_WAIT_1:
-              /* In addition to the processing for the ESTABLISHED state, if
+              /* XXX In addition to the processing for the ESTABLISHED state, if
                * our FIN is now acknowledged then enter FIN-WAIT-2 and
                * continue processing in that state. */
-              if (tcp_incoming_ack_established (tc0, b0, tcp0, &next0, 0) >= 0)
+              if (!tcp_incoming_ack_established (tc0, b0, tcp0, &next0, &error0,
+                                                 0))
                 tc0->state = TCP_CONNECTION_STATE_FIN_WAIT_2;
               else
                 goto drop;
@@ -924,7 +864,8 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
               /* In addition to the processing for the ESTABLISHED state, if
                * the retransmission queue is empty, the user's CLOSE can be
                * acknowledged ("ok") but do not delete the TCB. */
-              if (tcp_incoming_ack_established (tc0, b0, tcp0, &next0, 0) >= 0)
+              if (tcp_incoming_ack_established (tc0, b0, tcp0, &next0, &error0,
+                                                0))
                 {
                   /* check if rtx queue is empty and ack CLOSE TODO*/
                 }
@@ -935,14 +876,16 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
               break;
             case TCP_CONNECTION_STATE_CLOSE_WAIT:
               /* Do the same processing as for the ESTABLISHED state. */
-              if (tcp_incoming_ack_established (tc0, b0, tcp0, &next0, 0) < 0)
+              if (tcp_incoming_ack_established (tc0, b0, tcp0, &next0, &error0,
+                                                0))
                 goto drop;
               break;
             case TCP_CONNECTION_STATE_CLOSING:
               /* In addition to the processing for the ESTABLISHED state, if
                * the ACK acknowledges our FIN then enter the TIME-WAIT state,
                * otherwise ignore the segment. */
-              if (tcp_incoming_ack_established (tc0, b0, tcp0, &next0, 0) < 0)
+              if (tcp_incoming_ack_established (tc0, b0, tcp0, &next0, &error0,
+                                                0))
                 goto drop;
 
               /* XXX test that send queue empty */
@@ -1007,6 +950,17 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
         }
 
       vlib_put_next_frame (vm, node, next_index, n_left_to_next);
+    }
+
+  errors = stream_server_flush_enqueue_events (my_thread_index);
+  if (errors)
+    {
+      if (is_ip4)
+        vlib_node_increment_counter (vm, tcp4_established_node.index,
+                                     TCP_ERROR_EVENT_FIFO_FULL, errors);
+      else
+        vlib_node_increment_counter (vm, tcp6_established_node.index,
+                                     TCP_ERROR_EVENT_FIFO_FULL, errors);
     }
 
   return from_frame->n_vectors;

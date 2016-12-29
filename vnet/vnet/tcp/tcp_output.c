@@ -306,9 +306,7 @@ tcp_make_ack (tcp_connection_t *tc, vlib_buffer_t *b)
 
   tcp_options_write ((u8 *) (th + 1), snd_opts);
 
-  /* Update session and buffer */
-  tc->rcv_las = tc->rcv_nxt;
-
+  /* Mark as ACK */
   vnet_buffer (b)->tcp.connection_index = tc->c_c_index;
   vnet_buffer (b)->tcp.flags = TCP_BUF_FLAG_ACK;
 }
@@ -352,7 +350,6 @@ tcp_make_synack (tcp_connection_t *tc, vlib_buffer_t *b)
                      initial_wnd);
 
   tcp_options_write ((u8 *)(th + 1), snd_opts);
-  tc->rcv_las = tc->rcv_nxt;
 
   vnet_buffer (b)->tcp.connection_index = tc->c_c_index;
   vnet_buffer (b)->tcp.flags = TCP_BUF_FLAG_ACK;
@@ -441,6 +438,7 @@ tcp_send_reset (vlib_buffer_t *pkt, u8 is_ip4)
     }
 
   b->flags |= VNET_BUFFER_LOCALLY_ORIGINATED;
+  b->error = 0;
 
   /* Send to IP lookup */
   next_index = is_ip4 ? ip4_lookup_node.index : ip6_lookup_node.index;
@@ -482,6 +480,8 @@ timer_delack_handler (u32 index)
 
   /* Enqueue the packet */
   b->flags |= VNET_BUFFER_LOCALLY_ORIGINATED;
+  b->error = 0;
+
   to_next = vlib_frame_vector_args (f);
   to_next[0] = bi;
   f->n_vectors = 1;
@@ -556,27 +556,32 @@ tcp46_output_inline (vlib_main_t * vm,
               ASSERT (!bogus);
             }
 
-          /* If an ACK stop DELACK timer and fix flags */
-          if (PREDICT_FALSE(tc0->flags & TCP_CONN_SNDACK))
-            {
-              u32 handle = tc0->timers[TCP_TIMER_DELACK];
-              tc0->flags &= ~(TCP_CONN_SNDACK | TCP_CONN_DELACK);
-              if (TCP_TIMER_HANDLE_INVALID != handle)
-                {
-                  tcp_timer_stop (&tm->timer_wheel, handle);
-                  tc0->timers[TCP_TIMER_DELACK] = TCP_TIMER_HANDLE_INVALID;
-                }
-            }
-
           /* Filter DUPACKs if there are no OOO segments left */
           if (PREDICT_FALSE(vnet_buffer (b0)->tcp.flags & TCP_BUF_FLAG_DUPACK))
             {
-              if (!tcp_session_has_ooo_data (tc0) || tc0->snt_dupacks >= 3)
+              tc0->snt_dupacks --;
+              ASSERT (tc0->snt_dupacks >= 0);
+              if (!tcp_session_has_ooo_data (tc0))
                 {
                   next0 = TCP_OUTPUT_NEXT_DROP;
                   goto done;
                 }
-              tc0->snt_dupacks++;
+            }
+
+          /* If an ACK  */
+          if (PREDICT_FALSE(vnet_buffer (b0)->tcp.flags & TCP_BUF_FLAG_ACK))
+            {
+              tc0->rcv_las = tc0->rcv_nxt;
+
+              /* Stop DELACK timer and fix flags */
+              u32 handle = tc0->timers[TCP_TIMER_DELACK];
+              tc0->flags &= ~(TCP_CONN_SNDACK | TCP_CONN_DELACK
+                  | TCP_CONN_BURSTACK);
+              if (handle != TCP_TIMER_HANDLE_INVALID)
+                {
+                  tcp_timer_stop (&tm->timer_wheel, handle);
+                  tc0->timers[TCP_TIMER_DELACK] = TCP_TIMER_HANDLE_INVALID;
+                }
             }
 
           /* set fib index to default and lookup node */

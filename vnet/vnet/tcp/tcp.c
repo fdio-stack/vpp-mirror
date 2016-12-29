@@ -190,6 +190,7 @@ tcp_init (vlib_main_t * vm)
 
   tm->vlib_main = vm;
   tm->vnet_main = vnet_get_main ();
+  tm->ss_main = stream_server_get_main ();
 
   if ((error = vlib_call_init_function(vm, ip_main_init)))
     return error;

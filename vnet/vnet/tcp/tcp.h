@@ -79,7 +79,8 @@ timer_delack_handler (u32 index);
 /** TCP connection flags */
 #define foreach_tcp_connection_flag             \
   _(DELACK, "Delay ACK")                        \
-  _(SNDACK, "Send ACK")                       \
+  _(SNDACK, "Send ACK")                         \
+  _(BURSTACK, "Burst ACK set")                  \
   _(SENT_RCV_WND0, "Sent 0 receive window")
 
 typedef enum _tcp_connection_flag_bits
@@ -238,6 +239,7 @@ typedef struct _tcp_main
   uword * dst_port_info_by_dst_port[TCP_N_AF];
 
   /* convenience */
+  stream_server_main_t *ss_main;
   vlib_main_t * vlib_main;
   vnet_main_t * vnet_main;
   ip4_main_t * ip4_main;
@@ -333,6 +335,7 @@ tcp_uri_tx_packetize_ip4 (vlib_main_t *vm, stream_session_t *s,
 u32
 tcp_uri_tx_packetize_ip6 (vlib_main_t *vm, stream_session_t *s,
                           vlib_buffer_t *b);
+
 
 #endif /* _vnet_tcp_h_ */
 

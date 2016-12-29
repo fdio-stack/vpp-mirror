@@ -547,6 +547,9 @@ static int svm_fifo_enqueue_with_offset_internal2 (svm_fifo_t * f,
   cursize = f->cursize;
   nitems = f->nitems;
 
+  if ((required_bytes + offset) > (nitems - cursize))
+    ASSERT(0);
+
   /* Will this request fit? */
   if ((required_bytes + offset) > (nitems - cursize))
     return -1;
