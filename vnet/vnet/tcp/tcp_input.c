@@ -86,10 +86,15 @@ tcp_options_parse (tcp_header_t *th, tcp_options_t *to)
 {
   const u8 *data;
   u8 opt_len, opts_len, kind;
+  int j;
+  sack_block_t b;
 
   opts_len = (tcp_doff(th) << 2) - sizeof (tcp_header_t);
   data = (const u8 *)(th + 1);
-  to->flags = 0;
+
+  /* Zero out all but SACK_PERMITTED which is set with SYN and we use as
+   * flag for connection */
+  to->flags &= TCP_OPTS_FLAG_SACK_PERMITTED;
 
   for (; opts_len > 0; opts_len -= opt_len, data += opt_len)
     {
@@ -144,10 +149,26 @@ tcp_options_parse (tcp_header_t *th, tcp_options_t *to)
           break;
         case TCP_OPTION_SACK_PERMITTED:
           if (opt_len == TCP_OPTION_LEN_SACK_PERMITTED && tcp_syn (th))
-            to->flags |= TCP_OPTS_FLAG_SACK;
+            to->flags |= TCP_OPTS_FLAG_SACK_PERMITTED;
           break;
         case TCP_OPTION_SACK_BLOCK:
-          clib_warning ("Not implemented!");
+          /* If SACK permitted was not advertised or a SYN, break */
+          if ((to->flags & TCP_OPTS_FLAG_SACK_PERMITTED) == 0 || tcp_syn (th))
+           break;
+
+          /* If too short or not correctly formatted, break */
+          if (opt_len < 10 || ((opt_len - 2) % TCP_OPTION_LEN_SACK_BLOCK))
+            break;
+
+          to->flags |= TCP_OPTS_FLAG_SACK;
+          to->n_sack_blocks = (opt_len - 2) / TCP_OPTION_LEN_SACK_BLOCK;
+          vec_reset_length (to->sacks);
+          for (j = 0; j < to->n_sack_blocks; j++)
+            {
+              b.start = clib_net_to_host_u32 (*(u32 *)(data + 2 + 4*j));
+              b.end = clib_net_to_host_u32 (*(u32 *)(data + 6 + 4*j));
+              vec_add1 (to->sacks, b);
+            }
           break;
         default:
           /* Nothing to see here */
@@ -320,9 +341,61 @@ tcp_session_no_space (tcp_connection_t *tc, u32 my_thread_index, u16 data_len0)
   return 0;
 }
 
+/**
+ * Build SACK list as per RFC2018.
+ *
+ * Makes sure the first block contains the segment that generated the current
+ * ACK and the following ones are the ones most recently reported in SACK
+ * blocks.
+ *
+ * @param tc TCP connection for which the SACK list is updated
+ * @param start Start sequence number of the newest SACK block
+ * @param end End sequence of the newest SACK block
+ */
+static void
+tcp_sack_list_update (tcp_connection_t *tc, u32 start, u32 end)
+{
+  sack_block_t *new_list = 0, block;
+  u32 n_elts;
+  int i;
+  u8 new_head = 0;
+
+  /* If the first segment is ooo add it to the list. Last write might've moved
+   * rcv_nxt over the first segment. */
+  if (seq_lt (tc->rcv_nxt, start))
+    {
+      block.start = start;
+      block.end = end;
+      vec_add1 (new_list, block);
+      new_head = 1;
+    }
+
+  /* Find the blocks still worth keeping. */
+  for (i = 0; i < vec_len (tc->sacks); i++)
+    {
+      /* Discard if:
+       * 1) rcv_nxt advanced beyond current block OR
+       * 2) Segment overlapped by the first segment, i.e., it has been merged
+       *    into it.*/
+      if (seq_leq(tc->sacks[i].start, tc->rcv_nxt)
+          || seq_leq (tc->sacks[i].start, end))
+        continue;
+
+      /* Save subsequent segments to new SACK list. */
+      n_elts = clib_min (vec_len (tc->sacks) - i,
+                        TCP_MAX_SACK_BLOCKS - new_head);
+      vec_insert_elts (new_list, &tc->sacks[i], n_elts, new_head);
+      break;
+    }
+
+  /* Replace old vector with new one */
+  vec_free (tc->sacks);
+  tc->sacks = new_list;
+}
+
 /** Enqueue data for delivery to application */
 always_inline u32
-tcp_session_enqueue_data (tcp_connection_t *tc, vlib_buffer_t *b, u16 data_len0)
+tcp_session_enqueue_data (tcp_connection_t *tc, vlib_buffer_t *b, u16 data_len)
 {
   stream_session_t *s0;
   int written;
@@ -330,20 +403,27 @@ tcp_session_enqueue_data (tcp_connection_t *tc, vlib_buffer_t *b, u16 data_len0)
   s0 = stream_session_get (tc->c_s_index, tc->c_thread_index);
 
   written = stream_session_enqueue_data (s0, vlib_buffer_get_current (b),
-                                         data_len0, 1 /* queue event */);
+                                         data_len, 1 /* queue event */);
 
   /* Update rcv_nxt */
-  if (PREDICT_TRUE(written == data_len0))
+  if (PREDICT_TRUE(written == data_len))
     {
       tc->rcv_nxt = vnet_buffer (b)->tcp.seq_end;
     }
   /* If more data written than expected, account for out-of-order bytes.*/
-  else if (written > data_len0)
+  else if (written > data_len)
     {
-      tc->rcv_nxt = vnet_buffer (b)->tcp.seq_end + written - data_len0;
+      tc->rcv_nxt = vnet_buffer (b)->tcp.seq_end + written - data_len;
 
       /* Send ACK confirming the update */
       tc->flags |= TCP_CONN_SNDACK;
+
+      /* Update SACK list if need be */
+      if (tcp_opts_sack_permitted (&tc->opt))
+        {
+          /* Remove SACK blocks that have been delivered */
+          tcp_sack_list_update (tc, tc->rcv_nxt, tc->rcv_nxt);
+        }
     }
   else
     {
@@ -356,15 +436,32 @@ tcp_session_enqueue_data (tcp_connection_t *tc, vlib_buffer_t *b, u16 data_len0)
 
 /** Enqueue out-of-order data */
 always_inline u32
-tcp_session_enqueue_ooo (tcp_connection_t *tc, u32 offset, u8 *data0,
-                         u16 data_len0)
+tcp_session_enqueue_ooo (tcp_connection_t *tc, vlib_buffer_t *b, u16 data_len)
 {
   stream_session_t *s0;
+  u32 offset, seq;
+
   s0 = stream_session_get (tc->c_s_index, tc->c_thread_index);
+  seq = vnet_buffer (b)->tcp.seq_number;
+  offset = seq - tc->rcv_nxt;
 
   if (svm_fifo_enqueue_with_offset2 (s0->server_rx_fifo, s0->pid, offset,
-                                     data_len0, (u8 *) data0))
+                                     data_len, vlib_buffer_get_current (b)))
     return TCP_ERROR_FIFO_FULL;
+
+  /* Update SACK list if in use */
+  if (tc->opt.flags & TCP_OPTS_FLAG_SACK_PERMITTED)
+    {
+      ooo_segment_t *newest;
+      u32 start, end;
+
+      /* Get the newest segment from the fifo */
+      newest = svm_fifo_newest_ooo_segment (s0->server_rx_fifo);
+      start = tc->rcv_nxt + ooo_segment_offset (s0->server_rx_fifo, newest);
+      end = tc->rcv_nxt + ooo_segment_end_offset (s0->server_rx_fifo, newest);
+
+      tcp_sack_list_update (tc, start, end);
+    }
 
   return TCP_ERROR_ENQUEUED;
 }
@@ -376,8 +473,8 @@ tcp_timer_is_active (tcp_connection_t *tc, tcp_timers_e timer)
 }
 
 /**
- * Check if ACK could be delayed. DELACK timer is set only in output
- * so this can return true for bursts of packets.
+ * Check if ACK could be delayed. DELACK timer is set only after frame is
+ * processed so this can return true for a full bursts of packets.
  */
 always_inline int
 tcp_can_delack (tcp_connection_t *tc)
@@ -396,16 +493,16 @@ static int
 tcp_segment_rcv (tcp_main_t *tm, tcp_connection_t *tc, u32 my_thread_index,
                  vlib_buffer_t *b, u16 n_data_bytes, u32 *next0, u8 is_est)
 {
-  u32 error = 0, offset;
+  u32 error = 0;
 
   /* Handle out-of-order data */
   if (PREDICT_FALSE (vnet_buffer (b)->tcp.seq_number != tc->rcv_nxt))
     {
-      offset = vnet_buffer (b)->tcp.seq_number - tc->rcv_nxt;
-      error = tcp_session_enqueue_ooo (tc, offset, vlib_buffer_get_current (b),
-                                       n_data_bytes);
 
-      /* Don't send more than 3 dupacks per burst */
+      error = tcp_session_enqueue_ooo (tc, b, n_data_bytes);
+
+      /* Don't send more than 3 dupacks per burst
+       * XXX decide if this is good */
       if (tc->snt_dupacks < 3)
         {
           /* RFC2581: Send DUPACK for fast retransmit */
@@ -426,14 +523,13 @@ tcp_segment_rcv (tcp_main_t *tm, tcp_connection_t *tc, u32 my_thread_index,
   if (PREDICT_FALSE (n_data_bytes == 0))
     {
       tc->rcv_nxt = vnet_buffer (b)->tcp.seq_end;
-      goto try_delack;
+      goto done;
     }
 
   /* In order data, enqueue. Fifo figures out by itself if any out-of-order
    * segments can be enqueued after fifo tail offset changes. */
   error = tcp_session_enqueue_data (tc, b, n_data_bytes);
 
- try_delack:
   /* Check if ACK can be delayed */
   if (tcp_can_delack (tc))
     {
@@ -1112,6 +1208,8 @@ tcp46_listen_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
 
           /* Create child session and send SYN-ACK */
           pool_get(tm->connections[my_thread_index], child0);
+          memset (child0, 0, sizeof(*child0));
+
           child0->c_c_index = child0 - tm->connections[my_thread_index];
           child0->c_lcl_port = tc0->c_lcl_port;
           child0->c_rmt_port = th0->src_port;

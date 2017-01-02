@@ -132,11 +132,14 @@ typedef struct
   f64 count;
 } tcp_rtt_stats_t;
 
+#define TCP_MAX_SACK_BLOCKS 5   /**< Max number of SACK blocks stored */
+
 typedef struct _tcp_connection
 {
   transport_connection_t connection;  /**< Common transport data. First! */
 
   u8 state;                     /**< TCP state as per tcp_state_t */
+  u16 flags;                    /**< Connection flags (see tcp_conn_flags_e) */
   u32 timers[TCP_N_TIMERS];     /**< Timer handles into timer wheel */
 
   /* TODO RFC4898 */
@@ -157,27 +160,24 @@ typedef struct _tcp_connection
   u32 irs;              /**< initial remote sequence */
 
   /* Options */
-  tcp_options_t opt;    /**< Send/receive connection options */
+  tcp_options_t opt;    /**< TCP connection options parsed */
   u8 rcv_wscale;        /**< Window scale to advertise to peer */
   u8 snd_wscale;        /**< Window scale to use when sending */
   u32 tsval_recent;     /**< Last timestamp received */
   u32 tsval_recent_age; /**< When last updated tstamp_recent*/
 
-  u16 flags;            /**< Connection flags (see tcp_conn_flags_e) */
+  sack_block_t *sacks;  /**< Vector of blocks to SACK. XXX Fixed size? */
 
   u8 snt_dupacks;       /**< Number of DUPACKs sent in a burst */
 
   /* XXX Everything lower may be removed */
 
   u16 max_segment_size;
-
   /* Set if connected to another tcp46_session_t */
   u32 connected_session_index;
-
   /* tos, ttl to use on tx */
   u8 tos;
   u8 ttl;
-
   tcp_rtt_stats_t stats;
 
   /*

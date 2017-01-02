@@ -129,7 +129,7 @@ u32
 tcp_options_write (u8 *data, tcp_options_t * opts)
 {
   u32 opts_len = 0;
-  u32 buf;
+  u32 buf, seq_len = 4;
 
   if (tcp_opts_mss(opts))
     {
@@ -153,8 +153,8 @@ tcp_options_write (u8 *data, tcp_options_t * opts)
       *data++ = opts->wscale;
       opts_len += TCP_OPTION_LEN_WINDOW_SCALE;
     }
-  /* don't add sack for now */
-  if (0)
+
+  if (tcp_opts_sack_permitted(opts))
     {
       *data++ = TCP_OPTION_SACK_PERMITTED;
       *data++ = TCP_OPTION_LEN_SACK_PERMITTED;
@@ -177,6 +177,29 @@ tcp_options_write (u8 *data, tcp_options_t * opts)
       clib_memcpy (data, &buf, sizeof (opts->tsecr));
       data += sizeof (opts->tsecr);
       opts_len += TCP_OPTION_LEN_TIMESTAMP;
+    }
+
+  if (tcp_opts_sack (opts))
+    {
+      int i;
+      u32 n_sack_blocks = clib_min (vec_len(opts->sacks),
+                                   TCP_OPTS_MAX_SACK_BLOCKS);
+
+      if (n_sack_blocks != 0)
+        {
+          *data++ = TCP_OPTION_SACK_BLOCK;
+          *data++ = 2 + n_sack_blocks * TCP_OPTION_LEN_SACK_BLOCK;
+          for (i = 0; i < n_sack_blocks; i++)
+            {
+              buf = clib_host_to_net_u32 (opts->sacks[i].start);
+              clib_memcpy (data, &buf, seq_len);
+              data += seq_len;
+              buf = clib_host_to_net_u32 (opts->sacks[i].end);
+              clib_memcpy (data, &buf, seq_len);
+              data += seq_len;
+            }
+          opts_len += 2 + n_sack_blocks * TCP_OPTION_LEN_SACK_BLOCK;
+        }
     }
 
   /* Terminate TCP options */
@@ -219,6 +242,12 @@ tcp_make_syn_or_synack_options (tcp_connection_t *tc, tcp_options_t *opts)
       len += TCP_OPTION_LEN_TIMESTAMP;
     }
 
+  if (tcp_opts_sack_permitted (&tc->opt))
+    {
+      opts->flags |= TCP_OPTS_FLAG_SACK_PERMITTED;
+      len += TCP_OPTION_LEN_SACK_PERMITTED;
+    }
+
   /* Align to needed boundary */
   len += TCP_OPTS_ALIGN - len % TCP_OPTS_ALIGN;
   return len;
@@ -231,12 +260,22 @@ tcp_make_established_options (tcp_connection_t *tc, tcp_options_t *opts)
 
   opts->flags = 0;
 
-  if (tcp_opts_tstamp(&tc->opt))
+  if (tcp_opts_tstamp (&tc->opt))
     {
       opts->flags |= TCP_OPTS_FLAG_TSTAMP;
       opts->tsval = tcp_time_now ();
       opts->tsecr = tc->tsval_recent;
       len += TCP_OPTION_LEN_TIMESTAMP;
+    }
+  if (tcp_opts_sack_permitted (&tc->opt))
+    {
+      if (vec_len(tc->sacks))
+        {
+          opts->flags |= TCP_OPTS_FLAG_SACK;
+          opts->sacks = tc->sacks;
+          opts->n_sack_blocks = vec_len(tc->sacks);
+          len += 2 + 8 * opts->n_sack_blocks;
+        }
     }
 
   /* Align to needed boundary */
@@ -729,6 +768,10 @@ tcp_uri_tx_packetize_inline (vlib_main_t *vm, stream_session_t *s,
   svm_fifo_dequeue (f, 0, len_to_dequeue, ((u8 *)th) + tcp_hdr_opts_len);
   b->current_length += len_to_dequeue;
   vnet_buffer (b)->tcp.connection_index = s->connection_index;
+
+  /* If we have un-ACKed data, tag the buffer as ACK XXX do flag fixing here */
+  if (seq_gt (tc->rcv_nxt, tc->rcv_las))
+    vnet_buffer (b)->tcp.flags = TCP_BUF_FLAG_ACK;
 
   tc->rcv_las = tc->rcv_nxt;
   tc->snd_nxt += len_to_dequeue;

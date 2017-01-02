@@ -118,7 +118,7 @@ typedef enum tcp_option_type
   _ (TSTAMP)            /**< Timestamp capability advertised in SYN */  \
   _ (WSCALE)            /**< Wnd scale capability advertised in SYN */  \
   _ (SACK_PERMITTED)    /**< SACK capability advertised in SYN */       \
-  _ (SACK)              /**< SACK capability advertised in SYN */
+  _ (SACK)              /**< SACK present */
 
 enum
 {
@@ -135,6 +135,12 @@ enum
 #undef _
 };
 
+typedef struct _sack_block
+{
+  u32 start;            /**< Start sequence number */
+  u32 end;              /**< End sequence number */
+} sack_block_t;
+
 typedef struct
 {
   u8 flags;             /** Option flags, see above */
@@ -144,6 +150,8 @@ typedef struct
   u8 wscale;            /**< Window scale advertised by peer */
   u32 tsval;            /**< Peer's timestamp value */
   u32 tsecr;            /**< Echoed/reflected time stamp */
+  sack_block_t * sacks; /**< SACK blocks received */
+  u8 n_sack_blocks;     /**< Number of SACKs blocks */
 } tcp_options_t;
 
 /* Flag tests that return 0 or !0 */
@@ -162,10 +170,12 @@ typedef struct
 #define TCP_OPTION_LEN_WINDOW_SCALE     3
 #define TCP_OPTION_LEN_SACK_PERMITTED   2
 #define TCP_OPTION_LEN_TIMESTAMP        10
+#define TCP_OPTION_LEN_SACK_BLOCK        8
 
 #define TCP_MAX_WND                     65535U
 #define TCP_MAX_WND_SCALE               14      /* See RFC 1323 */
 #define TCP_OPTS_ALIGN                  4
+#define TCP_OPTS_MAX_SACK_BLOCKS        3
 #endif /* included_tcp_packet_h */
 
 /*

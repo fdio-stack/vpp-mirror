@@ -263,18 +263,6 @@ ooo_segment_del (svm_fifo_t *f, u32 index)
   pool_put (f->ooo_segments, cur);
 }
 
-always_inline u32
-ooo_segment_offset (svm_fifo_t *f, ooo_segment_t *s)
-{
-  return ((f->nitems + s->fifo_position - f->tail) % f->nitems);
-}
-
-always_inline u32
-ooo_segment_end_offset (svm_fifo_t *f, ooo_segment_t *s)
-{
-  return ((f->nitems + s->fifo_position + s->length - f->tail) % f->nitems);
-}
-
 /**
  * Add segment to fifo's out-of-order segment list. Takes care of merging
  * adjacent segments and removing overlapping ones.
@@ -291,8 +279,8 @@ ooo_segment_add (svm_fifo_t *f, u32 offset, u32 length)
   if (f->ooos_list_head == OOO_SEGMENT_INVALID_INDEX)
     {
       s = ooo_segment_new (f, position, length);
-
       f->ooos_list_head = s - f->ooo_segments;
+      f->ooos_newest = f->ooos_list_head;
       return;
     }
 
@@ -330,7 +318,7 @@ ooo_segment_add (svm_fifo_t *f, u32 offset, u32 length)
 
       new_s->next = s - f->ooo_segments;
       s->prev = new_index;
-
+      f->ooos_newest = new_index;
       return;
     }
   /* No overlap, add after current segment */
@@ -352,6 +340,7 @@ ooo_segment_add (svm_fifo_t *f, u32 offset, u32 length)
 
       new_s->prev = s - f->ooo_segments;
       s->next = new_index;
+      f->ooos_newest = new_index;
 
       return;
     }
@@ -418,6 +407,9 @@ ooo_segment_add (svm_fifo_t *f, u32 offset, u32 length)
     {
       /* Do Nothing */
     }
+
+  /* Most recently updated segment */
+  f->ooos_newest = s - f->ooo_segments;
 }
 
 /**
@@ -428,32 +420,46 @@ static int
 ooo_segment_try_collect (svm_fifo_t *f, u32 n_bytes_enqueued)
 {
   ooo_segment_t *s;
-  u32 index, bytes = 0, tail;
+  u32 index, bytes = 0, diff;
 
   s = pool_elt_at_index (f->ooo_segments, f->ooos_list_head);
 
-  tail = f->tail;
-
-  /* If last tail update is adjacent or overlaps ooo segment(s), remove
-   * it/them */
-  while ((f->nitems + tail - s->fifo_position) % f->nitems
-      <= n_bytes_enqueued)
+  /* If last tail update overlaps one/multiple ooo segments, remove them */
+  diff = (f->nitems + f->tail - s->fifo_position) % f->nitems;
+  while (0 < diff && diff < n_bytes_enqueued)
     {
-      bytes += s->length;
-      f->tail += s->length;
-      f->tail %= f->nitems;
-
-      if (s->next != OOO_SEGMENT_INVALID_INDEX)
+      /* Segment end is beyond the tail. Advance tail and be done */
+      if (diff < s->length)
+        {
+          f->tail += s->length - diff;
+          f->tail %= f->nitems;
+          break;
+        }
+      /* If we have next go on */
+      else if (s->next != OOO_SEGMENT_INVALID_INDEX)
         {
           index = s - f->ooo_segments;
           s = pool_elt_at_index (f->ooo_segments, s->next);
+          diff = (f->nitems + f->tail - s->fifo_position) % f->nitems;
           ooo_segment_del (f, index);
         }
+      /* End of search */
       else
         {
-          ooo_segment_del (f, s - f->ooo_segments);
           break;
         }
+    }
+
+  /* If tail is adjacent to an ooo segment, 'consume' it */
+  if (diff == 0)
+    {
+      bytes = ((f->nitems - f->cursize) >= s->length) ? s->length :
+              f->nitems - f->cursize;
+
+      f->tail += bytes;
+      f->tail %= f->nitems;
+
+      ooo_segment_del (f, s - f->ooo_segments);
     }
 
   return bytes;
@@ -547,9 +553,6 @@ static int svm_fifo_enqueue_with_offset_internal2 (svm_fifo_t * f,
   cursize = f->cursize;
   nitems = f->nitems;
 
-  if ((required_bytes + offset) > (nitems - cursize))
-    ASSERT(0);
-
   /* Will this request fit? */
   if ((required_bytes + offset) > (nitems - cursize))
     return -1;
@@ -561,20 +564,22 @@ static int svm_fifo_enqueue_with_offset_internal2 (svm_fifo_t * f,
   tail_plus_offset = (f->tail + offset) % nitems;
 
   /* Number of bytes in first copy segment */
-  first_copy_bytes = ((nitems - tail_plus_offset) < total_copy_bytes) 
+  first_copy_bytes = ((nitems - tail_plus_offset) < total_copy_bytes)
     ? (nitems - tail_plus_offset) : total_copy_bytes;
   
   clib_memcpy (&f->data[tail_plus_offset], copy_from_here, first_copy_bytes);
-  tail_plus_offset += first_copy_bytes;
-  tail_plus_offset %= nitems;
   
   /* Number of bytes in second copy segment, if any */
   second_copy_bytes = total_copy_bytes - first_copy_bytes;
   if (second_copy_bytes)
     {
-      clib_memcpy (&f->data[tail_plus_offset], 
-                   copy_from_here + first_copy_bytes, 
-                   second_copy_bytes);
+      tail_plus_offset += first_copy_bytes;
+      tail_plus_offset %= nitems;
+
+      ASSERT (tail_plus_offset == 0);
+
+      clib_memcpy (&f->data[tail_plus_offset],
+                   copy_from_here + first_copy_bytes, second_copy_bytes);
     }
 
   return (0);

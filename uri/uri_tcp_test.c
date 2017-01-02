@@ -239,17 +239,20 @@ handle_fifo_event_server_rx (uri_tcp_test_main_t *utm, fifo_event_t * e)
 
   fifo_event_t evt;
   unix_shared_memory_queue_t *q;
-  int rv;
+  int rv, bytes;
 
   rx_fifo = e->fifo;
   tx_fifo = utm->sessions[rx_fifo->client_session_index].server_tx_fifo;
 
+  bytes = e->enqueue_length;
   do
     {
       nbytes = svm_fifo_dequeue_nowait2 (rx_fifo, 0, vec_len(utm->rx_buf),
                                          utm->rx_buf);
+      if (nbytes > 0)
+        bytes -= nbytes;
     }
-  while (nbytes < 0);
+  while (nbytes < 0 || bytes > 0);
 
   if (!utm->drop_packets)
     {
@@ -525,7 +528,7 @@ main (int argc, char **argv)
   /* make the main heap thread-safe */
   h->flags |= MHEAP_FLAG_THREAD_SAFE;
 
-  vec_validate (utm->rx_buf, 8192);
+  vec_validate (utm->rx_buf, 65536);
 
   utm->session_index_by_vpp_handles =
     hash_create (0, sizeof(uword));

@@ -63,8 +63,9 @@ typedef struct
   /* producer */
   u32 tail;
 
-  ooo_segment_t *ooo_segments;    /**< Pool of ooo segments */
-  u32 ooos_list_head;             /** Head of out-of-order linked-list */
+  ooo_segment_t *ooo_segments;  /**< Pool of ooo segments */
+  u32 ooos_list_head;           /**< Head of out-of-order linked-list */
+  u32 ooos_newest;              /**< Last segment to have been updated */
 
  CLIB_CACHE_LINE_ALIGN_MARK (data);
 } svm_fifo_t;
@@ -130,6 +131,24 @@ int svm_fifo_enqueue_with_offset2 (svm_fifo_t * f, int pid,
 
 int svm_fifo_dequeue_nowait2 (svm_fifo_t * f, int pid, u32 max_bytes, 
                              u8 * copy_here);
+
+always_inline ooo_segment_t *
+svm_fifo_newest_ooo_segment (svm_fifo_t *f)
+{
+  return f->ooo_segments + f->ooos_newest;
+}
+
+always_inline u32
+ooo_segment_offset (svm_fifo_t *f, ooo_segment_t *s)
+{
+  return ((f->nitems + s->fifo_position - f->tail) % f->nitems);
+}
+
+always_inline u32
+ooo_segment_end_offset (svm_fifo_t *f, ooo_segment_t *s)
+{
+  return ((f->nitems + s->fifo_position + s->length - f->tail) % f->nitems);
+}
 
 #endif /* __included_ssvm_fifo_h__ */
 
