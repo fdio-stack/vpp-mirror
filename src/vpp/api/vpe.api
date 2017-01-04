@@ -37,6 +37,7 @@
  * IPSEC-GRE APIs: see .../vnet/vnet/ipsec-gre/{ipsec_gre.api, ipsec_gre_api.c}
  * LISP APIs: see .../vnet/vnet/lisp/{lisp.api, lisp_api.c}
  * LISP-GPE APIs: see .../vnet/vnet/lisp-gpe/{lisp_gpe.api, lisp_gpe_api.c}
+ * URI APIs: .../vnet/vnet/uri/{uri.api uri_api.c}
  */
 
 /** \brief Create a new subinterface with the given vlan id
