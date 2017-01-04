@@ -20,5 +20,3 @@ uri_udp_test2_LDADD = libvlibmemoryclient.la libvlibapi.la libsvm.la \
 uri_tcp_test_SOURCES = uri/uri_tcp_test.c
 uri_tcp_test_LDADD = libvlibmemoryclient.la libvlibapi.la libsvm.la \
 	libvppinfra.la -lpthread -lm -lrt 
-
-API_FILES += vnet/interface.api
