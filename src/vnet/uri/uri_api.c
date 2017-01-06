@@ -183,6 +183,45 @@ redirect_connect_uri_callback (u32 server_api_client_index, void * mp_arg)
   return rv;
 }
 
+int
+send_connect_reply_callback (u32 api_client_index, stream_session_t *s,
+                             u8 segment_name_length, char *segment_name,
+                             u32 segment_size,
+                             unix_shared_memory_queue_t * vpp_event_queue,
+                             unix_shared_memory_queue_t * client_event_queue,
+                             u8 code)
+{
+  vl_api_connect_uri_reply_t * mp;
+  unix_shared_memory_queue_t * q;
+
+  q = vl_api_client_index_to_input_queue (api_client_index);
+
+  if (!q)
+    return -1;
+
+  mp = vl_msg_api_alloc (sizeof (*mp));
+  mp->_vl_msg_id = clib_host_to_net_u16 (VL_API_CONNECT_URI_REPLY);
+
+  mp->retval = code;
+  mp->server_rx_fifo = (u64) s->server_rx_fifo;
+  mp->server_tx_fifo = (u64) s->server_tx_fifo;
+  mp->session_thread_index = s->session_thread_index;
+  mp->session_index = s->session_index;
+  mp->session_type = s->session_type;
+  mp->vpp_event_queue_address = (u64) vpp_event_queue;
+  mp->client_event_queue_address = (u64) client_event_queue;
+  mp->segment_size = segment_size;
+  mp->segment_name_length = 0;
+  if (segment_name_length)
+    {
+      memcpy (mp->segment_name, segment_name, segment_name_length);
+      mp->segment_name_length = segment_name_length;
+    }
+
+  vl_msg_api_send_shmem (q, (u8 *) & mp);
+
+  return 0;
+}
 
 static void
 vl_api_bind_uri_t_handler (vl_api_bind_uri_t * mp)
@@ -241,31 +280,29 @@ vl_api_unbind_uri_t_handler (vl_api_unbind_uri_t * mp)
 static void
 vl_api_connect_uri_t_handler (vl_api_connect_uri_t * mp)
 {
-  vl_api_connect_uri_reply_t * rmp;
+//  vl_api_connect_uri_reply_t * rmp;
   char segment_name[128];
   u32 segment_name_length;
-  int rv;
 
   segment_name_length = ARRAY_LEN(segment_name);
 
-  rv = vnet_connect_uri ((char *) mp->uri, mp->client_index,
-                         mp->options, segment_name,
-                         &segment_name_length, (void *) mp);
+  vnet_connect_uri ((char *) mp->uri, mp->client_index, mp->options,
+                    segment_name, &segment_name_length, (void *) mp);
 
-  if (rv != VNET_CONNECT_URI_REDIRECTED)
-    {
-      REPLY_MACRO2 (VL_API_CONNECT_URI_REPLY,
-      ({
-        rmp->segment_name_length = 0;
-        if (segment_name_length)
-          {
-            memcpy (rmp->segment_name, segment_name, segment_name_length);
-            rmp->segment_name_length = segment_name_length;
-          }
-      }));
-      /* See bounce registration below */
-      vl_msg_api_free (mp);
-    }
+//  if (rv != VNET_CONNECT_URI_REDIRECTED)
+//    {
+//      REPLY_MACRO2 (VL_API_CONNECT_URI_REPLY,
+//      ({
+//        rmp->segment_name_length = 0;
+//        if (segment_name_length)
+//          {
+//            memcpy (rmp->segment_name, segment_name, segment_name_length);
+//            rmp->segment_name_length = segment_name_length;
+//          }
+//      }));
+//      /* See bounce registration below */
+//      vl_msg_api_free (mp);
+//    }
 }
 
 static void

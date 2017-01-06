@@ -817,6 +817,7 @@ libvnet_la_SOURCES +=				\
   vnet/uri/uri_udp4_node.c			\
   vnet/uri/uri_udp_builtin_server.c		\
   vnet/uri/uri_udp.c				\
+  vnet/uri/transport.c				\
   vnet/uri/uri_api.c
 
 nobase_include_HEADERS +=			\

@@ -142,8 +142,8 @@ pkt_push_udp (vlib_main_t * vm, vlib_buffer_t * b, u16 sp, u16 dp)
 }
 
 void *
-pkt_push_tcp_net_order (vlib_main_t * vm, vlib_buffer_t * b, u16 sp, u16 dp, u32 seq,
-                        u32 ack, u8 tcp_hdr_opts_len, u8 flags, u16 wnd)
+pkt_push_tcp_net_order (vlib_buffer_t * b, u16 sp, u16 dp, u32 seq, u32 ack,
+                        u8 tcp_hdr_opts_len, u8 flags, u16 wnd)
 {
   tcp_header_t *th;
 
@@ -162,10 +162,10 @@ pkt_push_tcp_net_order (vlib_main_t * vm, vlib_buffer_t * b, u16 sp, u16 dp, u32
 }
 
 void *
-pkt_push_tcp (vlib_main_t * vm, vlib_buffer_t * b, u16 sp_net, u16 dp_net,
-              u32 seq, u32 ack, u8 tcp_hdr_opts_len, u8 flags, u16 wnd)
+pkt_push_tcp (vlib_buffer_t *b, u16 sp_net, u16 dp_net, u32 seq, u32 ack,
+              u8 tcp_hdr_opts_len, u8 flags, u16 wnd)
 {
-  return pkt_push_tcp_net_order (vm, b, sp_net, dp_net,
+  return pkt_push_tcp_net_order (b, sp_net, dp_net,
                                  clib_host_to_net_u32 (seq),
                                  clib_host_to_net_u32 (ack), tcp_hdr_opts_len,
                                  flags, clib_host_to_net_u16 (wnd));

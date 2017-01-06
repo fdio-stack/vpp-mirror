@@ -17,8 +17,7 @@
 #define VNET_VNET_URI_TRANSPORT_H_
 
 #include <vnet/vnet.h>
-
-typedef struct _transport_connection transport_connection_t;
+#include <vnet/ip/ip.h>
 
 /* 16 octets */
 typedef CLIB_PACKED (struct
@@ -59,38 +58,57 @@ typedef CLIB_PACKED(struct
   };
 }) v6_connection_key_t;
 
+typedef struct _transport_endpoint
+{
+  ip46_address_t ip;
+  u16 port;
+} transport_endpoint_t;
+
+typedef clib_bihash_24_8_t transport_endpoint_table_t;
+
+#define TRANSPORT_ENDPOINT_INVALID_INDEX ((u32)~0)
+
+u32
+transport_endpoint_lookup (transport_endpoint_table_t *ht, ip46_address_t *ip,
+                           u16 port);
+void
+transport_endpoint_table_add (transport_endpoint_table_t *ht,
+                              transport_endpoint_t *te, u32 value);
+void
+transport_endpoint_table_del (transport_endpoint_table_t *ht,
+                              transport_endpoint_t *te);
 /*
  * Protocol independent transport properties associated to a session
  */
-struct _transport_connection
+typedef struct _transport_connection
 {
-  ip46_address_t remote_ip;
-  ip46_address_t local_ip;
-  u16 local_port;
-  u16 remote_port;
+  ip46_address_t rmt_ip;        /**< Remote IP */
+  ip46_address_t lcl_ip;        /**< Local IP */
+  u16 lcl_port;                 /**< Local port */
+  u16 rmt_port;                 /**< Remote port */
   u8 proto;                     /**< Transport protocol id */
 
-  u8 state;                     /**< Transport session state */
-  u32 session_index;            /**< Parent session index */
-  u32 connection_index;         /**< Index in transport pool */
+  u32 s_index;                  /**< Parent session index */
+  u32 c_index;                  /**< Connection index in transport pool */
   u8 is_ip4;                    /**< Flag if IP4 connection */
   u32 thread_index;             /**< Worker-thread index */
 
   /** Macros for 'derived classes' where base is named "connection" */
-#define c_lcl_ip4 connection.local_ip.ip4
-#define c_rmt_ip4 connection.remote_ip.ip4
-#define c_lcl_ip6 connection.local_ip.ip6
-#define c_rmt_ip6 connection.remote_ip.ip6
-#define c_lcl_port connection.local_port
-#define c_rmt_port connection.remote_port
+#define c_lcl_ip connection.lcl_ip
+#define c_rmt_ip connection.rmt_ip
+#define c_lcl_ip4 connection.lcl_ip.ip4
+#define c_rmt_ip4 connection.rmt_ip.ip4
+#define c_lcl_ip6 connection.lcl_ip.ip6
+#define c_rmt_ip6 connection.rmt_ip.ip6
+#define c_lcl_port connection.lcl_port
+#define c_rmt_port connection.rmt_port
 #define c_proto connection.proto
 #define c_state connection.state
-#define c_s_index connection.session_index
-#define c_c_index connection.connection_index
-#define c_vft connection.ts_vft
+#define c_s_index connection.s_index
+#define c_c_index connection.c_index
 #define c_is_ip4 connection.is_ip4
 #define c_thread_index connection.thread_index
-};
+} transport_connection_t;
 
 
 #endif /* VNET_VNET_URI_TRANSPORT_H_ */

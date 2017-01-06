@@ -264,10 +264,8 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
               /*
                * create stream session and attach the udp session to it
                */
-              rv = stream_session_create (s0->session_index,
-                                          us - udp_sessions[my_thread_index],
-                                          my_thread_index, SESSION_TYPE_IP4_UDP,
-                                          /* notify */1);
+              rv = stream_session_accept (&us->connection, s0->session_index,
+                                          SESSION_TYPE_IP4_UDP, 1/*notify*/);
               if (rv)
                 error0 = rv;
 

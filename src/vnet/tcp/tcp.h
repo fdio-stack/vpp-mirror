@@ -23,7 +23,6 @@
 #include <vnet/uri/transport.h>
 #include <vnet/uri/uri.h>
 
-#define MAX_HDRS_LEN 100
 #define TCP_TSTAMP_RESOLUTION 1e-3
 #define TCP_PAWS_IDLE 24 * 24 * 60 * 60 / TCP_TSTAMP_RESOLUTION /* 24 days */
 #define TCP_MAX_OPTION_SPACE 40
@@ -72,7 +71,7 @@ typedef void
 (*timer_expiration_handler) (u32 index);
 
 void
-timer_delack_handler (u32 index);
+timer_delack_handler (u32 conn_index);
 
 #define TCP_TIMER_HANDLE_INVALID ((u32) ~0)
 
@@ -100,7 +99,8 @@ typedef enum _tcp_connection_flag
 } tcp_connection_flags_e;
 
 /* Timer delays as multiples of 100ms */
-#define TCP_DELACK_TIME 1     /* 0.1 ms */
+#define TCP_DELACK_TIME         1       /* 0.1s */
+#define TCP_ESTABLISH_TIME      750     /* 75s */
 
 void
 tcp_update_time (f64 now);
@@ -232,6 +232,15 @@ typedef struct _tcp_main
   /* Convenience vector of connections to DELACK */
   u32 *delack_connections;
 
+  /* Pool of half-open connections on which we've sent a SYN */
+  tcp_connection_t *half_open_connections;
+
+  /* Pool of local TCP endpoints */
+  transport_endpoint_t *local_endpoints;
+
+  /* Local endpoints lookup table */
+  transport_endpoint_table_t local_endpoints_table;
+
   /* TODO decide if needed */
 
   /* Hash tables mapping name/protocol to protocol info index. */
@@ -259,21 +268,24 @@ vnet_get_tcp_main ()
 }
 
 always_inline tcp_connection_t *
-tcp_connection_get (u32 tsi, u32 thread_index)
+tcp_connection_get (u32 conn_index, u32 thread_index)
 {
-  return pool_elt_at_index(tcp_main.connections[thread_index], tsi);
+  return pool_elt_at_index(tcp_main.connections[thread_index], conn_index);
 }
 
-always_inline void
-tcp_connection_delete (u32 index, u32 my_thread_index)
-{
-  pool_put_index(tcp_main.connections[my_thread_index], index);
-}
+void
+tcp_connection_close (tcp_main_t *tm, tcp_connection_t *tc);
 
 always_inline tcp_connection_t *
 tcp_listener_get (u32 tli)
 {
   return pool_elt_at_index(tcp_main.listener_pool, tli);
+}
+
+always_inline tcp_connection_t *
+tcp_half_open_connection_get (u32 conn_index)
+{
+  return pool_elt_at_index(tcp_main.half_open_connections, conn_index);
 }
 
 void
@@ -286,6 +298,12 @@ void
 tcp_make_challange_ack (tcp_connection_t *ts, u8 is_ip4);
 void
 tcp_send_reset (vlib_buffer_t *pkt, u8 is_ip4);
+void
+tcp_send_syn (tcp_connection_t *tc);
+void
+tcp_send_fin (tcp_connection_t *tc);
+u16
+tcp_snd_mss (tcp_connection_t *tc);
 
 always_inline u32
 tcp_end_seq (tcp_header_t *th, u32 len)
@@ -330,12 +348,7 @@ tcp_time_now (void)
 }
 
 u32
-tcp_uri_tx_packetize_ip4 (vlib_main_t *vm, stream_session_t *s,
-                          vlib_buffer_t *b);
-u32
-tcp_uri_tx_packetize_ip6 (vlib_main_t *vm, stream_session_t *s,
-                          vlib_buffer_t *b);
-
+tcp_push_header_uri (transport_connection_t *tconn, vlib_buffer_t *b);
 
 #endif /* _vnet_tcp_h_ */
 

@@ -81,115 +81,19 @@ uri_udp_session_get_listener (u32 listener_index)
   return &us->connection;
 }
 
-//int
-//vnet_connect_ip4_udp (ip4_address_t *ip_address, u16 port,
-//                      u32 api_client_index, u64 * options,
-//                      u8 * segment_name, u32 * name_length, void *mp)
-//{
-//  stream_server_main_t *ssm = &stream_server_main;
-//  stream_server_t *ss;
-//  ip4_fib_t * fib;
-//  u32 fib_index;
-//  ip4_fib_mtrie_leaf_t leaf0;
-//  ip4_address_t * dst_addr0;
-//  u32 lbi0;
-//  const load_balance_t * lb0;
-//  const dpo_id_t *dpo0;
-//  ip4_fib_mtrie_t * mtrie0;
-//  stream_session_t *s;
-//
-//  /*
-//   * Connect to a local URI?
-//   */
-//  s = stream_session_lookup_listener4 (ip_address, port,
-//                                       SESSION_TYPE_IP4_UDP);
-//
-//  /* Find the server */
-//  if (s)
-//    ss = pool_elt_at_index(ssm->servers, s->server_index);
-//
-//  /*
-//   * Server is willing to have a direct fifo connection created
-//   * instead of going through the state machine, etc.
-//   */
-//
-//  if (!s || (ss->flags & URI_OPTIONS_FLAGS_USE_FIFO) == 0)
-//    goto create_regular_session;
-//
-//  /* Look up <address>, and see if we hit a local adjacency */
-//
-//  /* $$$$$ move this to a fib fcn. */
-//  /* Default FIB ($$$for the moment) */
-//  fib_index = ip4_fib_index_from_table_id (0);
-//  ASSERT (fib_index != ~0);
-//  fib = ip4_fib_get (fib_index);
-//
-//  dst_addr0 = ip_address;
-//  mtrie0 = &fib->mtrie;
-//  leaf0 = IP4_FIB_MTRIE_LEAF_ROOT;
-//  leaf0 = ip4_fib_mtrie_lookup_step (mtrie0, leaf0, dst_addr0, 0);
-//  leaf0 = ip4_fib_mtrie_lookup_step (mtrie0, leaf0, dst_addr0, 1);
-//  leaf0 = ip4_fib_mtrie_lookup_step (mtrie0, leaf0, dst_addr0, 2);
-//  leaf0 = ip4_fib_mtrie_lookup_step (mtrie0, leaf0, dst_addr0, 3);
-//  if (leaf0 == IP4_FIB_MTRIE_LEAF_EMPTY)
-//    goto create_regular_session;
-//
-//  lbi0 = ip4_fib_mtrie_leaf_get_adj_index (leaf0);
-//  lb0 = load_balance_get (lbi0);
-//
-//  /* Local (interface) adjs are not load-balanced... */
-//  if (lb0->lb_n_buckets > 1)
-//    goto create_regular_session;
-//  dpo0 = load_balance_get_bucket_i (lb0, 0);
-//  /* $$$$$ end move this to a fib fcn. */
-//
-//  if (dpo0->dpoi_type == DPO_RECEIVE)
-//    {
-//      int rv;
-//      /* redirect to the server */
-//      rv = redirect_connect_uri_callback (ss->api_client_index, mp);
-//      return rv;
-//    }
-//
-// create_regular_session:
-//  return VNET_API_ERROR_UNIMPLEMENTED;
-//}
-
 u32
-uri_tx_ip4_udp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b)
+uri_tx_ip4_udp (transport_connection_t *tconn, vlib_buffer_t *b)
 {
-  svm_fifo_t * f;
   ip4_header_t * ip;
   udp_header_t * udp;
-  u8 * data;
-  u32 max_dequeue, len_to_dequeue, actual_length;
   udp_session_t *us;
-  u32 my_thread_index = vm->cpu_index;
+  u8 * data;
 
-  ASSERT(s->session_thread_index == my_thread_index);
+  us = (udp_session_t *)tconn;
 
-  us = pool_elt_at_index(udp_sessions[my_thread_index],
-                         s->connection_index);
-
-  f = s->server_tx_fifo;
-  ip = vlib_buffer_get_current (b);
-  udp = (udp_header_t *)(ip+1);
-  data = (u8 *)(udp+1);
-
-  /* Dequeue a bunch of data into the packet buffer */
-  max_dequeue = svm_fifo_max_dequeue (f);
-
-  if (max_dequeue == 0)
-    {
-      /* $$$$ set b0->error = node->errors[nil dequeue] */
-      return URI_QUEUE_NEXT_DROP;
-    }
-
-  len_to_dequeue = max_dequeue < us->mtu ? max_dequeue : us->mtu;
-
-  actual_length = svm_fifo_dequeue (f, 0, len_to_dequeue, data);
-
-  b->current_length = sizeof (*ip) + sizeof (*udp) + actual_length;
+  data = vlib_buffer_get_current (b);
+  udp = (udp_header_t *) (data - sizeof(udp_header_t));
+  ip = (ip4_header_t *) ((u8 *) udp - sizeof(ip4_header_t));
 
   /* Build packet header, swap rx key src + dst fields */
   ip->src_address.as_u32 = us->c_lcl_ip4.as_u32;
@@ -197,13 +101,15 @@ uri_tx_ip4_udp (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b)
   ip->ip_version_and_header_length = 0x45;
   ip->ttl = 254;
   ip->protocol = IP_PROTOCOL_UDP;
-  ip->length = clib_host_to_net_u16 (b->current_length);
+  ip->length = clib_host_to_net_u16 (b->current_length + sizeof (*udp));
   ip->checksum = ip4_header_checksum(ip);
 
   udp->src_port = us->c_lcl_port;
   udp->dst_port = us->c_rmt_port;
-  udp->length = clib_host_to_net_u16 (actual_length + sizeof (*udp));
+  udp->length = clib_host_to_net_u16 (b->current_length);
   udp->checksum = 0;
+
+  b->current_length = sizeof (*ip) + sizeof (*udp);
 
   return URI_QUEUE_NEXT_IP4_LOOKUP;
 }
@@ -264,13 +170,21 @@ u32 uri_tx_fifo (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b)
   return 0;
 }
 
+u16
+udp_send_mss_uri (transport_connection_t *t)
+{
+  /* TODO figure out MTU of output interface */
+  return 400;
+}
+
 const static transport_proto_vft_t udp4_proto = {
   .bind = vnet_bind_ip4_udp_uri,
   .unbind = vnet_unbind_ip4_udp_uri,
-  .send = uri_tx_ip4_udp,
+  .push_header = uri_tx_ip4_udp,
   .get_connection = uri_udp_session_get,
   .get_listener = uri_udp_session_get_listener,
-  .delete_connection = uri_udp_session_delete,
+  .delete = uri_udp_session_delete,
+  .send_mss = udp_send_mss_uri,
   .format_connection = format_ip4_udp_stream_session
 };
 

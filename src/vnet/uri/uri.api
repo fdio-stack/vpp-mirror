@@ -156,21 +156,33 @@ define connect_uri {
   u64 options[16];
 };
 
-/** \brief Connect reply
+/** \brief vpp->client, connect reply
     @param context - sender context, to match reply w/ request
     @param retval - return code for the request
-    @param event_queue_address - vpp event queue address or 0
-    @param need_map - 1 if the client needs to attach to the fifo segment
+    @param server_rx_fifo - rx (vpp -> vpp-client) fifo address 
+    @param server_tx_fifo - tx (vpp-client -> vpp) fifo address 
+    @param session_index - session index;
+    @param session_thread_index - session thread index
+    @param session_type - session thread type
+    @param vpp_event_queue_address - vpp's event queue address
+    @param client_event_queue_address - client's event queue address
+    @param segment_name_length - non-zero if the client needs to attach to 
+                                 the fifo segment
     @param segment_name - set if the client needs to attach to the segment
 */
 define connect_uri_reply {
-    u32 context;
-    i32 retval;
-    /** 0 if this connection shouldn't send events to vpp */
-    u64 event_queue_address;
-    /** length non-zero if connecter should map segment */
-    u8 segment_name_length;
-    u8 segment_name[128];
+  u32 context;
+  i32 retval;
+  u64 server_rx_fifo;
+  u64 server_tx_fifo;
+  u32 session_index;
+  u32 session_thread_index;
+  u8 session_type;
+  u64 client_event_queue_address;
+  u64 vpp_event_queue_address;
+  u32 segment_size;
+  u8 segment_name_length;
+  u8 segment_name[128];
 };
 
 /** \brief Unind a given URI

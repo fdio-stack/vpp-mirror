@@ -160,7 +160,7 @@ typedef struct _stream_server
   u32 listen_session_index;
 
   /** Shoulder-taps for the server */
-  int (*session_create_callback) (struct _stream_server *server, 
+  int (*session_accept_callback) (struct _stream_server *server, 
                                   stream_session_t *new_session,
                                   unix_shared_memory_queue_t *vpp_event_queue);
   /* Rejected session callback */
@@ -176,6 +176,13 @@ typedef struct _stream_server
                                      stream_session_t *session);
   int (*add_segment_callback)(struct _stream_server *server,
                               char * segment_name, u32 segment_size);
+  int
+  (*session_connected_callback) (u32 index, stream_session_t *s,
+                                 u8 segment_name_length, char *segment_name,
+                                 u32 segment_size,
+                                 unix_shared_memory_queue_t * vpp_event_queue,
+                                 unix_shared_memory_queue_t * client_event_queue,
+                                 u8 code);
 
 } stream_server_t;
 
@@ -188,14 +195,18 @@ typedef struct _stream_server_main
   clib_bihash_16_8_t v4_session_hash;
   clib_bihash_48_8_t v6_session_hash;
 
-  /** per worker thread session pools */
+  /** Lookup tables for half-open sessions */
+  clib_bihash_16_8_t v4_half_open_hash;
+  clib_bihash_48_8_t v6_half_open_hash;
+
+  /** Per worker thread session pools */
   stream_session_t **sessions;
   
   /** Pool of listen sessions. Same type as stream sessions to ease lookups */
   stream_session_t *listen_sessions[SESSION_TYPE_N_TYPES];
 
   /* Server pool */
-  stream_server_t * servers;
+  stream_server_t *servers;
 
   /** Sparse vector to map dst port to stream server  */
   u16 * stream_server_by_dst_port[SESSION_TYPE_N_TYPES];
@@ -221,6 +232,9 @@ typedef struct _stream_server_main
   /** Unique segment name counter */
   u32 unique_segment_name_counter;
 
+  /* Stream server used by incoming connects */
+  stream_server_t *connect_stream_server[SESSION_TYPE_N_TYPES];
+
   /* Convenience */
   vlib_main_t *vlib_main;
   vnet_main_t *vnet_main;
@@ -233,8 +247,8 @@ extern vlib_node_registration_t tcp4_uri_input_node;
 extern vlib_node_registration_t tcp6_uri_input_node;
 
 int
-stream_session_create (u32 listener_index, u32 transport_session_index,
-                       u32 my_thread_index, u8 sst, u8 notify);
+stream_session_accept (transport_connection_t *tc, u32 listener_index, u8 sst,
+                       u8 notify);
 
 void
 stream_session_delete (stream_server_main_t *ssm, stream_session_t * s);
@@ -249,6 +263,17 @@ stream_session_lookup_listener6 (ip6_address_t * lcl, u16 lcl_port, u8 proto);
 stream_session_t *
 stream_session_lookup6 (ip6_address_t * lcl, ip6_address_t * rmt, u16 lcl_port,
                         u16 rmt_port, u8 , u32 my_thread_index);
+
+transport_connection_t *
+stream_session_lookup_transport4 (stream_server_main_t *ssm,
+                                  ip4_address_t * lcl, ip4_address_t * rmt,
+                                  u16 lcl_port, u16 rmt_port, u8 proto,
+                                  u32 my_thread_index);
+transport_connection_t *
+stream_session_lookup_transport6 (stream_server_main_t *ssm,
+                                  ip6_address_t * lcl, ip6_address_t * rmt,
+                                  u16 lcl_port, u16 rmt_port, u8 proto,
+                                  u32 my_thread_index);
 
 always_inline stream_session_t *
 stream_session_get_tsi (u64 ti_and_si, u32 thread_index)
@@ -271,8 +296,15 @@ stream_session_enqueue_data (stream_session_t *s0, u8 *data, u16 len,
 int
 stream_session_enqueue_notify (stream_session_t *s, u8 block);
 
+void
+stream_session_connect_notify (transport_connection_t *tc, u8 sst, u8 code);
+void
+stream_session_accept_notify (transport_connection_t *tc);
+void
+stream_session_reset_notify (transport_connection_t *tc);
+
 always_inline stream_server_main_t *
-stream_server_get_main ()
+vnet_get_stream_server_main ()
 {
   return &stream_server_main;
 }
@@ -298,6 +330,8 @@ stream_server_api_queue_is_full (stream_server_t *ss)
   return 0;
 }
 
+#define HALF_OPEN_LOOKUP_INVALID_VALUE ((u64)~0)
+
 typedef u32
 (*tp_application_bind) (vlib_main_t *, u32, ip46_address_t *, u16);
 
@@ -305,19 +339,28 @@ typedef u32
 (*tp_application_unbind) (vlib_main_t *, u32);
 
 typedef u32
-(*tp_application_send) (vlib_main_t *vm, stream_session_t *s, vlib_buffer_t *b);
+(*tp_application_send) (transport_connection_t *tconn, vlib_buffer_t *b);
 
 typedef u8 *
 (*tp_connection_format) (u8 *s, va_list *args);
 
 typedef transport_connection_t *
-(*tp_connection_get) (u32 session_index, u32 my_thread_index);
+(*tp_connection_get) (u32 conn_index, u32 my_thread_index);
 
 typedef transport_connection_t *
-(*tp_listen_connection_get) (u32 session_index);
+(*tp_listen_connection_get) (u32 conn_index);
+
+typedef transport_connection_t *
+(*tp_half_open_connection_get) (u32 conne_index);
 
 typedef void
-(*tp_connection_del) (u32 session_index, u32 my_thread_index);
+(*tp_connection_close) (u32 conn_index, u32 my_thread_index);
+
+typedef int
+(*tp_connection_open) (ip46_address_t *addr, u16 port_host_byte_order);
+
+typedef u16
+(*tp_connection_snd_mss) (transport_connection_t *tc);
 
 /*
  * Transport protocol virtual function table
@@ -326,11 +369,14 @@ typedef struct _transport_proto_vft
 {
   tp_application_bind bind;
   tp_application_unbind unbind;
-  tp_application_send send;
+  tp_application_send push_header;
   tp_connection_format format_connection;
   tp_connection_get get_connection;
   tp_listen_connection_get get_listener;
-  tp_connection_del delete_connection;
+  tp_half_open_connection_get get_half_open;
+  tp_connection_close delete;
+  tp_connection_open open;
+  tp_connection_snd_mss send_mss;
 } transport_proto_vft_t;
 
 void

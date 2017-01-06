@@ -96,6 +96,8 @@ typedef enum
   URI_OPTIONS_N_OPTIONS
 } uri_options_index_t;
 
+#define MAX_HDRS_LEN    100             /* Max number of bytes for headers */
+
 /** Server can handle delegated connect requests from local clients */
 #define URI_OPTIONS_FLAGS_USE_FIFO	(1<<0)
 

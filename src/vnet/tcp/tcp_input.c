@@ -27,7 +27,8 @@ tcp_error_strings[] =
 #undef tcp_error
 };
 
-#define foreach_tcp_established_next            \
+/* All TCP nodes have the same outgoing arcs */
+#define foreach_tcp_state_next                  \
   _ (DROP, "error-drop")                        \
   _ (TCP4_OUTPUT, "tcp4-output")                \
   _ (TCP6_OUTPUT, "tcp6-output")
@@ -35,22 +36,46 @@ tcp_error_strings[] =
 typedef enum _tcp_established_next
 {
 #define _(s,n) TCP_ESTABLISHED_NEXT_##s,
-  foreach_tcp_established_next
+  foreach_tcp_state_next
 #undef _
   TCP_ESTABLISHED_N_NEXT,
 } tcp_established_next_t;
 
-#define foreach_tcp_rcv_process_next            \
-  _ (DROP, "error-drop")                        \
-  _ (TCP4_OUTPUT, "tcp4-output")                \
-  _ (TCP6_OUTPUT, "tcp6-output")
 typedef enum _tcp_rcv_process_next
 {
 #define _(s,n) TCP_RCV_PROCESS_NEXT_##s,
-  foreach_tcp_rcv_process_next
+  foreach_tcp_state_next
 #undef _
   TCP_RCV_PROCESS_N_NEXT,
 } tcp_rcv_process_next_t;
+
+typedef enum _tcp_syn_sent_next
+{
+#define _(s,n) TCP_SYN_SENT_NEXT_##s,
+  foreach_tcp_state_next
+#undef _
+  TCP_SYN_SENT_N_NEXT,
+} tcp_syn_sent_next_t;
+
+typedef enum _tcp_listen_next
+{
+#define _(s,n) TCP_LISTEN_NEXT_##s,
+  foreach_tcp_state_next
+#undef _
+  TCP_LISTEN_N_NEXT,
+} tcp_listen_next_t;
+
+/* Generic, state independent indices */
+typedef enum _tcp_state_next
+{
+#define _(s,n) TCP_NEXT_##s,
+  foreach_tcp_state_next
+#undef _
+  TCP_STATE_N_NEXT,
+} tcp_state_next_t;
+
+#define tcp_next_output(is_ip4) (is_ip4 ? TCP_NEXT_TCP4_OUTPUT          \
+                                        : TCP_NEXT_TCP6_OUTPUT)
 
 vlib_node_registration_t tcp4_established_node;
 vlib_node_registration_t tcp6_established_node;
@@ -177,17 +202,6 @@ tcp_options_parse (tcp_header_t *th, tcp_options_t *to)
     }
 }
 
-always_inline void
-tcp_set_output_next_index (u32 *node, u8 is_est, u8 is_ip4)
-{
-  if (is_est)
-    *node = is_ip4 ? TCP_ESTABLISHED_NEXT_TCP4_OUTPUT
-        : TCP_ESTABLISHED_NEXT_TCP6_OUTPUT;
-  else
-    *node = is_ip4 ? TCP_RCV_PROCESS_NEXT_TCP4_OUTPUT
-        : TCP_RCV_PROCESS_NEXT_TCP6_OUTPUT;
-}
-
 always_inline int
 tcp_segment_check_paws (tcp_connection_t *tc)
 {
@@ -208,7 +222,7 @@ tcp_segment_check_paws (tcp_connection_t *tc)
  */
 always_inline int
 tcp_segment_validate (vlib_main_t *vm, tcp_connection_t *tc0, vlib_buffer_t *b0,
-                      tcp_header_t *th0, u32 *next0, u8 is_est)
+                      tcp_header_t *th0, u32 *next0)
 {
   u8 paws_failed;
 
@@ -224,6 +238,8 @@ tcp_segment_validate (vlib_main_t *vm, tcp_connection_t *tc0, vlib_buffer_t *b0,
   paws_failed = tcp_segment_check_paws (tc0);
   if (paws_failed)
     {
+      clib_warning ("paws failed");
+
       /* If it just so happens that a segment updates tsval_recent for a
        * segment over 24 days old, invalidate tsval_recent. */
       if (timestamp_lt(tc0->tsval_recent_age + TCP_PAWS_IDLE,
@@ -231,7 +247,6 @@ tcp_segment_validate (vlib_main_t *vm, tcp_connection_t *tc0, vlib_buffer_t *b0,
         {
           /* Age isn't reset until we get a valid tsval (bsd inspired) */
           tc0->tsval_recent = 0;
-          ASSERT (0);
         }
       else
         {
@@ -239,8 +254,7 @@ tcp_segment_validate (vlib_main_t *vm, tcp_connection_t *tc0, vlib_buffer_t *b0,
           if (!tcp_rst (th0))
             {
               tcp_make_ack (tc0, b0);
-              tcp_set_output_next_index (next0, is_est, tc0->c_is_ip4);
-
+              *next0 = tcp_next_output (tc0->c_is_ip4);
               return -1;
             }
         }
@@ -254,7 +268,7 @@ tcp_segment_validate (vlib_main_t *vm, tcp_connection_t *tc0, vlib_buffer_t *b0,
         {
           /* Send dup ack */
           tcp_make_ack(tc0, b0);
-          tcp_set_output_next_index (next0, is_est, tc0->c_is_ip4);
+          *next0 = tcp_next_output (tc0->c_is_ip4);
         }
       return -1;
     }
@@ -295,8 +309,7 @@ tcp_incoming_ack_is_acceptable (tcp_connection_t *tc0, vlib_buffer_t *tb0)
 
 always_inline int
 tcp_incoming_ack_established (tcp_connection_t *tc0, vlib_buffer_t *tb0,
-                              tcp_header_t *tcp0, u32 *next0, u32 *error0,
-                              u8 is_est)
+                              tcp_header_t *tcp0, u32 *next0, u32 *error0)
 {
   /* If the ACK is a duplicate (SEG.ACK < SND.UNA), it can be ignored.*/
   if (seq_lt(vnet_buffer (tb0)->tcp.ack_number, tc0->snd_una))
@@ -307,10 +320,10 @@ tcp_incoming_ack_established (tcp_connection_t *tc0, vlib_buffer_t *tb0,
 
   /* If the ACK acks something not yet sent (SEG.ACK > SND.NXT) then send an
    * ACK, drop the segment, and return  */
-  if (seq_lt(vnet_buffer (tb0)->tcp.ack_number, tc0->snd_nxt))
+  if (seq_gt(vnet_buffer (tb0)->tcp.ack_number, tc0->snd_nxt))
     {
       tcp_make_ack (tc0, tb0);
-      tcp_set_output_next_index (next0, is_est, tc0->c_is_ip4);
+      *next0 = tcp_next_output (tc0->c_is_ip4);
       *error0 = TCP_ERROR_ACK_INVALID;
       return -1;
     }
@@ -322,21 +335,6 @@ tcp_incoming_ack_established (tcp_connection_t *tc0, vlib_buffer_t *tb0,
   /* Update window TODO wnd scaling*/
   tc0->snd_wnd = clib_net_to_host_u32 (tcp0->window) << tc0->opt.wscale;
   tc0->snd_wl1 = vnet_buffer (tb0)->tcp.seq_number;
-
-  return 0;
-}
-
-/* Check if we have space in rx fifo to push more bytes */
-always_inline u8
-tcp_session_no_space (tcp_connection_t *tc, u32 my_thread_index, u16 data_len0)
-{
-  stream_session_t *s = stream_session_get (tc->c_s_index, my_thread_index);
-
-  if (PREDICT_FALSE(s->session_state != SESSION_STATE_READY))
-    return TCP_ERROR_NOT_READY;
-
-  if (PREDICT_FALSE(data_len0 > svm_fifo_max_enqueue (s->server_rx_fifo)))
-    return TCP_ERROR_FIFO_FULL;
 
   return 0;
 }
@@ -490,15 +488,14 @@ tcp_can_delack (tcp_connection_t *tc)
 }
 
 static int
-tcp_segment_rcv (tcp_main_t *tm, tcp_connection_t *tc, u32 my_thread_index,
-                 vlib_buffer_t *b, u16 n_data_bytes, u32 *next0, u8 is_est)
+tcp_segment_rcv (tcp_main_t *tm, tcp_connection_t *tc, vlib_buffer_t *b,
+                 u16 n_data_bytes, u32 *next0)
 {
   u32 error = 0;
 
   /* Handle out-of-order data */
   if (PREDICT_FALSE (vnet_buffer (b)->tcp.seq_number != tc->rcv_nxt))
     {
-
       error = tcp_session_enqueue_ooo (tc, b, n_data_bytes);
 
       /* Don't send more than 3 dupacks per burst
@@ -507,7 +504,7 @@ tcp_segment_rcv (tcp_main_t *tm, tcp_connection_t *tc, u32 my_thread_index,
         {
           /* RFC2581: Send DUPACK for fast retransmit */
           tcp_make_ack (tc, b);
-          tcp_set_output_next_index (next0, is_est, tc->c_is_ip4);
+          *next0 = tcp_next_output (tc->c_is_ip4);
 
           /* Mark as DUPACK. We may filter these in output if
            * the burst fills the holes. */
@@ -549,7 +546,7 @@ tcp_segment_rcv (tcp_main_t *tm, tcp_connection_t *tc, u32 my_thread_index,
        * delivery */
       if ((tc->flags & TCP_CONN_BURSTACK) == 0)
         {
-          tcp_set_output_next_index (next0, is_est, tc->c_is_ip4);
+          *next0 = tcp_next_output (tc->c_is_ip4);
           tcp_make_ack (tc, b);
           error = TCP_ERROR_ENQUEUED;
 
@@ -653,14 +650,14 @@ tcp46_established_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
           /* TODO header prediction fast path */
 
           /* 1-4: check SEQ, RST, SYN */
-          if (PREDICT_FALSE(tcp_segment_validate (vm, tc0, b0, th0, &next0, 1)))
+          if (PREDICT_FALSE(tcp_segment_validate (vm, tc0, b0, th0, &next0)))
             {
               error0 = TCP_ERROR_SEGMENT_INVALID;
               goto drop;
             }
 
           /* 5: check the ACK field  */
-          if (tcp_incoming_ack_established (tc0, b0, th0, &next0, &error0, 1))
+          if (tcp_incoming_ack_established (tc0, b0, th0, &next0, &error0))
             {
               goto drop;
             }
@@ -669,8 +666,7 @@ tcp46_established_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
 
           /* 7: process the segment text */
           vlib_buffer_advance (b0, n_advance_bytes0);
-          error0 = tcp_segment_rcv (tm, tc0, my_thread_index, b0, n_data_bytes0,
-                                    &next0, 1);
+          error0 = tcp_segment_rcv (tm, tc0, b0, n_data_bytes0, &next0);
 
        drop:
           b0->error = node->errors[error0];
@@ -728,7 +724,7 @@ VLIB_REGISTER_NODE (tcp4_established_node) = {
   .n_next_nodes = TCP_ESTABLISHED_N_NEXT,
   .next_nodes = {
 #define _(s,n) [TCP_ESTABLISHED_NEXT_##s] = n,
-    foreach_tcp_established_next
+    foreach_tcp_state_next
 #undef _
   },
 };
@@ -747,51 +743,280 @@ VLIB_REGISTER_NODE (tcp6_established_node) = {
   .n_next_nodes = TCP_ESTABLISHED_N_NEXT,
   .next_nodes = {
 #define _(s,n) [TCP_ESTABLISHED_NEXT_##s] = n,
-    foreach_tcp_established_next
+    foreach_tcp_state_next
 #undef _
   },
 };
 
 VLIB_NODE_FUNCTION_MULTIARCH (tcp6_established_node, tcp6_established)
 
-static int
-tcp_state_synsent_rcv ()
+vlib_node_registration_t tcp4_syn_sent_node;
+vlib_node_registration_t tcp6_syn_sent_node;
+
+always_inline uword
+tcp46_syn_sent_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
+                          vlib_frame_t * from_frame, int is_ip4)
 {
-  /* TODO */
+  tcp_main_t *tm = vnet_get_tcp_main ();
+  u32 n_left_from, next_index, * from, * to_next;
+  u32 my_thread_index = vm->cpu_index, errors = 0;
+  u8 sst = is_ip4 ? SESSION_TYPE_IP4_TCP : SESSION_TYPE_IP6_TCP;
 
-  /*
-   *  first check the ACK bit
-   */
+  from = vlib_frame_vector_args (from_frame);
+  n_left_from = from_frame->n_vectors;
 
-  /*
-   *   If the ACK bit is set
-   *     If SEG.ACK =< ISS, or SEG.ACK > SND.NXT, send a reset (unless
-   *     the RST bit is set, if so drop the segment and return)
-   *       <SEQ=SEG.ACK><CTL=RST>
-   *     and discard the segment.  Return.
-   *     If SND.UNA =< SEG.ACK =< SND.NXT then the ACK is acceptable.
-   */
+  next_index = node->cached_next_index;
 
+  while (n_left_from > 0)
+    {
+      u32 n_left_to_next;
 
-  /*
-   * second check the RST bit
-   */
+      vlib_get_next_frame (vm, node, next_index,
+                           to_next, n_left_to_next);
 
-  /*
-   * third check the security and precedence (skipped)
-   */
+      while (n_left_from > 0 && n_left_to_next > 0)
+        {
+          u32 bi0, ack0, seq0;
+          vlib_buffer_t * b0;
+          tcp_header_t *tcp0 = 0;
+          tcp_connection_t *tc0;
+          ip4_header_t * ip40;
+          ip6_header_t * ip60;
+          u32 n_advance_bytes0, n_data_bytes0;
+          tcp_connection_t *new_tc;
+          u32 next0 = TCP_SYN_SENT_NEXT_DROP, error0 = TCP_ERROR_ENQUEUED;
 
-  /*
-   * fourth check the SYN bit
-   */
+          bi0 = from[0];
+          to_next[0] = bi0;
+          from += 1;
+          to_next += 1;
+          n_left_from -= 1;
+          n_left_to_next -= 1;
 
-  /*
-   * fifth, if neither of the SYN or RST bits is set then drop the
-   *   segment and return.
-   */
+          b0 = vlib_get_buffer (vm, bi0);
+          tc0 = tcp_half_open_connection_get (
+              vnet_buffer(b0)->tcp.connection_index);
 
-  return 0;
+          ack0 = vnet_buffer (b0)->tcp.ack_number;
+          seq0 = vnet_buffer (b0)->tcp.seq_number;
+
+          /* Checksum computed by ipx_local no need to compute again */
+
+          if (is_ip4)
+            {
+              ip40 = vlib_buffer_get_current (b0);
+              tcp0 = ip4_next_header (ip40);
+              n_advance_bytes0 = (ip4_header_bytes (ip40)
+                  + tcp_header_bytes (tcp0));
+              n_data_bytes0 = clib_net_to_host_u16 (ip40->length)
+                  - n_advance_bytes0;
+            }
+          else
+            {
+              ip60 = vlib_buffer_get_current (b0);
+              tcp0 = ip6_next_header (ip60);
+              n_advance_bytes0 = tcp_header_bytes (tcp0);
+              n_data_bytes0 = clib_net_to_host_u16 (ip60->payload_length)
+                  - n_advance_bytes0;
+              n_advance_bytes0 += sizeof(ip60[0]);
+            }
+
+          if (PREDICT_FALSE(
+              !tcp_ack (tcp0) && !tcp_rst (tcp0) && !tcp_syn (tcp0)))
+            goto drop;
+
+          /* SYNs, FINs and data consume sequence numbers */
+          vnet_buffer (b0)->tcp.seq_end = seq0 + tcp_is_syn(tcp0)
+              + tcp_is_fin(tcp0) + n_data_bytes0;
+
+          /*
+           *  1. check the ACK bit
+           */
+
+          /*
+           *   If the ACK bit is set
+           *     If SEG.ACK =< ISS, or SEG.ACK > SND.NXT, send a reset (unless
+           *     the RST bit is set, if so drop the segment and return)
+           *       <SEQ=SEG.ACK><CTL=RST>
+           *     and discard the segment.  Return.
+           *     If SND.UNA =< SEG.ACK =< SND.NXT then the ACK is acceptable.
+           */
+          if (tcp_ack (tcp0))
+            {
+              if (ack0 <= tc0->iss || ack0 > tc0->snd_nxt)
+                {
+                  if (!tcp_rst (tcp0))
+                    tcp_send_reset (b0, is_ip4);
+
+                  goto drop;
+                }
+
+              /* Make sure ACK is valid */
+              if (tc0->snd_una > ack0)
+                goto drop;
+            }
+
+          /*
+           * 2. check the RST bit
+           */
+
+          if (tcp_rst (tcp0))
+            {
+              /* If ACK is acceptable, signal client */
+              if (tcp_ack(tcp0))
+                stream_session_reset_notify (&tc0->connection);
+
+              /* and close connection */
+              tcp_connection_close (tm, tc0);
+              goto drop;
+            }
+
+          /*
+           * 3. check the security and precedence (skipped)
+           */
+
+          /*
+           * 4. check the SYN bit
+           */
+
+          /* No SYN flag. Drop. */
+          if (!tcp_syn (tcp0))
+            goto drop;
+
+          /* Valid SYN or SYN-ACK. Move connection from half-open pool to
+           * current thread pool. */
+          pool_get(tm->connections[my_thread_index], new_tc);
+          clib_memcpy (new_tc, tc0, sizeof(*new_tc));
+
+          new_tc->c_thread_index = my_thread_index;
+
+          /* Stop connection establishment timer and cleanup syn_sent connection */
+          tcp_timer_stop (&tm->timer_wheel, new_tc->timers[TCP_TIMER_KEEP]);
+
+          /* XXX lock */
+          pool_put (tm->half_open_connections, tc0);
+
+          new_tc->rcv_nxt = seq0 + 1;
+          new_tc->irs = seq0;
+
+          /* Parse options */
+          tcp_options_parse (tcp0, &new_tc->opt);
+
+          /* SYN-ACK: See if we can switch to ESTABLISHED state */
+          if (tcp_ack (tcp0))
+            {
+              new_tc->snd_una = ack0;
+
+              /* TODO XXX dequeue acknowledged segments */
+
+              /* Our SYN has been acknowledged */
+              if (new_tc->snd_una > new_tc->iss)
+                {
+                  new_tc->state = TCP_CONNECTION_STATE_ESTABLISHED;
+
+                  /* Notify app that we have connection */
+                  stream_session_connect_notify (&new_tc->connection, sst, 0);
+
+                  tcp_make_ack (new_tc, b0);
+                  next0 = tcp_next_output (is_ip4);
+                }
+            }
+          /* SYN: Simultaneous open. Change state to SYN-RCVD and send SYN-ACK */
+          else
+            {
+              new_tc->state = TCP_CONNECTION_STATE_SYN_RCVD;
+
+              /* Notify app that we have connection XXX */
+              stream_session_connect_notify (&new_tc->connection, sst, 0);
+
+              tcp_make_synack (new_tc, b0);
+              next0 = tcp_next_output (is_ip4);
+            }
+
+          /* Read data, if any */
+          error0 = tcp_segment_rcv (tm, tc0, b0, n_data_bytes0, &next0);
+
+         drop:
+
+          b0->error = error0 ? node->errors[error0] : 0;
+          if (PREDICT_FALSE(b0->flags & VLIB_BUFFER_IS_TRACED))
+            {
+
+            }
+
+          vlib_validate_buffer_enqueue_x1 (vm, node, next_index, to_next,
+                                          n_left_to_next, bi0, next0);
+        }
+
+      vlib_put_next_frame (vm, node, next_index, n_left_to_next);
+    }
+
+  errors = stream_server_flush_enqueue_events (my_thread_index);
+  if (errors)
+    {
+      if (is_ip4)
+        vlib_node_increment_counter (vm, tcp4_established_node.index,
+                                     TCP_ERROR_EVENT_FIFO_FULL, errors);
+      else
+        vlib_node_increment_counter (vm, tcp6_established_node.index,
+                                     TCP_ERROR_EVENT_FIFO_FULL, errors);
+    }
+
+  return from_frame->n_vectors;
 }
+
+static uword
+tcp4_syn_sent (vlib_main_t * vm, vlib_node_runtime_t * node,
+                  vlib_frame_t * from_frame)
+{
+  return tcp46_syn_sent_inline (vm, node, from_frame, 1 /* is_ip4 */);
+}
+
+static uword
+tcp6_syn_sent_rcv (vlib_main_t * vm, vlib_node_runtime_t * node,
+                  vlib_frame_t * from_frame)
+{
+  return tcp46_syn_sent_inline (vm, node, from_frame, 0 /* is_ip4 */);
+}
+
+VLIB_REGISTER_NODE (tcp4_syn_sent_node) = {
+  .function = tcp4_syn_sent,
+  .name = "tcp4-syn-sent",
+  /* Takes a vector of packets. */
+  .vector_size = sizeof (u32),
+
+  .n_errors = TCP_N_ERROR,
+  .error_strings = tcp_error_strings,
+
+  .n_next_nodes = TCP_SYN_SENT_N_NEXT,
+  .next_nodes = {
+#define _(s,n) [TCP_SYN_SENT_NEXT_##s] = n,
+    foreach_tcp_state_next
+#undef _
+  },
+};
+
+VLIB_NODE_FUNCTION_MULTIARCH (tcp4_syn_sent_node, tcp4_syn_sent)
+
+
+VLIB_REGISTER_NODE (tcp6_syn_sent_node) = {
+  .function = tcp6_syn_sent_rcv,
+  .name = "tcp6-syn-sent",
+  /* Takes a vector of packets. */
+  .vector_size = sizeof (u32),
+
+  .n_errors = TCP_N_ERROR,
+  .error_strings = tcp_error_strings,
+
+  .n_next_nodes = TCP_SYN_SENT_N_NEXT,
+  .next_nodes = {
+#define _(s,n) [TCP_SYN_SENT_NEXT_##s] = n,
+    foreach_tcp_state_next
+#undef _
+  },
+};
+
+VLIB_NODE_FUNCTION_MULTIARCH (tcp6_syn_sent_node, tcp6_syn_sent_rcv)
 
 static void
 tcp_session_close (tcp_connection_t *tc)
@@ -800,24 +1025,9 @@ tcp_session_close (tcp_connection_t *tc)
   clib_warning ("unimplemented");
 }
 
-static void
-tcp_notify_accept_server (tcp_connection_t *tc, u32 my_thread_index)
-{
-  stream_server_main_t *ssm = &stream_server_main;
-  stream_server_t *ss;
-  stream_session_t *s;
-
-  s = stream_session_get (tc->c_s_index, my_thread_index);
-
-  /* Get session's server */
-  ss = pool_elt_at_index(ssm->servers, s->server_index);
-
-  /* Shoulder-tap the server */
-  ss->session_create_callback (ss, s, ssm->vpp_event_queues[my_thread_index]);
-}
-
 /**
- * Handles all states except LISTEN and ESTABLISHED as per RFC793 p. 64
+ * Handles reception for all states except LISTEN, SYN-SEND and ESTABLISHED
+ * as per RFC793 p. 64
  */
 always_inline uword
 tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
@@ -859,7 +1069,7 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
 
           b0 = vlib_get_buffer (vm, bi0);
           tc0 = tcp_connection_get (vnet_buffer(b0)->tcp.connection_index,
-                                 my_thread_index);
+                                    my_thread_index);
 
           /* Checksum computed by ipx_local no need to compute again */
 
@@ -887,25 +1097,21 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
               + tcp_is_syn (tcp0) + tcp_is_fin (tcp0) + n_data_bytes0;
 
           /*
-           * Special treatment for CLOSED and SYN-SENT
+           * Special treatment for CLOSED
            */
           switch (tc0->state)
-          {
+            {
             case TCP_CONNECTION_STATE_CLOSED:
               goto drop;
               break;
-            case TCP_CONNECTION_STATE_SYN_SENT:
-              tcp_state_synsent_rcv ();
-              break;
-          }
+            }
 
           /*
-           * For all other states (except LISTEN and ESTABLISHED)
+           * For all other states (except LISTEN)
            */
 
           /* 1-4: check SEQ, RST, SYN */
-          if (PREDICT_FALSE(
-              tcp_segment_validate (vm, tc0, b0, tcp0, &next0, 0)))
+          if (PREDICT_FALSE(tcp_segment_validate (vm, tc0, b0, tcp0, &next0)))
             {
               error0 = TCP_ERROR_SEGMENT_INVALID;
               goto drop;
@@ -937,12 +1143,12 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
               tc0->snd_wl2 = vnet_buffer (b0)->tcp.ack_number;
 
               /* Shoulder tap the server */
-              tcp_notify_accept_server (tc0, my_thread_index);
+              stream_session_accept_notify (&tc0->connection);
               break;
             case TCP_CONNECTION_STATE_ESTABLISHED:
               /* XXX Packets may have been enqueued before state change */
-              if (tcp_incoming_ack_established (tc0, b0, tcp0, &next0, &error0,
-                                                0))
+              if (tcp_incoming_ack_established (tc0, b0, tcp0, &next0,
+                                                &error0))
                 goto drop;
 
               break;
@@ -950,8 +1156,8 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
               /* XXX In addition to the processing for the ESTABLISHED state, if
                * our FIN is now acknowledged then enter FIN-WAIT-2 and
                * continue processing in that state. */
-              if (!tcp_incoming_ack_established (tc0, b0, tcp0, &next0, &error0,
-                                                 0))
+              if (!tcp_incoming_ack_established (tc0, b0, tcp0, &next0,
+                                                 &error0))
                 tc0->state = TCP_CONNECTION_STATE_FIN_WAIT_2;
               else
                 goto drop;
@@ -960,8 +1166,8 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
               /* In addition to the processing for the ESTABLISHED state, if
                * the retransmission queue is empty, the user's CLOSE can be
                * acknowledged ("ok") but do not delete the TCB. */
-              if (tcp_incoming_ack_established (tc0, b0, tcp0, &next0, &error0,
-                                                0))
+              if (tcp_incoming_ack_established (tc0, b0, tcp0, &next0,
+                                                &error0))
                 {
                   /* check if rtx queue is empty and ack CLOSE TODO*/
                 }
@@ -972,16 +1178,16 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
               break;
             case TCP_CONNECTION_STATE_CLOSE_WAIT:
               /* Do the same processing as for the ESTABLISHED state. */
-              if (tcp_incoming_ack_established (tc0, b0, tcp0, &next0, &error0,
-                                                0))
+              if (tcp_incoming_ack_established (tc0, b0, tcp0, &next0,
+                                                &error0))
                 goto drop;
               break;
             case TCP_CONNECTION_STATE_CLOSING:
               /* In addition to the processing for the ESTABLISHED state, if
                * the ACK acknowledges our FIN then enter the TIME-WAIT state,
                * otherwise ignore the segment. */
-              if (tcp_incoming_ack_established (tc0, b0, tcp0, &next0, &error0,
-                                                0))
+              if (tcp_incoming_ack_established (tc0, b0, tcp0, &next0,
+                                                &error0))
                 goto drop;
 
               /* XXX test that send queue empty */
@@ -1012,7 +1218,7 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
             default:
               ASSERT(0);
           }
-
+          
           /* 6: check the URG bit TODO*/
 
           /* 7: process the segment text */
@@ -1021,8 +1227,7 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
             case TCP_CONNECTION_STATE_ESTABLISHED:
             case TCP_CONNECTION_STATE_FIN_WAIT_1:
             case TCP_CONNECTION_STATE_FIN_WAIT_2:
-              error0 = tcp_segment_rcv (tm, tc0, my_thread_index, b0,
-                                        n_data_bytes0, &next0, 0);
+              error0 = tcp_segment_rcv (tm, tc0, b0, n_data_bytes0, &next0);
               break;
             case TCP_CONNECTION_STATE_CLOSE_WAIT:
             case TCP_CONNECTION_STATE_CLOSING:
@@ -1088,10 +1293,13 @@ VLIB_REGISTER_NODE (tcp4_rcv_process_node) = {
   .n_next_nodes = TCP_RCV_PROCESS_N_NEXT,
   .next_nodes = {
 #define _(s,n) [TCP_RCV_PROCESS_NEXT_##s] = n,
-    foreach_tcp_rcv_process_next
+    foreach_tcp_state_next
 #undef _
   },
 };
+
+VLIB_NODE_FUNCTION_MULTIARCH (tcp4_rcv_process_node, tcp4_rcv_process)
+
 
 VLIB_REGISTER_NODE (tcp6_rcv_process_node) = {
   .function = tcp6_rcv_process,
@@ -1105,23 +1313,12 @@ VLIB_REGISTER_NODE (tcp6_rcv_process_node) = {
   .n_next_nodes = TCP_RCV_PROCESS_N_NEXT,
   .next_nodes = {
 #define _(s,n) [TCP_RCV_PROCESS_NEXT_##s] = n,
-    foreach_tcp_rcv_process_next
+    foreach_tcp_state_next
 #undef _
   },
 };
 
-#define foreach_tcp_listen_next                 \
-  _ (DROP, "error-drop")                        \
-  _(TCP4_OUTPUT, "tcp4-output")                 \
-  _(TCP6_OUTPUT, "tcp6-output")
-
-typedef enum _tcp_listen_next
-{
-#define _(s,n) TCP_LISTEN_NEXT_##s,
-  foreach_tcp_listen_next
-#undef _
-  TCP_LISTEN_N_NEXT,
-} tcp_listen_next_t;
+VLIB_NODE_FUNCTION_MULTIARCH (tcp6_rcv_process_node, tcp6_rcv_process)
 
 vlib_node_registration_t tcp4_listen_node;
 vlib_node_registration_t tcp6_listen_node;
@@ -1146,6 +1343,7 @@ tcp46_listen_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
   u32 n_left_from, next_index, * from, * to_next;
   u32 my_thread_index = vm->cpu_index;
   tcp_main_t *tm = vnet_get_tcp_main ();
+  u8 sst = is_ip4 ? SESSION_TYPE_IP4_TCP : SESSION_TYPE_IP6_TCP;
 
   from = vlib_frame_vector_args (from_frame);
   n_left_from = from_frame->n_vectors;
@@ -1164,7 +1362,7 @@ tcp46_listen_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
           u32 bi0;
           vlib_buffer_t * b0;
           tcp_header_t *th0 = 0;
-          tcp_connection_t *tc0;
+          tcp_connection_t *lc0;
           ip4_header_t * ip40;
           ip6_header_t * ip60;
           tcp_connection_t *child0;
@@ -1178,7 +1376,7 @@ tcp46_listen_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
           n_left_to_next -= 1;
 
           b0 = vlib_get_buffer (vm, bi0);
-          tc0 = tcp_listener_get (vnet_buffer(b0)->tcp.connection_index);
+          lc0 = tcp_listener_get (vnet_buffer(b0)->tcp.connection_index);
 
           if (is_ip4)
             {
@@ -1211,7 +1409,7 @@ tcp46_listen_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
           memset (child0, 0, sizeof(*child0));
 
           child0->c_c_index = child0 - tm->connections[my_thread_index];
-          child0->c_lcl_port = tc0->c_lcl_port;
+          child0->c_lcl_port = lc0->c_lcl_port;
           child0->c_rmt_port = th0->src_port;
           child0->c_is_ip4 = is_ip4;
           child0->c_thread_index = my_thread_index;
@@ -1230,32 +1428,30 @@ tcp46_listen_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
                            sizeof(ip6_address_t));
             }
 
-          error0 = stream_session_create (
-              tc0->c_s_index, child0->c_c_index, my_thread_index,
-              is_ip4 ? SESSION_TYPE_IP4_TCP : SESSION_TYPE_IP6_TCP,
-              /* notify */0);
-
-          if (!error0)
+          if (stream_session_accept (&child0->connection, lc0->c_s_index, sst,
+                                     0/* notify */))
             {
-
-              tcp_options_parse (th0, &child0->opt);
-
-              child0->irs = vnet_buffer (b0)->tcp.seq_number;
-              child0->rcv_nxt = vnet_buffer (b0)->tcp.seq_number + 1;
-              child0->state = TCP_CONNECTION_STATE_SYN_RCVD;
-
-              /* RFC1323: TSval timestamps sent on {SYN} and {SYN,ACK}
-               * segments are used to initialize PAWS. */
-              if (tcp_opts_tstamp (&child0->opt))
-                {
-                    child0->tsval_recent = child0->opt.tsval;
-                    child0->tsval_recent_age = tcp_time_now ();
-                }
-              /* Reuse buffer to make syn-ack and send */
-              tcp_make_synack (child0, b0);
-              next0 = is_ip4 ? TCP_LISTEN_NEXT_TCP4_OUTPUT
-                  : TCP_LISTEN_NEXT_TCP6_OUTPUT;
+              error0 = TCP_ERROR_CREATE_SESSION_FAIL;
+              goto drop;
             }
+
+          tcp_options_parse (th0, &child0->opt);
+
+          child0->irs = vnet_buffer (b0)->tcp.seq_number;
+          child0->rcv_nxt = vnet_buffer (b0)->tcp.seq_number + 1;
+          child0->state = TCP_CONNECTION_STATE_SYN_RCVD;
+
+          /* RFC1323: TSval timestamps sent on {SYN} and {SYN,ACK}
+           * segments are used to initialize PAWS. */
+          if (tcp_opts_tstamp(&child0->opt))
+            {
+              child0->tsval_recent = child0->opt.tsval;
+              child0->tsval_recent_age = tcp_time_now ();
+            }
+
+          /* Reuse buffer to make syn-ack and send */
+          tcp_make_synack (child0, b0);
+          next0 = tcp_next_output (is_ip4);
 
          drop:
           if (PREDICT_FALSE(b0->flags & VLIB_BUFFER_IS_TRACED))
@@ -1300,7 +1496,7 @@ VLIB_REGISTER_NODE (tcp4_listen_node) = {
   .n_next_nodes = TCP_LISTEN_N_NEXT,
   .next_nodes = {
 #define _(s,n) [TCP_LISTEN_NEXT_##s] = n,
-    foreach_tcp_listen_next
+    foreach_tcp_state_next
 #undef _
   },
 };
@@ -1319,7 +1515,7 @@ VLIB_REGISTER_NODE (tcp6_listen_node) = {
   .n_next_nodes = TCP_LISTEN_N_NEXT,
   .next_nodes = {
 #define _(s,n) [TCP_LISTEN_NEXT_##s] = n,
-    foreach_tcp_listen_next
+    foreach_tcp_state_next
 #undef _
   },
 };
@@ -1334,6 +1530,7 @@ typedef enum _tcp_input_next
   TCP_INPUT_NEXT_DROP,
   TCP_INPUT_NEXT_LISTEN,
   TCP_INPUT_NEXT_RCV_PROCESS,
+  TCP_INPUT_NEXT_SYN_SENT,
   TCP_INPUT_NEXT_ESTABLISHED,
   TCP_INPUT_N_NEXT
 } tcp_input_next_t;
@@ -1341,13 +1538,15 @@ typedef enum _tcp_input_next
 #define foreach_tcp4_input_next                 \
   _ (DROP, "error-drop")                        \
   _ (LISTEN, "tcp4-listen")                     \
-  _ (RCV_PROCESS, "tcp4-rcv-process")               \
+  _ (RCV_PROCESS, "tcp4-rcv-process")           \
+  _ (SYN_SENT, "tcp4-syn-sent")                 \
   _ (ESTABLISHED, "tcp4-established")
 
 #define foreach_tcp6_input_next                 \
   _ (DROP, "error-drop")                        \
   _ (LISTEN, "tcp6-listen")                     \
-  _ (RCV_PROCESS, "tcp6-rcv-process")               \
+  _ (RCV_PROCESS, "tcp6-rcv-process")           \
+  _ (SYN_SENT, "tcp6-syn-sent")                 \
   _ (ESTABLISHED, "tcp6-established")
 
 typedef struct
@@ -1401,6 +1600,7 @@ tcp46_input_inline (vlib_main_t * vm,
   u32 n_left_from, next_index, * from, * to_next;
   u32 my_thread_index = vm->cpu_index;
   tcp_main_t *tm = vnet_get_tcp_main ();
+  stream_server_main_t *ssm = vnet_get_stream_server_main ();
 
   from = vlib_frame_vector_args (from_frame);
   n_left_from = from_frame->n_vectors;
@@ -1419,7 +1619,6 @@ tcp46_input_inline (vlib_main_t * vm,
           u32 bi0;
           vlib_buffer_t * b0;
           tcp_header_t * tcp0 = 0;
-          stream_session_t * s0;
           tcp_connection_t *tc0;
           ip4_header_t * ip40;
           ip6_header_t * ip60;
@@ -1441,32 +1640,24 @@ tcp46_input_inline (vlib_main_t * vm,
               tcp0 = ip4_next_header (ip40);
 
               /* lookup session */
-              s0 = stream_session_lookup4 (&ip40->dst_address,
-                                           &ip40->src_address, tcp0->dst_port,
-                                           tcp0->src_port, SESSION_TYPE_IP4_TCP,
-                                           my_thread_index);
+              tc0 = (tcp_connection_t *) stream_session_lookup_transport4 (
+                  ssm, &ip40->dst_address, &ip40->src_address, tcp0->dst_port,
+                  tcp0->src_port, SESSION_TYPE_IP4_TCP, my_thread_index);
             }
           else
             {
               ip60 = vlib_buffer_get_current (b0);
               tcp0 = ip6_next_header (ip60);
-              s0 = stream_session_lookup6 (&ip60->src_address,
-                                           &ip60->dst_address, tcp0->src_port,
-                                           tcp0->dst_port, SESSION_TYPE_IP6_TCP,
-                                           my_thread_index);
+              tc0 = (tcp_connection_t *) stream_session_lookup_transport6 (
+                  ssm, &ip60->src_address, &ip60->dst_address, tcp0->src_port,
+                  tcp0->dst_port, SESSION_TYPE_IP6_TCP, my_thread_index);
             }
 
           /* Session exists */
-          if (PREDICT_TRUE(0 != s0))
+          if (PREDICT_TRUE(0 != tc0))
             {
-              if (PREDICT_FALSE (s0->session_state == SESSION_STATE_LISTENING))
-                tc0 = tcp_listener_get (s0->connection_index);
-              else
-                tc0 = tcp_connection_get (s0->connection_index,
-                                       my_thread_index);
-
-              /* Save session index */
-              vnet_buffer (b0)->tcp.connection_index = s0->connection_index;
+              /* Save connection index */
+              vnet_buffer (b0)->tcp.connection_index = tc0->c_c_index;
               vnet_buffer (b0)->tcp.seq_number = clib_net_to_host_u32 (
                   tcp0->seq_number);
               vnet_buffer (b0)->tcp.ack_number = clib_net_to_host_u32 (
@@ -1581,6 +1772,9 @@ do {                                                                    \
   _(LISTEN, TCP_FLAG_SYN, TCP_INPUT_NEXT_LISTEN, TCP_ERROR_NONE);
   /* ACK for for a SYN-ACK -> tcp-rcv-process. */
   _(SYN_RCVD, TCP_FLAG_ACK, TCP_INPUT_NEXT_RCV_PROCESS, TCP_ERROR_NONE);
+  /* SYN-ACK for a SYN */
+  _(SYN_SENT, TCP_FLAG_SYN | TCP_FLAG_ACK, TCP_INPUT_NEXT_SYN_SENT,
+    TCP_ERROR_NONE);
   /* ACK for for established connection -> tcp-established. */
   _(ESTABLISHED, TCP_FLAG_ACK, TCP_INPUT_NEXT_ESTABLISHED, TCP_ERROR_NONE);
   /* FIN for for established connection -> tcp-established. */
