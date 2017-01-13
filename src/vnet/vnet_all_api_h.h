@@ -30,6 +30,9 @@
 #endif /* included_from_layer_3 */
 
 #include <vnet/devices/af_packet/af_packet.api.h>
+#if DPDK > 0
+#include <vnet/devices/dpdk/dpdk.api.h>
+#endif
 #include <vnet/devices/netmap/netmap.api.h>
 #include <vnet/devices/virtio/vhost_user.api.h>
 #include <vnet/gre/gre.api.h>
@@ -48,6 +51,8 @@
 #include <vnet/lisp-cp/lisp.api.h>
 #include <vnet/lisp-gpe/lisp_gpe.api.h>
 #include <vnet/uri/uri.api.h>
+#include <vnet/mpls/mpls.api.h>
+#include <vnet/sr/sr.api.h>
 
 /*
  * fd.io coding-style-patch-verification: ON

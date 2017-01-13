@@ -5,9 +5,9 @@ from hook import Hook
 from collections import deque
 
 # Sphinx creates auto-generated documentation by importing the python source
-# files and collecting the docstrings from them. The NO_VPP_PAPI flag allows the
-# vpp_papi_provider.py file to be importable without having to build the whole
-# vpp api if the user only wishes to generate the test documentation.
+# files and collecting the docstrings from them. The NO_VPP_PAPI flag allows
+# the vpp_papi_provider.py file to be importable without having to build
+# the whole vpp api if the user only wishes to generate the test documentation.
 do_import = True
 try:
     no_vpp_papi = os.getenv("NO_VPP_PAPI")
@@ -218,6 +218,22 @@ class VppPapiProvider(object):
     def sw_interface_ra_suppress(self, sw_if_index):
         return self.api(self.papi.sw_interface_ip6nd_ra_config,
                         {'sw_if_index': sw_if_index})
+
+    def ip6_sw_interface_ra_config(self, sw_if_index,
+                                   suppress,
+                                   send_unicast,):
+        return self.api(self.papi.sw_interface_ip6nd_ra_config,
+                        {'sw_if_index': sw_if_index,
+                         'suppress': suppress,
+                         'send_unicast': send_unicast})
+
+    def ip6_sw_interface_enable_disable(self, sw_if_index, enable):
+        """
+        Enable/Disable An interface for IPv6
+        """
+        return self.api(self.papi.sw_interface_ip6_enable_disable,
+                        {'sw_if_index': sw_if_index,
+                         'enable': enable})
 
     def vxlan_add_del_tunnel(
             self,
@@ -465,6 +481,10 @@ class VppPapiProvider(object):
         return self.api(self.papi.create_loopback,
                         {'mac_address': mac})
 
+    def delete_loopback(self, sw_if_index):
+        return self.api(self.papi.delete_loopback,
+                        {'sw_if_index': sw_if_index, })
+
     def ip_add_del_route(
             self,
             dst_address,
@@ -572,6 +592,54 @@ class VppPapiProvider(object):
              'is_static': is_static,
              'mac_address': mac_address,
              'dst_address': dst_address
+             }
+        )
+
+    def reset_vrf(self,
+                  vrf_id,
+                  is_ipv6=0,
+                  ):
+        """ Reset VRF (remove all routes etc.) request.
+
+        :param int vrf_id: ID of the FIB table / VRF to reset.
+        :param int is_ipv6: 1 for IPv6 neighbor, 0 for IPv4. (Default = 0)
+        """
+
+        return self.api(
+            self.papi.reset_vrf,
+            {'vrf_id': vrf_id,
+             'is_ipv6': is_ipv6,
+             }
+        )
+
+    def reset_fib(self,
+                  vrf_id,
+                  is_ipv6=0,
+                  ):
+        """ Reset VRF (remove all routes etc.) request.
+
+        :param int vrf_id: ID of the FIB table / VRF to reset.
+        :param int is_ipv6: 1 for IPv6 neighbor, 0 for IPv4. (Default = 0)
+        """
+
+        return self.api(
+            self.papi.reset_fib,
+            {'vrf_id': vrf_id,
+             'is_ipv6': is_ipv6,
+             }
+        )
+
+    def ip_dump(self,
+                is_ipv6=0,
+                ):
+        """ Return IP dump.
+
+        :param int is_ipv6: 1 for IPv6 neighbor, 0 for IPv4. (Default = 0)
+        """
+
+        return self.api(
+            self.papi.ip_dump,
+            {'is_ipv6': is_ipv6,
              }
         )
 
@@ -848,6 +916,24 @@ class VppPapiProvider(object):
         """
         return self.api(self.papi.snat_show_config, {})
 
+    def snat_add_interface_addr(
+            self,
+            sw_if_index,
+            is_add=1):
+        """Add/del S-NAT address from interface
+
+        :param sw_if_index: Software index of the interface
+        :param is_add: 1 if add, 0 if delete (Default value = 1)
+        """
+        return self.api(self.papi.snat_add_del_interface_addr,
+                        {'is_add': is_add, 'sw_if_index': sw_if_index})
+
+    def snat_interface_addr_dump(self):
+        """Dump S-NAT addresses interfaces
+        :return: Dictionary of S-NAT addresses interfaces
+        """
+        return self.api(self.papi.snat_interface_addr_dump, {})
+
     def control_ping(self):
         self.api(self.papi.control_ping)
 
@@ -904,8 +990,8 @@ class VppPapiProvider(object):
         """
         :param is_add:
         :param mask:
-        :param match_n_vectors (Default value = 1):
-        :param table_index (Default value = 0xFFFFFFFF)
+        :param match_n_vectors: (Default value = 1)
+        :param table_index: (Default value = 0xFFFFFFFF)
         :param nbuckets:  (Default value = 2)
         :param memory_size:  (Default value = 2097152)
         :param skip_n_vectors:  (Default value = 0)

@@ -44,51 +44,29 @@ nobase_include_HEADERS +=			\
 
 API_FILES += vpp/api/vpe.api
 
-BUILT_SOURCES += vpp/app/version.h
+BUILT_SOURCES += .version
 
 vpp/app/version.o:	vpp/app/version.h
 
-.PHONY:	vpp/app/version.h
+.PHONY:	.version
 
-vpp/app/version.h:
-	@echo "  VERSION " $@
-	@echo "#define VPP_BUILD_DATE \"$$(date)\"" > $@
-	@echo "#define VPP_BUILD_USER \"$$(whoami)\"" >> $@
-	@echo "#define VPP_BUILD_HOST \"$$(hostname)\"" >> $@
-	@echo "#define VPP_BUILD_TOPDIR \"$$(cd $(srcdir) && git rev-parse --show-toplevel)\"" 	>> $@
-	@echo "#define VPP_BUILD_VER \"$$($(srcdir)/scripts/version)\"" >> $@
+VPP_VERSION = $(shell $(srcdir)/scripts/version)
 
-# Generate a plugin configuration script. Misconfiguring a
-# plugin can cause very subtle problems.
+# update version.h only when version changes, to avoid
+# unnecessary re-linking of vpp binary
 
-bin_SCRIPTS = vpp_plugin_configure
-
-BUILT_SOURCES += vpp_plugin_configure
-
-.PHONY: vpp_plugin_configure
-
-if WITH_DPDK
-PLUGIN_DPDK_ARG="--with-dpdk"
-else
-PLUGIN_DPDK_ARG=""
-endif
-
-vpp_plugin_configure:
-	@echo "PLUGIN CFG" $@
-	@echo "#!/bin/bash" > $@
-	@echo " " >> $@
-	@echo "set +eu" >> $@
-	@echo " " >> $@
-	@echo "if [ -f ./configure ] ; then" >> $@
-	@echo "    CFLAGS='$(CFLAGS) $(AM_CFLAGS) -I/usr/include/vpp-dpdk' ./configure --with-plugin-toolkit $(PLUGIN_DPDK_ARG)" >> $@
-	@echo "else" >> $@
-	@echo "    if [ -f ../configure ] ; then" >> $@
-	@echo "        CFLAGS='$(CFLAGS) $(AM_CFLAGS) -I/usr/include/vpp-dpdk' ../configure --with-plugin-toolkit $(PLUGIN_DPDK_ARG)" >> $@
-	@echo "    else" >> $@
-	@echo "        echo Couldnt find ./configure or ../configure " >> $@
-	@echo "        exit 1" >> $@
-	@echo "    fi" >> $@
-	@echo "fi" >> $@
+.version:
+	@if [ "$$(cat .version 2> /dev/null)" != "$(VPP_VERSION)" ] ; then		\
+	  f="vpp/app/version.h" 							;\
+	  echo "  VERSION  $$f ($(VPP_VERSION))"					;\
+	  echo $(VPP_VERSION) > .version						;\
+	  echo "#define VPP_BUILD_DATE \"$$(date)\"" > $$f 				;\
+	  echo "#define VPP_BUILD_USER \"$$(whoami)\"" >> $$f 				;\
+	  echo "#define VPP_BUILD_HOST \"$$(hostname)\"" >> $$f				;\
+	  echo -n "#define VPP_BUILD_TOPDIR " >> $$f					;\
+	  echo "\"$$(cd $(srcdir) && git rev-parse --show-toplevel)\"" >> $$f 		;\
+	  echo "#define VPP_BUILD_VER \"$(VPP_VERSION)\"" >> $$f			;\
+	fi
 
 bin_vpp_LDADD = \
   libvlibapi.la \
@@ -97,16 +75,12 @@ bin_vpp_LDADD = \
   libvnet.la \
   libsvm.la \
   libsvmdb.la \
-  libvnetplugin.la \
   -lrt
 
 bin_vpp_LDFLAGS = $(DPDK_LD_FLAGS)
 bin_vpp_LDADD += libvppinfra.la -lm -lpthread -ldl $(DPDK_LD_ADD)
 
-if WITH_IPV6SR
-  bin_vpp_LDADD += -lcrypto
-endif
-
+if ENABLE_TESTS
 noinst_PROGRAMS += bin/test_client
 
 bin_test_client_SOURCES = \
@@ -131,6 +105,7 @@ bin_test_ha_LDADD = \
   libsvm.la \
   libvppinfra.la \
   -lpthread -lm -lrt
+endif
 
 noinst_PROGRAMS += bin/summary_stats_client
 

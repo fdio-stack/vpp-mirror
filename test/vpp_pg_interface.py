@@ -1,7 +1,9 @@
 import os
 import time
-from traceback import format_exc
+import socket
+from traceback import format_exc, format_stack
 from scapy.utils import wrpcap, rdpcap, PcapReader
+from scapy.plist import PacketList
 from vpp_interface import VppInterface
 
 from scapy.layers.l2 import Ether, ARP
@@ -9,12 +11,15 @@ from scapy.layers.inet6 import IPv6, ICMPv6ND_NS, ICMPv6ND_NA,\
     ICMPv6NDOptSrcLLAddr, ICMPv6NDOptDstLLAddr, ICMPv6ND_RA, RouterAlert, \
     IPv6ExtHdrHopByHop
 from util import ppp, ppc
+from scapy.utils6 import in6_getnsma, in6_getnsmac, in6_ismaddr
+from scapy.utils import inet_pton, inet_ntop
 
 
 def is_ipv6_misc(p):
     """ Is packet one of uninteresting IPv6 broadcasts? """
     if p.haslayer(ICMPv6ND_RA):
-        return True
+        if in6_ismaddr(p[IPv6].dst):
+            return True
     if p.haslayer(IPv6ExtHdrHopByHop):
         for o in p[IPv6ExtHdrHopByHop].options:
             if isinstance(o, RouterAlert):
@@ -80,6 +85,7 @@ class VppPGInterface(VppInterface):
 
         self._in_history_counter = 0
         self._out_history_counter = 0
+        self._out_assert_counter = 0
         self._pg_index = pg_index
         self._out_file = "pg%u_out.pcap" % self.pg_index
         self._out_path = self.test.tempdir + "/" + self._out_file
@@ -88,10 +94,12 @@ class VppPGInterface(VppInterface):
         self._capture_cli = "packet-generator capture pg%u pcap %s" % (
             self.pg_index, self.out_path)
         self._cap_name = "pcap%u" % self.sw_if_index
-        self._input_cli = "packet-generator new pcap %s source pg%u name %s" % (
-            self.in_path, self.pg_index, self.cap_name)
+        self._input_cli = \
+            "packet-generator new pcap %s source pg%u name %s" % (
+                self.in_path, self.pg_index, self.cap_name)
 
-    def rotate_out_file(self):
+    def enable_capture(self):
+        """ Enable capture on this packet-generator interface"""
         try:
             if os.path.isfile(self.out_path):
                 os.rename(self.out_path,
@@ -103,10 +111,6 @@ class VppPGInterface(VppInterface):
                            self._out_file))
         except:
             pass
-
-    def enable_capture(self):
-        """ Enable capture on this packet-generator interface"""
-        self.rotate_out_file()
         # FIXME this should be an API, but no such exists atm
         self.test.vapi.cli(self.capture_cli)
         self._pcap_reader = None
@@ -134,6 +138,22 @@ class VppPGInterface(VppInterface):
         # FIXME this should be an API, but no such exists atm
         self.test.vapi.cli(self.input_cli)
 
+    def generate_debug_aid(self, kind):
+        """ Create a hardlink to the out file with a counter and a file
+        containing stack trace to ease debugging in case of multiple capture
+        files present. """
+        self.test.logger.debug("Generating debug aid for %s on %s" %
+                               (kind, self._name))
+        link_path, stack_path = ["%s/debug_%s_%s_%s.%s" %
+                                 (self.test.tempdir, self._name,
+                                  self._out_assert_counter, kind, suffix)
+                                 for suffix in ["pcap", "stack"]
+                                 ]
+        os.link(self.out_path, link_path)
+        with open(stack_path, "w") as f:
+            f.writelines(format_stack())
+        self._out_assert_counter += 1
+
     def _get_capture(self, timeout, filter_out_fn=is_ipv6_misc):
         """ Helper method to get capture and filter it """
         try:
@@ -142,7 +162,7 @@ class VppPGInterface(VppInterface):
             output = rdpcap(self.out_path)
             self.test.logger.debug("Capture has %s packets" % len(output.res))
         except:
-            self.test.logger.debug("Exception in scapy.rdpcap(%s): %s" %
+            self.test.logger.debug("Exception in scapy.rdpcap (%s): %s" %
                                    (self.out_path, format_exc()))
             return None
         before = len(output.res)
@@ -178,8 +198,9 @@ class VppPGInterface(VppInterface):
             based_on = "based on stored packet_infos"
             if expected_count == 0:
                 raise Exception(
-                    "Internal error, expected packet count for %s is 0!" % name)
-        self.test.logger.debug("Expecting to capture %s(%s) packets on %s" % (
+                    "Internal error, expected packet count for %s is 0!" %
+                    name)
+        self.test.logger.debug("Expecting to capture %s (%s) packets on %s" % (
             expected_count, based_on, name))
         while remaining_time > 0:
             before = time.time()
@@ -189,10 +210,17 @@ class VppPGInterface(VppInterface):
                 if len(capture.res) == expected_count:
                     # bingo, got the packets we expected
                     return capture
+                else:
+                    self.test.logger.debug("Partial capture containing %s "
+                                           "packets doesn't match expected "
+                                           "count %s (yet?)" %
+                                           (len(capture.res), expected_count))
             elif expected_count == 0:
-                return None
+                # bingo, got None as we expected - return empty capture
+                return PacketList()
             remaining_time -= elapsed_time
         if capture:
+            self.generate_debug_aid("count-mismatch")
             raise Exception("Captured packets mismatch, captured %s packets, "
                             "expected %s packets on %s" %
                             (len(capture.res), expected_count, name))
@@ -210,22 +238,21 @@ class VppPGInterface(VppInterface):
             try:
                 capture = self.get_capture(
                     0, remark=remark, filter_out_fn=filter_out_fn)
-                if capture:
-                    if len(capture.res) == 0:
-                        # junk filtered out, we're good
-                        return
-                    self.test.logger.error(
-                        ppc("Unexpected packets captured:", capture))
+                if not capture or len(capture.res) == 0:
+                    # junk filtered out, we're good
+                    return
+                self.test.logger.error(
+                    ppc("Unexpected packets captured:", capture))
             except:
                 pass
+            self.generate_debug_aid("empty-assert")
             if remark:
                 raise AssertionError(
-                    "Non-empty capture file present for interface %s(%s)" %
+                    "Non-empty capture file present for interface %s (%s)" %
                     (self.name, remark))
             else:
-                raise AssertionError(
-                    "Non-empty capture file present for interface %s" %
-                    self.name)
+                raise AssertionError("Capture file present for interface %s" %
+                                     self.name)
 
     def wait_for_capture_file(self, timeout=1):
         """
@@ -240,8 +267,9 @@ class VppPGInterface(VppInterface):
             self.test.logger.debug("Waiting for capture file %s to appear, "
                                    "timeout is %ss" % (self.out_path, timeout))
         else:
-            self.test.logger.debug("Capture file %s already exists" %
-                                   self.out_path)
+            self.test.logger.debug(
+                "Capture file %s already exists" %
+                self.out_path)
             return True
         while time.time() < limit:
             if os.path.isfile(self.out_path):
@@ -274,8 +302,9 @@ class VppPGInterface(VppInterface):
                     self._pcap_reader = PcapReader(self.out_path)
                     break
                 except:
-                    self.test.logger.debug("Exception in scapy.PcapReader(%s): "
-                                           "%s" % (self.out_path, format_exc()))
+                    self.test.logger.debug(
+                        "Exception in scapy.PcapReader(%s): %s" %
+                        (self.out_path, format_exc()))
         if not self._pcap_reader:
             raise Exception("Capture file %s did not appear within "
                             "timeout" % self.out_path)
@@ -289,8 +318,9 @@ class VppPGInterface(VppInterface):
                         "Packet received after %ss was filtered out" %
                         (time.time() - (deadline - timeout)))
                 else:
-                    self.test.logger.debug("Packet received after %fs" %
-                                           (time.time() - (deadline - timeout)))
+                    self.test.logger.debug(
+                        "Packet received after %fs" %
+                        (time.time() - (deadline - timeout)))
                     return p
             time.sleep(0)  # yield
         self.test.logger.debug("Timeout - no packets received")
@@ -304,8 +334,11 @@ class VppPGInterface(VppInterface):
 
     def create_ndp_req(self):
         """Create NDP - NS applicable for this interface"""
-        return (Ether(dst="ff:ff:ff:ff:ff:ff", src=self.remote_mac) /
-                IPv6(src=self.remote_ip6, dst=self.local_ip6) /
+        nsma = in6_getnsma(inet_pton(socket.AF_INET6, self.local_ip6))
+        d = inet_ntop(socket.AF_INET6, nsma)
+
+        return (Ether(dst=in6_getnsmac(nsma)) /
+                IPv6(dst=d, src=self.remote_ip6) /
                 ICMPv6ND_NS(tgt=self.local_ip6) /
                 ICMPv6NDOptSrcLLAddr(lladdr=self.remote_mac))
 
@@ -331,7 +364,6 @@ class VppPGInterface(VppInterface):
             self.test.logger.info("No ARP received on port %s" %
                                   pg_interface.name)
             return
-        self.rotate_out_file()
         arp_reply = captured_packet.copy()  # keep original for exception
         # Make Dot1AD packet content recognizable to scapy
         if arp_reply.type == 0x88a8:
@@ -376,7 +408,8 @@ class VppPGInterface(VppInterface):
                 captured_packet = pg_interface.wait_for_packet(
                     deadline - now, filter_out_fn=None)
             except:
-                self.test.logger.error("Timeout while waiting for NDP response")
+                self.test.logger.error(
+                    "Timeout while waiting for NDP response")
                 raise
             ndp_reply = captured_packet.copy()  # keep original for exception
             # Make Dot1AD packet content recognizable to scapy
@@ -391,13 +424,12 @@ class VppPGInterface(VppInterface):
                 self._local_mac = opt.lladdr
                 self.test.logger.debug(self.test.vapi.cli("show trace"))
                 # we now have the MAC we've been after
-                self.rotate_out_file()
                 return
             except:
                 self.test.logger.info(
-                    ppp("Unexpected response to NDP request:", captured_packet))
+                    ppp("Unexpected response to NDP request:",
+                        captured_packet))
             now = time.time()
 
         self.test.logger.debug(self.test.vapi.cli("show trace"))
-        self.rotate_out_file()
         raise Exception("Timeout while waiting for NDP response")

@@ -13,6 +13,7 @@
 
 AUTOMAKE_OPTIONS = foreign
 ACLOCAL_AMFLAGS = -I m4
+AM_LIBTOOLFLAGS = --quiet
 
 AM_CFLAGS = -Wall -I${top_srcdir} -I${top_builddir} \
   -I$(JAVA_HOME)/include -I$(JAVA_HOME)/include/linux \
@@ -33,9 +34,16 @@ CLEANDIRS =
 nobase_include_HEADERS =                \
   jvpp-common/jvpp_common.h
 
-noinst_LTLIBRARIES += libjvpp_common.la
+lib_LTLIBRARIES = libjvpp_common.la
 libjvpp_common_la_SOURCES = jvpp-common/jvpp_common.c
-libjvpp_common_la_LDFLAGS =
+
+JVPP_LIBS = \
+  libjvpp_common.la \
+  $(top_builddir)/libvppinfra.la \
+  $(top_builddir)/libvlibmemoryclient.la \
+  $(top_builddir)/libvlibapi.la \
+  $(top_builddir)/libsvm.la \
+  -lpthread -lm -lrt
 
 #
 # jvpp-registry (connection management + plugin registry)
@@ -45,7 +53,8 @@ noinst_LTLIBRARIES += libjvpp_registry.la
 
 libjvpp_registry_la_SOURCES = jvpp-registry/jvpp_registry.c
 libjvpp_registry_la_CPPFLAGS = -Ijvpp-registry
-libjvpp_registry_la_LIBAD = libjvpp_common.la
+libjvpp_registry_la_LIBADD = $(JVPP_LIBS)
+libjvpp_registry_la_DEPENDENCIES = libjvpp_common.la
 
 packagedir_jvpp_registry = io/fd/vpp/jvpp
 jvpp_registry_src_files := \
@@ -72,9 +81,10 @@ define japigen
 	@rm -rf jvpp-$(1)/target
 	@ @srcdir@/jvpp/gen/jvpp_gen.py --plugin_name $(1) --root_dir jvpp-$(1) \
 	  -i $(jvpp_$(1)_json_files) > /dev/null
-	@find jvpp-$(1)/target -name \*.java > jvpp-$(1).files
+	@find jvpp-$(1)/target -name \*.java > jvpp-$(1).generated.files
+	@find @srcdir@/jvpp-$(1) -name \*.java > jvpp-$(1).static.files
 	@$(JAVAC) -classpath jvpp-registry/target \
-	  -d jvpp-$(1)/target @jvpp-$(1).files
+	  -d jvpp-$(1)/target @jvpp-$(1).generated.files @jvpp-$(1).static.files
 	@$(JAVAH) -force \
 	  -classpath jvpp-registry/target:jvpp-$(1)/target \
 	  -d jvpp-$(1) io.fd.vpp.jvpp.$(1).$(2)
@@ -86,8 +96,10 @@ endef
 noinst_LTLIBRARIES += libjvpp_core.la
 libjvpp_core_la_SOURCES = jvpp-core/jvpp_core.c jvpp-core/jvpp_core_gen.h
 libjvpp_core_la_CPPFLAGS = -Ijvpp-registry -Ijvpp-core
-BUILT_SOURCES += jvpp-core/io_fd_vpp_jvpp_core_JVppCoreImpl.h
+libjvpp_core_la_LIBADD = $(JVPP_LIBS)
+libjvpp_core_la_DEPENDENCIES = libjvpp_common.la
 
+BUILT_SOURCES += jvpp-core/io_fd_vpp_jvpp_core_JVppCoreImpl.h
 JAR_FILES += jvpp-core-$(PACKAGE_VERSION).jar
 CLEANDIRS += jvpp-core/target
 jvpp_core_json_files = $(shell find @top_builddir@/vnet/ -type f -name '*.api.json')
@@ -103,9 +115,10 @@ if ENABLE_ACL_PLUGIN
 noinst_LTLIBRARIES += libjvpp_acl.la
 libjvpp_acl_la_SOURCES = jvpp-acl/jvpp_acl.c
 libjvpp_acl_la_CPPFLAGS = -Ijvpp-acl
+libjvpp_acl_la_LIBADD = $(JVPP_LIBS)
+libjvpp_acl_la_DEPENDENCIES = libjvpp_common.la
 
 BUILT_SOURCES += jvpp-acl/io_fd_vpp_jvpp_acl_JVppAclImpl.h
-
 JAR_FILES += jvpp-acl-$(PACKAGE_VERSION).jar
 CLEANDIRS += jvpp-acl/target
 
@@ -122,9 +135,10 @@ if ENABLE_SNAT_PLUGIN
 noinst_LTLIBRARIES += libjvpp_snat.la
 libjvpp_snat_la_SOURCES = jvpp-snat/jvpp_snat.c
 libjvpp_snat_la_CPPFLAGS = -Ijvpp-snat
+libjvpp_snat_la_LIBADD = $(JVPP_LIBS)
+libjvpp_snat_la_DEPENDENCIES = libjvpp_common.la
 
 BUILT_SOURCES += jvpp-snat/io_fd_vpp_jvpp_snat_JVppSnatImpl.h
-
 JAR_FILES += jvpp-snat-$(PACKAGE_VERSION).jar
 CLEANDIRS += jvpp-snat/target
 
@@ -140,6 +154,8 @@ endif
 if ENABLE_IOAM_PLUGIN
 noinst_LTLIBRARIES += libjvpp_ioamtrace.la
 libjvpp_ioamtrace_la_SOURCES = jvpp-ioamtrace/jvpp_ioam_trace.c
+libjvpp_ioamtrace_la_LIBADD = $(JVPP_LIBS)
+libjvpp_ioamtrace_la_DEPENDENCIES = libjvpp_common.la
 
 BUILT_SOURCES += jvpp-ioamtrace/io_fd_vpp_jvpp_ioamtrace_JVppIoamtraceImpl.h
 JAR_FILES += jvpp-ioamtrace-$(PACKAGE_VERSION).jar
@@ -155,6 +171,8 @@ jvpp-ioamtrace/io_fd_vpp_jvpp_ioamtrace_JVppIoamtraceImpl.h: $(jvpp_registry_ok)
 #
 noinst_LTLIBRARIES += libjvpp_ioampot.la
 libjvpp_ioampot_la_SOURCES = jvpp-ioampot/jvpp_ioam_pot.c
+libjvpp_ioampot_la_LIBADD = $(JVPP_LIBS)
+libjvpp_ioampot_la_DEPENDENCIES = libjvpp_common.la
 
 BUILT_SOURCES += jvpp-ioampot/io_fd_vpp_jvpp_ioampot_JVppIoampotImpl.h
 JAR_FILES += jvpp-ioampot-$(PACKAGE_VERSION).jar
@@ -170,6 +188,8 @@ jvpp-ioampot/io_fd_vpp_jvpp_ioampot_JVppIoampotImpl.h: $(jvpp_registry_ok) $(jvp
 #
 noinst_LTLIBRARIES += libjvpp_ioamexport.la
 libjvpp_ioamexport_la_SOURCES = jvpp-ioamexport/jvpp_ioam_export.c
+libjvpp_ioamexport_la_LIBADD = $(JVPP_LIBS)
+libjvpp_ioamexport_la_DEPENDENCIES = libjvpp_common.la
 
 BUILT_SOURCES += jvpp-ioamexport/io_fd_vpp_jvpp_ioamexport_JVppIoamexportImpl.h
 JAR_FILES += jvpp-ioamexport-$(PACKAGE_VERSION).jar

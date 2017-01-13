@@ -11,10 +11,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-libvnet_la_SOURCES =
-libvnetplugin_la_SOURCES =
+lib_LTLIBRARIES += libvnet.la
 
-libvnet_la_LIBAD = libvppinfra.la libvlib.la libsvm.la
+libvnet_la_SOURCES =
+
+libvnet_la_LIBADD = libvppinfra.la libsvm.la
+libvnet_la_DEPENDENCIES = libvppinfra.la libvlib.la libsvmdb.la libsvm.la libvlibapi.la libvlibmemory.la libvlibmemoryclient.la
+
+if WITH_IPV6SR
+libvnet_la_LIBADD += -lcrypto
+endif
 
 ########################################
 # Generic stuff
@@ -509,15 +515,18 @@ libvnet_la_SOURCES +=				\
  vnet/mpls/node.c				\
  vnet/mpls/interface.c			        \
  vnet/mpls/mpls_tunnel.c		        \
- vnet/mpls/pg.c
+ vnet/mpls/pg.c			        \
+ vnet/mpls/mpls_api.c
 
 nobase_include_HEADERS +=			\
  vnet/mpls/mpls.h				\
  vnet/mpls/mpls_types.h				\
  vnet/mpls/mpls_tunnel.h			\
  vnet/mpls/packet.h				\
- vnet/mpls/error.def
+ vnet/mpls/error.def			\
+ vnet/mpls/mpls.api.h
 
+API_FILES += vnet/mpls/mpls.api
 
 ########################################
 # Tunnel protocol: vxlan-gpe
@@ -677,13 +686,17 @@ nobase_include_HEADERS +=			\
 if WITH_IPV6SR
 libvnet_la_SOURCES +=				\
  vnet/sr/sr.c					\
- vnet/sr/sr_replicate.c
+ vnet/sr/sr_replicate.c				\
+ vnet/sr/sr_api.c
 endif
 
 nobase_include_HEADERS +=			\
  vnet/sr/sr_packet.h				\
  vnet/sr/sr_error.def				\
- vnet/sr/sr.h
+ vnet/sr/sr.h						\
+ vnet/sr/sr.api.h
+
+API_FILES += vnet/sr/sr.api
 
 ########################################
 # DHCPv6 proxy
@@ -770,10 +783,14 @@ libvnet_la_SOURCES +=				\
   vnet/devices/dpdk/init.c			\
   vnet/devices/dpdk/node.c			\
   vnet/devices/dpdk/hqos.c			\
-  vnet/devices/dpdk/cli.c
+  vnet/devices/dpdk/cli.c			\
+  vnet/devices/dpdk/dpdk_api.c
 
 nobase_include_HEADERS +=			\
-  vnet/devices/dpdk/dpdk.h
+  vnet/devices/dpdk/dpdk.h			\
+  vnet/devices/dpdk/dpdk.api.h
+
+API_FILES += vnet/devices/dpdk/dpdk.api
 else
 libvnet_la_SOURCES +=				\
   vnet/devices/nic/ixge.c                       \
@@ -989,14 +1006,8 @@ nobase_include_HEADERS +=			\
 # Plugin client library
 ########################################
 
-libvnetplugin_la_SOURCES +=                    \
-  vnet/plugin/p1.c
-
 nobase_include_HEADERS +=                      \
   vnet/plugin/plugin.h
-
-libvnetdir = ${libdir}
-libvnet_LTLIBRARIES = libvnet.la libvnetplugin.la
 
 pcap2pg_SOURCES = 				\
   vnet/unix/pcap2pg.c				\

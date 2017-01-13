@@ -16,6 +16,7 @@ from vpp_papi_provider import VppPapiProvider
 from scapy.packet import Raw
 from logging import FileHandler, DEBUG
 from log import *
+from vpp_object import VppObjectRegistry
 
 """
   Test framework module.
@@ -116,7 +117,8 @@ class VppTestCase(unittest.TestCase):
         debug_cli = ""
         if cls.step or cls.debug_gdb or cls.debug_gdbserver:
             debug_cli = "cli-listen localhost:5002"
-        cls.vpp_cmdline = [cls.vpp_bin, "unix", "{", "nodaemon", debug_cli, "}",
+        cls.vpp_cmdline = [cls.vpp_bin,
+                           "unix", "{", "nodaemon", debug_cli, "}",
                            "api-segment", "{", "prefix", cls.shm_prefix, "}"]
         if cls.plugin_path is not None:
             cls.vpp_cmdline.extend(["plugin_path", cls.plugin_path])
@@ -194,6 +196,7 @@ class VppTestCase(unittest.TestCase):
         cls._zombie_captures = []
         cls.verbose = 0
         cls.vpp_dead = False
+        cls.registry = VppObjectRegistry()
         print(double_line_delim)
         print(colorize(getdoc(cls).splitlines()[0], YELLOW))
         print(double_line_delim)
@@ -244,8 +247,8 @@ class VppTestCase(unittest.TestCase):
                 print(double_line_delim)
                 print("VPP or GDB server is still running")
                 print(single_line_delim)
-                raw_input("When done debugging, press ENTER to kill the process"
-                          " and finish running the testcase...")
+                raw_input("When done debugging, press ENTER to kill the "
+                          "process and finish running the testcase...")
 
         if hasattr(cls, 'vpp'):
             if hasattr(cls, 'vapi'):
@@ -290,6 +293,7 @@ class VppTestCase(unittest.TestCase):
             self.logger.info(self.vapi.ppcli("show hardware"))
             self.logger.info(self.vapi.ppcli("show error"))
             self.logger.info(self.vapi.ppcli("show run"))
+            self.registry.remove_vpp_config(self.logger)
 
     def setUp(self):
         """ Clear trace before running each test"""
@@ -355,9 +359,10 @@ class VppTestCase(unittest.TestCase):
     @classmethod
     def create_pg_interfaces(cls, interfaces):
         """
-        Create packet-generator interfaces
+        Create packet-generator interfaces.
 
-        :param interfaces: iterable indexes of the interfaces
+        :param interfaces: iterable indexes of the interfaces.
+        :returns: List of created interfaces.
 
         """
         result = []
@@ -371,10 +376,10 @@ class VppTestCase(unittest.TestCase):
     @classmethod
     def create_loopback_interfaces(cls, interfaces):
         """
-        Create loopback interfaces
+        Create loopback interfaces.
 
-        :param interfaces: iterable indexes of the interfaces
-
+        :param interfaces: iterable indexes of the interfaces.
+        :returns: List of created interfaces.
         """
         result = []
         for i in interfaces:
@@ -559,10 +564,10 @@ class VppTestResult(unittest.TestResult):
 
     def __init__(self, stream, descriptions, verbosity):
         """
-        :param stream File descriptor to store where to report test results. Set
-            to the standard error stream by default.
-        :param descriptions Boolean variable to store information if to use test
-            case descriptions.
+        :param stream File descriptor to store where to report test results.
+            Set to the standard error stream by default.
+        :param descriptions Boolean variable to store information if to use
+            test case descriptions.
         :param verbosity Integer variable to store required verbosity level.
         """
         unittest.TestResult.__init__(self, stream, descriptions, verbosity)
@@ -660,12 +665,12 @@ class VppTestResult(unittest.TestResult):
         unittest.TestResult.stopTest(self, test)
         if self.verbosity > 0:
             self.stream.writeln(single_line_delim)
-            self.stream.writeln("%-60s%s" %
-                                (self.getDescription(test), self.result_string))
+            self.stream.writeln("%-60s%s" % (self.getDescription(test),
+                                             self.result_string))
             self.stream.writeln(single_line_delim)
         else:
-            self.stream.writeln("%-60s%s" %
-                                (self.getDescription(test), self.result_string))
+            self.stream.writeln("%-60s%s" % (self.getDescription(test),
+                                             self.result_string))
 
     def printErrors(self):
         """
