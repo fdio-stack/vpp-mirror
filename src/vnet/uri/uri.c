@@ -1432,10 +1432,10 @@ vnet_bind_uri (vnet_bind_uri_args_t *a)
 {
   uri_main_t *um = &uri_main;
   vl_api_registration_t *regp;
-  u8 * segment_name;
+  u8 * segment_name = 0;
   u8 * server_name;
   stream_server_main_t *ssm = &stream_server_main;
-  stream_server_t *ss;
+  stream_server_t *ss = 0;
   u16 port_number_host_byte_order;
   stream_session_type_t sst = SESSION_TYPE_N_TYPES;
   unformat_input_t _input, *input= &_input;
