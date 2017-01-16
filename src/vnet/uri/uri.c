@@ -595,6 +595,58 @@ stream_session_no_space (transport_connection_t *tc, u32 thread_index, u16 data_
 }
 
 /**
+ * Notify session peer that new data has been enqueued.
+ *
+ * @param s Stream session for which the event is to be generated.
+ * @param block Flag to indicate if call should block if event queue is full.
+ *
+ * @return 0 on succes or negative number if failed to send notification.
+ */
+int
+stream_session_enqueue_notify (stream_session_t *s0, u8 block)
+{
+  stream_server_main_t *ssm = vnet_get_stream_server_main ();
+  stream_server_t *ss0;
+  fifo_event_t evt;
+  unix_shared_memory_queue_t * q;
+  static u32 serial_number;
+
+  /* Get session's server */
+  ss0 = pool_elt_at_index (ssm->servers, s0->server_index);
+
+  /* Fabricate event */
+  evt.fifo = s0->server_rx_fifo;
+  evt.event_type = FIFO_EVENT_SERVER_RX;
+  evt.event_id = serial_number++;
+  evt.enqueue_length = svm_fifo_max_dequeue (s0->server_rx_fifo);
+
+  /* Add event to server's event queue */
+  q = ss0->event_queue;
+
+  /* Based on request block (or not) for lack of space */
+  if (block || PREDICT_TRUE (q->cursize < q->maxsize))
+    unix_shared_memory_queue_add (ss0->event_queue, (u8 *)&evt,
+                                  0 /* do wait for mutex */);
+  else
+    return -1;
+
+  if (1)
+    {
+      ELOG_TYPE_DECLARE(e) =
+        {
+          .format = "evt-enqueue: id %d length %d",
+          .format_args = "i4i4",
+        };
+      struct { u32 data[2];} * ed;
+      ed = ELOG_DATA (&vlib_global_main.elog_main, e);
+      ed->data[0] = evt.event_id;
+      ed->data[1] = evt.enqueue_length;
+    }
+
+  return 0;
+}
+
+/**
  * Flushes queue of sessions that are to be notified of new data
  * enqueued events.
  *
@@ -669,20 +721,22 @@ stream_server_add_segment (stream_server_main_t *ssm, stream_server_t *ss)
   u32 add_segment_size;
   int rv;
 
-  memset (ca, 0, sizeof (*ca));
-  segment_name = format (0, "%d-%d%c", getpid(), 
+  memset(ca, 0, sizeof(*ca));
+  segment_name = format (0, "%d-%d%c", getpid (),
                          ssm->unique_segment_name_counter++, 0);
-  add_segment_size = ss->add_segment_size ? ss->add_segment_size : 128<<10;
+  add_segment_size = ss->add_segment_size ? ss->add_segment_size : 128 << 10;
 
   if ((rv = stream_server_add_segment_i (ssm, ss, add_segment_size,
                                          segment_name)))
     return rv;
 
-  /* Send an API message to the external server, to map new segment */
-  ASSERT(ss->add_segment_callback);
-  if (ss->add_segment_callback (ss, ca->segment_name, ca->segment_size))
-    return VNET_API_ERROR_URI_FIFO_CREATE_FAILED;
-
+  if (ss->mode == STREAM_SERVER_ACCEPT)
+    {
+      /* Send an API message to the external server, to map new segment */
+      ASSERT(ss->add_segment_callback);
+      if (ss->add_segment_callback (ss, ca->segment_name, ca->segment_size))
+        return VNET_API_ERROR_URI_FIFO_CREATE_FAILED;
+    }
   return 0;
 }
 
@@ -867,7 +921,7 @@ stream_server_allocate_session_fifos (stream_server_main_t *ssm,
   int i, rv;
 
   /* Check the API queue */
-  if (stream_server_api_queue_is_full (ss))
+  if (ss->mode == STREAM_SERVER_ACCEPT && stream_server_api_queue_is_full (ss))
     return URI_INPUT_ERROR_API_QUEUE_FULL;
 
   /* Allocate svm fifos */
@@ -956,7 +1010,8 @@ int
 connect_server_add_segment_cb (stream_server_t *ss, char * segment_name,
                                u32 segment_size)
 {
-  /* Does exactly nothing */
+  /* Does exactly nothing, but die */
+  ASSERT (0);
   return 0;
 }
 
@@ -964,65 +1019,17 @@ void
 connect_stream_server_init (stream_server_main_t *ssm, u8 session_type)
 {
   stream_server_t *ss;
+  u32 connect_fifo_size = 8192; /* Config?*/
 
   ss = stream_server_new (ssm);
+  ss->mode = STREAM_SERVER_CONNECT;
   ss->session_connected_callback = session_connected_callback;
   ss->session_type = session_type;
   ss->add_segment_callback = connect_server_add_segment_cb;
   stream_server_add_segment (ssm, ss);
   ssm->connect_stream_server[session_type] = ss;
-}
-
-/**
- * Notify session peer that new data has been enqueued.
- *
- * @param s Stream session for which the event is to be generated.
- * @param block Flag to indicate if call should block if event queue is full.
- *
- * @return 0 on succes or negative number if failed to send notification.
- */
-int
-stream_session_enqueue_notify (stream_session_t *s0, u8 block)
-{
-  stream_server_main_t *ssm = vnet_get_stream_server_main ();
-  stream_server_t *ss0;
-  fifo_event_t evt;
-  unix_shared_memory_queue_t * q;
-  static u32 serial_number;
-
-  /* Get session's server */
-  ss0 = pool_elt_at_index (ssm->servers, s0->server_index);
-
-  /* Fabricate event */
-  evt.fifo = s0->server_rx_fifo;
-  evt.event_type = FIFO_EVENT_SERVER_RX;
-  evt.event_id = serial_number++;
-  evt.enqueue_length = svm_fifo_max_dequeue (s0->server_rx_fifo);
-
-  /* Add event to server's event queue */
-  q = ss0->event_queue;
-
-  /* Based on request block (or not) for lack of space */
-  if (block || PREDICT_TRUE (q->cursize < q->maxsize))
-    unix_shared_memory_queue_add (ss0->event_queue, (u8 *)&evt,
-                                  0 /* do wait for mutex */);
-  else
-    return -1;
-
-  if (1)
-    {
-      ELOG_TYPE_DECLARE(e) =
-        {
-          .format = "evt-enqueue: id %d length %d",
-          .format_args = "i4i4",
-        };
-      struct { u32 data[2];} * ed;
-      ed = ELOG_DATA (&vlib_global_main.elog_main, e);
-      ed->data[0] = evt.event_id;
-      ed->data[1] = evt.enqueue_length;
-    }
-
-  return 0;
+  ss->rx_fifo_size = connect_fifo_size;
+  ss->tx_fifo_size = connect_fifo_size;
 }
 
 void
@@ -1480,6 +1487,7 @@ vnet_bind_uri (vnet_bind_uri_args_t *a)
 
   /* Get a new stream server */
   ss = stream_server_new (ssm);
+  ss->mode = STREAM_SERVER_ACCEPT;
 
   /* Add first segment */
   if ((rv = stream_server_add_first_segment (ssm, ss, a->segment_size,
@@ -1504,7 +1512,6 @@ vnet_bind_uri (vnet_bind_uri_args_t *a)
   ss->tx_fifo_size = a->options[URI_OPTIONS_TX_FIFO_SIZE];
   ss->server_index = ss - ssm->servers;
   ss->session_type = sst;
-
   /* Setup listen path down to transport */
   stream_server_listen (ssm, ss, &ip46_address, port_number_host_byte_order);
 
@@ -1656,9 +1663,8 @@ vnet_connect_uri (char *uri, u32 api_client_index, u64 *options,
   if (ssm->connect_stream_server[sst] == 0)
     connect_stream_server_init(ssm, sst);
 
-  /* notify transport */
+  /* Notify transport */
   stream_session_open (ssm, sst, &ip46_address, port, api_client_index);
-
 
   /* TODO */
   return VNET_API_ERROR_INVALID_VALUE;
@@ -1900,6 +1906,7 @@ stream_server_init (vlib_main_t * vm)
   vec_validate (ssm->session_indices_to_enqueue_by_thread, num_threads-1);
   vec_validate (ssm->tx_buffers, num_threads - 1);
   vec_validate (ssm->fifo_events, num_threads - 1);
+  vec_validate (ssm->evts_partially_read, num_threads - 1);
   vec_validate (ssm->current_enqueue_epoch, num_threads - 1);
   vec_validate (ssm->vpp_event_queues, num_threads - 1);
   vec_validate (ssm->copy_buffers, num_threads - 1);

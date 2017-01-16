@@ -184,12 +184,12 @@ redirect_connect_uri_callback (u32 server_api_client_index, void * mp_arg)
 }
 
 int
-send_connect_reply_callback (u32 api_client_index, stream_session_t *s,
-                             u8 segment_name_length, char *segment_name,
-                             u32 segment_size,
-                             unix_shared_memory_queue_t * vpp_event_queue,
-                             unix_shared_memory_queue_t * client_event_queue,
-                             u8 code)
+session_connected_callback (u32 api_client_index, stream_session_t *s,
+                            u8 segment_name_length, char *segment_name,
+                            u32 segment_size,
+                            unix_shared_memory_queue_t * vpp_event_queue,
+                            unix_shared_memory_queue_t * client_event_queue,
+                            u8 code)
 {
   vl_api_connect_uri_reply_t * mp;
   unix_shared_memory_queue_t * q;

@@ -112,6 +112,7 @@ typedef struct
   /* convenience */
   svm_fifo_segment_main_t * segment_main;
 
+  u8 *connect_test_data;
 } uri_tcp_test_main_t;
 
 uri_tcp_test_main_t uri_tcp_test_main;
@@ -255,24 +256,145 @@ vl_api_disconnect_session_t_handler (vl_api_disconnect_session_t * mp)
   vl_msg_api_send_shmem (utm->vl_input_queue, (u8 *)&rmp);
 }
 
+void
+handle_fifo_event_connect_rx (uri_tcp_test_main_t *utm, fifo_event_t * e)
+{
+  svm_fifo_t * rx_fifo;
+  int n_read, bytes;
+
+  rx_fifo = e->fifo;
+
+  bytes = e->enqueue_length;
+  do
+    {
+      n_read = svm_fifo_dequeue_nowait2 (rx_fifo, 0, vec_len(utm->rx_buf),
+                                         utm->rx_buf);
+      if (n_read > 0)
+        bytes -= n_read;
+    }
+  while (n_read < 0 || bytes > 0);
+
+  //      bytes_to_read = svm_fifo_max_dequeue (rx_fifo);
+  //
+  //      bytes_to_read = vec_len(utm->rx_buf) > bytes_to_read ?
+  //        bytes_to_read : vec_len(utm->rx_buf);
+  //
+  //      buffer_offset = 0;
+  //      while (bytes_to_read > 0)
+  //        {
+  //          rv = svm_fifo_dequeue_nowait2 (rx_fifo, mypid,
+  //                                         bytes_to_read,
+  //                                         utm->rx_buf + buffer_offset);
+  //          if (rv > 0)
+  //            {
+  //              bytes_to_read -= rv;
+  //              buffer_offset += rv;
+  //              bytes_received += rv;
+  //            }
+  //        }
+
+
+  //  while (bytes_received < bytes_sent)
+  //    {
+  //      rv = svm_fifo_dequeue_nowait2 (rx_fifo, mypid,
+  //                                     vec_len (utm->rx_buf),
+  //                                     utm->rx_buf);
+  //      if (rv > 0)
+  //        {
+  //#if CLIB_DEBUG > 0
+  //          int j;
+  //          for (j = 0; j < rv; j++)
+  //            {
+  //              if (utm->rx_buf[j] != ((bytes_received + j) & 0xff))
+  //                {
+  //                  clib_warning ("error at byte %lld, 0x%x not 0x%x",
+  //                                bytes_received + j,
+  //                                utm->rx_buf[j],
+  //                                ((bytes_received + j )&0xff));
+  //                }
+  //            }
+  //#endif
+  //          bytes_received += (u64) rv;
+  //        }
+  //    }
+}
+
+void
+handle_connect_event_queue (uri_tcp_test_main_t * utm)
+{
+  fifo_event_t _e, *e = &_e;;
+
+  unix_shared_memory_queue_sub (utm->our_event_queue, (u8 *) e, 0 /* nowait */);
+  switch (e->event_type)
+    {
+    case FIFO_EVENT_SERVER_RX:
+      handle_fifo_event_connect_rx (utm, e);
+      break;
+
+    case FIFO_EVENT_SERVER_EXIT:
+      return;
+
+    default:
+      clib_warning("unknown event type %d", e->event_type);
+      break;
+    }
+}
+
+void
+uri_tcp_connect_send (uri_tcp_test_main_t *utm)
+{
+  u8 *test_data = utm->connect_test_data;
+  u64 bytes_sent = 0;
+  int rv;
+  int mypid = getpid();
+  session_t * session;
+  svm_fifo_t *tx_fifo;
+  int buffer_offset, bytes_to_send = 0;
+  fifo_event_t evt;
+  static int serial_number = 0;
+  int i;
+  u32 max_chunk = 64 << 10, write;
+
+  session = pool_elt_at_index (utm->sessions, utm->connected_session_index);
+  tx_fifo = session->server_tx_fifo;
+
+  vec_validate (utm->rx_buf, vec_len (test_data) - 1);
+
+  for (i = 0; i < 10; i++)
+    {
+      bytes_to_send = vec_len (test_data);
+      buffer_offset = 0;
+      while (bytes_to_send > 0)
+        {
+          write = bytes_to_send > max_chunk ? max_chunk : bytes_to_send;
+          rv = svm_fifo_enqueue_nowait2 (tx_fifo, mypid, write,
+                                         test_data + buffer_offset);
+
+          if (rv > 0)
+            {
+              bytes_to_send -= rv;
+              buffer_offset += rv;
+              bytes_sent += rv;
+
+              /* Fabricate TX event, send to vpp */
+              evt.fifo = tx_fifo;
+              evt.event_type = FIFO_EVENT_SERVER_TX;
+              /* $$$$ for event logging */
+              evt.enqueue_length = rv;
+              evt.event_id = serial_number++;
+
+              unix_shared_memory_queue_add (utm->vpp_event_queue, (u8 *) &evt,
+                                            0 /* do wait for mutex */);
+            }
+        }
+    }
+}
+
 static void
 uri_tcp_client_test (uri_tcp_test_main_t * utm)
 {
   vl_api_connect_uri_t * cmp;
   int i;
-  u8 * test_data = 0;
-  u64 bytes_received = 0, bytes_sent = 0;
-  i32 bytes_to_read;
-  int rv;
-  int mypid = getpid();
-  f64 before, after, delta, bytes_per_second;
-  session_t * session;
-  svm_fifo_t * rx_fifo, * tx_fifo;
-  int buffer_offset, bytes_to_send = 0;
-
-  vec_validate (test_data, 64 * 1024 - 1);
-  for (i = 0; i < vec_len (test_data); i++)
-    test_data[i] = i & 0xff;
 
   cmp = vl_msg_api_alloc (sizeof (*cmp));
   memset (cmp, 0, sizeof (*cmp));
@@ -289,88 +411,16 @@ uri_tcp_client_test (uri_tcp_test_main_t * utm)
       return;
     }
 
-  session = pool_elt_at_index (utm->sessions, utm->connected_session_index);
-  rx_fifo = session->server_rx_fifo;
-  tx_fifo = session->server_tx_fifo;
+  /* Init test data */
+  vec_validate (utm->connect_test_data, 64 * 1024 - 1);
+  for (i = 0; i < vec_len (utm->connect_test_data); i++)
+    utm->connect_test_data[i] = i & 0xff;
 
-  before = clib_time_now (&utm->clib_time);
+  /* Start reader thread */
+  /* handle_connect_event_queue (utm); */
 
-  vec_validate (utm->rx_buf, vec_len (test_data) - 1);
-
-  for (i = 0; i < NITER; i++)
-    {
-      bytes_to_send = vec_len (test_data);
-      buffer_offset = 0;
-      while (bytes_to_send > 0)
-        {
-          rv = svm_fifo_enqueue_nowait2 (tx_fifo, mypid,
-                                         bytes_to_send,
-                                         test_data + buffer_offset);
-
-          if (rv > 0)
-            {
-              bytes_to_send -= rv;
-              buffer_offset += rv;
-              bytes_sent += rv;
-            }
-        }
-
-      bytes_to_read = svm_fifo_max_dequeue (rx_fifo);
-
-      bytes_to_read = vec_len(utm->rx_buf) > bytes_to_read ?
-        bytes_to_read : vec_len(utm->rx_buf);
-
-      buffer_offset = 0;
-      while (bytes_to_read > 0)
-        {
-          rv = svm_fifo_dequeue_nowait2 (rx_fifo, mypid,
-                                         bytes_to_read,
-                                         utm->rx_buf + buffer_offset);
-          if (rv > 0)
-            {
-              bytes_to_read -= rv;
-              buffer_offset += rv;
-              bytes_received += rv;
-            }
-        }
-    }
-  while (bytes_received < bytes_sent)
-    {
-      rv = svm_fifo_dequeue_nowait2 (rx_fifo, mypid,
-                                     vec_len (utm->rx_buf),
-                                     utm->rx_buf);
-      if (rv > 0)
-        {
-#if CLIB_DEBUG > 0
-          int j;
-          for (j = 0; j < rv; j++)
-            {
-              if (utm->rx_buf[j] != ((bytes_received + j) & 0xff))
-                {
-                  clib_warning ("error at byte %lld, 0x%x not 0x%x",
-                                bytes_received + j,
-                                utm->rx_buf[j],
-                                ((bytes_received + j )&0xff));
-                }
-            }
-#endif
-          bytes_received += (u64) rv;
-        }
-    }
-
-  after = clib_time_now (&utm->clib_time);
-  delta = after - before;
-  bytes_per_second = 0.0;
-
-  if (delta > 0.0)
-    bytes_per_second = (f64) bytes_received / delta;
-
-  fformat (stdout, "Done: %lld recv bytes in %.2f seconds, %.2f bytes/sec...\n\n",
-           bytes_received, delta, bytes_per_second);
-  fformat (stdout, "Done: %lld sent bytes in %.2f seconds, %.2f bytes/sec...\n\n",
-           bytes_sent, delta, bytes_per_second);
-  fformat (stdout, "client -> server -> client round trip: %.2f Gbit/sec \n\n",
-           (bytes_per_second*8.0)/1e9);
+  /* Start send */
+  uri_tcp_connect_send (utm);
 }
 
 void
@@ -487,7 +537,7 @@ vl_api_connect_uri_reply_t_handler (vl_api_connect_uri_reply_t * mp)
 {
   uri_tcp_test_main_t *utm = &uri_tcp_test_main;
   svm_fifo_segment_create_args_t _a, *a = &_a;
-  session_t * session;
+  session_t *session;
   u32 session_index;
   svm_fifo_t *rx_fifo, *tx_fifo;
   int rv;

@@ -398,6 +398,14 @@ tcp_session_enqueue_data (tcp_connection_t *tc, vlib_buffer_t *b, u16 data_len)
   stream_session_t *s0;
   int written;
 
+  /* Pure ACK. Update rcv_nxt and be done. */
+  if (PREDICT_FALSE (data_len == 0))
+    {
+      tc->rcv_nxt = vnet_buffer (b)->tcp.seq_end;
+      return TCP_ERROR_PURE_ACK;
+    }
+
+
   s0 = stream_session_get (tc->c_s_index, tc->c_thread_index);
 
   written = stream_session_enqueue_data (s0, vlib_buffer_get_current (b),
@@ -516,13 +524,6 @@ tcp_segment_rcv (tcp_main_t *tm, tcp_connection_t *tc, vlib_buffer_t *b,
       goto done;
     }
 
-  /* Pure ACK. Update rcv_nxt and be done. */
-  if (PREDICT_FALSE (n_data_bytes == 0))
-    {
-      tc->rcv_nxt = vnet_buffer (b)->tcp.seq_end;
-      goto done;
-    }
-
   /* In order data, enqueue. Fifo figures out by itself if any out-of-order
    * segments can be enqueued after fifo tail offset changes. */
   error = tcp_session_enqueue_data (tc, b, n_data_bytes);
@@ -542,8 +543,8 @@ tcp_segment_rcv (tcp_main_t *tm, tcp_connection_t *tc, vlib_buffer_t *b,
   else
     {
       /* Check if a packet has already been enqueued to output for burst.
-       * If yes, then drop this one, otherwise, let it pass through for
-       * delivery */
+       * If yes, then drop this one, otherwise, let it pass through to
+       * output */
       if ((tc->flags & TCP_CONN_BURSTACK) == 0)
         {
           *next0 = tcp_next_output (tc->c_is_ip4);
@@ -753,6 +754,16 @@ VLIB_NODE_FUNCTION_MULTIARCH (tcp6_established_node, tcp6_established)
 vlib_node_registration_t tcp4_syn_sent_node;
 vlib_node_registration_t tcp6_syn_sent_node;
 
+static void
+tcp_timers_init (tcp_connection_t *tc)
+{
+  int i;
+  for (i = 0; i < TCP_N_TIMERS; i++)
+    {
+      tc->timers[i] = TCP_TIMER_HANDLE_INVALID;
+    }
+}
+
 always_inline uword
 tcp46_syn_sent_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
                           vlib_frame_t * from_frame, int is_ip4)
@@ -783,7 +794,7 @@ tcp46_syn_sent_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
           ip4_header_t * ip40;
           ip6_header_t * ip60;
           u32 n_advance_bytes0, n_data_bytes0;
-          tcp_connection_t *new_tc;
+          tcp_connection_t *new_tc0;
           u32 next0 = TCP_SYN_SENT_NEXT_DROP, error0 = TCP_ERROR_ENQUEUED;
 
           bi0 = from[0];
@@ -885,56 +896,67 @@ tcp46_syn_sent_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
 
           /* Valid SYN or SYN-ACK. Move connection from half-open pool to
            * current thread pool. */
-          pool_get(tm->connections[my_thread_index], new_tc);
-          clib_memcpy (new_tc, tc0, sizeof(*new_tc));
+          pool_get(tm->connections[my_thread_index], new_tc0);
+          clib_memcpy (new_tc0, tc0, sizeof(*new_tc0));
 
-          new_tc->c_thread_index = my_thread_index;
+          new_tc0->c_thread_index = my_thread_index;
 
           /* Stop connection establishment timer and cleanup syn_sent connection */
-          tcp_timer_stop (&tm->timer_wheel, new_tc->timers[TCP_TIMER_KEEP]);
+          tcp_timer_stop (&tm->timer_wheel, new_tc0->timers[TCP_TIMER_KEEP]);
 
           /* XXX lock */
           pool_put (tm->half_open_connections, tc0);
 
-          new_tc->rcv_nxt = seq0 + 1;
-          new_tc->irs = seq0;
-
           /* Parse options */
-          tcp_options_parse (tcp0, &new_tc->opt);
+          tcp_options_parse (tcp0, &new_tc0->opt);
+
+          /* rcv_nxt is incremented when data segment is read */
+          new_tc0->rcv_nxt = seq0;
+          new_tc0->irs = seq0;
+
+          if (new_tc0->opt.flags & TCP_OPTS_FLAG_WSCALE)
+            new_tc0->snd_wscale = new_tc0->opt.wscale;
+
+          new_tc0->snd_wnd = clib_net_to_host_u32 (tcp0->window)
+              << new_tc0->opt.wscale;
+
+          new_tc0->snd_wl1 = seq0;
+
+          tcp_timers_init (new_tc0);
 
           /* SYN-ACK: See if we can switch to ESTABLISHED state */
           if (tcp_ack (tcp0))
             {
-              new_tc->snd_una = ack0;
+              new_tc0->snd_una = ack0;
+
+              /* Our SYN is ACKed: we have iss < ack = snd_una */
 
               /* TODO XXX dequeue acknowledged segments */
 
-              /* Our SYN has been acknowledged */
-              if (new_tc->snd_una > new_tc->iss)
-                {
-                  new_tc->state = TCP_CONNECTION_STATE_ESTABLISHED;
+              new_tc0->state = TCP_CONNECTION_STATE_ESTABLISHED;
 
-                  /* Notify app that we have connection */
-                  stream_session_connect_notify (&new_tc->connection, sst, 0);
+              /* Notify app that we have connection */
+              stream_session_connect_notify (&new_tc0->connection, sst, 0);
 
-                  tcp_make_ack (new_tc, b0);
-                  next0 = tcp_next_output (is_ip4);
-                }
+              /* Make sure after data segment processing ACK is sent */
+              new_tc0->flags |= TCP_CONN_SNDACK;
             }
           /* SYN: Simultaneous open. Change state to SYN-RCVD and send SYN-ACK */
           else
             {
-              new_tc->state = TCP_CONNECTION_STATE_SYN_RCVD;
+              new_tc0->state = TCP_CONNECTION_STATE_SYN_RCVD;
 
               /* Notify app that we have connection XXX */
-              stream_session_connect_notify (&new_tc->connection, sst, 0);
+              stream_session_connect_notify (&new_tc0->connection, sst, 0);
 
-              tcp_make_synack (new_tc, b0);
+              tcp_make_synack (new_tc0, b0);
               next0 = tcp_next_output (is_ip4);
+
+              goto drop;
             }
 
           /* Read data, if any */
-          error0 = tcp_segment_rcv (tm, tc0, b0, n_data_bytes0, &next0);
+          error0 = tcp_segment_rcv (tm, new_tc0, b0, n_data_bytes0, &next0);
 
          drop:
 
@@ -1323,16 +1345,6 @@ VLIB_NODE_FUNCTION_MULTIARCH (tcp6_rcv_process_node, tcp6_rcv_process)
 vlib_node_registration_t tcp4_listen_node;
 vlib_node_registration_t tcp6_listen_node;
 
-static void
-tcp_timers_init (tcp_connection_t *tc)
-{
-  int i;
-  for (i = 0; i < TCP_N_TIMERS; i++)
-    {
-      tc->timers[i] = TCP_TIMER_HANDLE_INVALID;
-    }
-}
-
 /**
  * LISTEN state processing as per RFC 793 p. 65
  */
@@ -1564,9 +1576,9 @@ tcp_fsm_states[] = {
 };
 
 u8 *
-format_tcp_state (u8 * s, va_list * args)
+format_tcp_state (u8 *s, va_list *args)
 {
-  tcp_fsm_states_t *state = va_arg (args, tcp_fsm_states_t *);
+  tcp_fsm_states_t *state = va_arg (*args, tcp_fsm_states_t *);
 
   if (state[0] < TCP_N_CONNECTION_STATE)
     s = format (s, "%s", tcp_fsm_states[state[0]]);

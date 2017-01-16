@@ -107,12 +107,12 @@ tcp_initial_window_to_advertise (tcp_connection_t *tc)
  * Compute and return window to advertise, scaled as per RFC1323
  */
 u32
-tcp_window_to_advertise (tcp_connection_t *tc, u32 my_thread_index)
+tcp_window_to_advertise (tcp_connection_t *tc)
 {
   stream_session_t *s;
   u32 available_space, wnd, scaled_space;
 
-  s = stream_session_get (tc->c_s_index, my_thread_index);
+  s = stream_session_get (tc->c_s_index, tc->c_thread_index);
 
   available_space = svm_fifo_max_enqueue (s->server_rx_fifo);
   scaled_space = available_space >> tc->rcv_wscale;
@@ -227,7 +227,33 @@ tcp_options_write (u8 *data, tcp_options_t * opts)
 }
 
 always_inline int
-tcp_make_syn_or_synack_options (tcp_connection_t *tc, tcp_options_t *opts)
+tcp_make_syn_options (tcp_options_t *opts, u32 initial_wnd)
+{
+  u8 len = 0;
+
+  opts->flags |= TCP_OPTS_FLAG_MSS;
+  opts->mss = dummy_mtu; /*XXX discover that */
+  len += TCP_OPTION_LEN_MSS;
+
+  opts->flags |= TCP_OPTS_FLAG_WSCALE;
+  opts->wscale = tcp_window_compute_scale (initial_wnd);
+  len += TCP_OPTION_LEN_WINDOW_SCALE;
+
+  opts->flags |= TCP_OPTS_FLAG_TSTAMP;
+  opts->tsval = tcp_time_now ();
+  opts->tsecr = 0;
+  len += TCP_OPTION_LEN_TIMESTAMP;
+
+  opts->flags |= TCP_OPTS_FLAG_SACK_PERMITTED;
+  len += TCP_OPTION_LEN_SACK_PERMITTED;
+
+  /* Align to needed boundary */
+  len += TCP_OPTS_ALIGN - len % TCP_OPTS_ALIGN;
+  return len;
+}
+
+always_inline int
+tcp_make_synack_options (tcp_connection_t *tc, tcp_options_t *opts)
 {
   u8 len = 0;
 
@@ -312,17 +338,19 @@ do {                                                                    \
   _vec_len (my_tx_buffers) -= 1;                                        \
 } while (0)
 
-#define tcp_reuse_buffer(vm, b)                                         \
-do {                                                                    \
-  vlib_buffer_t *it = b;                                                \
-  do {                                                                  \
-      it->current_data = 0;                                             \
-      it->current_length = 0;                                           \
-      it->total_length_not_including_first_buffer = 0;                  \
-  } while ((it->flags & VLIB_BUFFER_NEXT_PRESENT)                       \
-      && (it = vlib_get_buffer (vm, it->next_buffer)));                 \
-} while (0)
-
+always_inline void
+tcp_reuse_buffer (vlib_main_t *vm, vlib_buffer_t *b)
+{
+  vlib_buffer_t *it = b;
+  do
+    {
+      it->current_data = 0;
+      it->current_length = 0;
+      it->total_length_not_including_first_buffer = 0;
+    }
+  while ((it->flags & VLIB_BUFFER_NEXT_PRESENT)
+      && (it = vlib_get_buffer (vm, it->next_buffer)));
+}
 
 /**
  * Convert buffer to ACK
@@ -342,7 +370,7 @@ tcp_make_ack (tcp_connection_t *tc, vlib_buffer_t *b)
   /* leave enough space for headers */
   vlib_buffer_make_headroom (b, MAX_HDRS_LEN);
 
-  wnd = tcp_window_to_advertise (tc, vm->cpu_index);
+  wnd = tcp_window_to_advertise (tc);
 
   /* Make and write options */
   tcp_opts_len = tcp_make_established_options (tc, snd_opts);
@@ -389,7 +417,7 @@ tcp_make_synack (tcp_connection_t *tc, vlib_buffer_t *b)
   initial_wnd = tcp_initial_window_to_advertise (tc);
 
   /* Make and write options */
-  tcp_opts_len = tcp_make_syn_or_synack_options (tc, snd_opts);
+  tcp_opts_len = tcp_make_synack_options (tc, snd_opts);
   tcp_hdr_opts_len = tcp_opts_len + sizeof (tcp_header_t);
 
   th = pkt_push_tcp (b, tc->c_lcl_port, tc->c_rmt_port, tc->iss,
@@ -410,6 +438,9 @@ tcp_enqueue_to_ip_lookup (vlib_main_t *vm, vlib_buffer_t *b, u32 bi, u8 is_ip4)
 
   b->flags |= VNET_BUFFER_LOCALLY_ORIGINATED;
   b->error = 0;
+
+  /* Default FIB for now */
+  vnet_buffer (b)->sw_if_index[VLIB_TX] = 0;
 
   /* Send to IP lookup */
   next_index = is_ip4 ? ip4_lookup_node.index : ip6_lookup_node.index;
@@ -521,11 +552,11 @@ tcp_send_syn (tcp_connection_t *tc)
   tc->snd_nxt = tc->iss + 1;
 
   /* fifos are not allocated yet. Use some predefined value */
-  initial_wnd = 3 << 10;
+  initial_wnd = 16 << 10;
 
   /* Make and write options */
   memset (&snd_opts, 0, sizeof (snd_opts));
-  tcp_opts_len = tcp_make_syn_or_synack_options (tc, &snd_opts);
+  tcp_opts_len = tcp_make_syn_options (&snd_opts, initial_wnd);
   tcp_hdr_opts_len = tcp_opts_len + sizeof (tcp_header_t);
 
   th = pkt_push_tcp (b, tc->c_lcl_port, tc->c_rmt_port, tc->iss,
@@ -663,7 +694,7 @@ tcp46_output_inline (vlib_main_t * vm,
           vlib_buffer_t * b0;
           tcp_connection_t *tc0;
           tcp_header_t *th0;
-          u32 error0 = TCP_ERROR_NONE, next0 = TCP_OUTPUT_NEXT_DROP;
+          u32 error0 = TCP_ERROR_PKTS_SENT, next0 = TCP_OUTPUT_NEXT_DROP;
 
           bi0 = from[0];
           to_next[0] = bi0;
@@ -703,6 +734,7 @@ tcp46_output_inline (vlib_main_t * vm,
               ASSERT (tc0->snt_dupacks >= 0);
               if (!tcp_session_has_ooo_data (tc0))
                 {
+                  error0 = TCP_ERROR_FILTERED_DUPACKS;
                   next0 = TCP_OUTPUT_NEXT_DROP;
                   goto done;
                 }
@@ -731,7 +763,8 @@ tcp46_output_inline (vlib_main_t * vm,
 
           b0->flags |= VNET_BUFFER_LOCALLY_ORIGINATED;
 
-          next0 = is_ip4 ? TCP_OUTPUT_NEXT_IP4_LOOKUP : TCP_OUTPUT_NEXT_IP6_LOOKUP;
+          next0 =
+              is_ip4 ? TCP_OUTPUT_NEXT_IP4_LOOKUP : TCP_OUTPUT_NEXT_IP6_LOOKUP;
 
          done:
           b0->error = error0 != 0 ? node->errors[error0] : 0;
@@ -824,12 +857,14 @@ tcp_push_header_uri (transport_connection_t *tconn, vlib_buffer_t *b)
   tc = (tcp_connection_t *)tconn;
 
   data_len = b->current_length;
+  vnet_buffer (b)->tcp.flags = 0;
 
   /* Make and write options */
+  memset (snd_opts, 0, sizeof (*snd_opts));
   tcp_opts_len = tcp_make_established_options (tc, snd_opts);
   tcp_hdr_opts_len = tcp_opts_len + sizeof (tcp_header_t);
 
-  advertise_wnd = tcp_window_to_advertise (tc, tc->c_thread_index);
+  advertise_wnd = tcp_window_to_advertise (tc);
 
   th = pkt_push_tcp (b, tc->c_lcl_port, tc->c_rmt_port, tc->snd_nxt,
                      tc->rcv_nxt, tcp_hdr_opts_len, TCP_FLAG_ACK,

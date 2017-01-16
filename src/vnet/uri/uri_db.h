@@ -46,10 +46,10 @@ typedef enum
 /* Event queue input node static next indices */
 typedef enum {
   URI_QUEUE_NEXT_DROP,
-  URI_QUEUE_NEXT_IP4_LOOKUP,
-  URI_QUEUE_NEXT_IP6_LOOKUP,
   URI_QUEUE_NEXT_TCP_IP4_OUTPUT,
+  URI_QUEUE_NEXT_IP4_LOOKUP,
   URI_QUEUE_NEXT_TCP_IP6_OUTPUT,
+  URI_QUEUE_NEXT_IP6_LOOKUP,
   URI_QUEUE_N_NEXT,
 } uri_queue_next_t;
 
@@ -126,29 +126,22 @@ typedef struct _stream_session_t
 
 struct _stream_server_main;
 
+typedef enum
+{
+  STREAM_SERVER_ACCEPT,
+  STREAM_SERVER_CONNECT
+} stream_server_mode_t;
+
 typedef struct _stream_server
 {
   /** Flags */
   u32 flags;
 
   /** segments mapped by this server */
-  u32 * segment_indices;
-
-  /** configured additional segment size, from bind request */
-  u32 add_segment_size;
-
-  /** configured fifo sizes, from bind request */
-  u32 rx_fifo_size;
-  u32 tx_fifo_size;
+  u32 *segment_indices;
 
   /** Server listens for events on this svm queue */
   unix_shared_memory_queue_t *event_queue;
-
-  /** Binary API connection index, ~0 if internal */
-  u32 api_client_index;
-  
-  /** Accept cookie, for multiple session flavors ($$$ maybe) */
-  u32 accept_cookie;
 
   /** Index in server pool */
   u32 server_index;
@@ -156,8 +149,33 @@ typedef struct _stream_server
   /** Stream session type */
   u8 session_type;
 
+  /** Session fifo sizes. They are provided for binds and take default
+   * values for connects */
+  u32 rx_fifo_size;
+  u32 tx_fifo_size;
+
+  /* Stream server mode: accept or connect */
+  u8 mode;
+
+  /*
+   * Bind/Listen specific
+   */
+
+  /** configured additional segment size, from bind request */
+  u32 add_segment_size;
+
+  /** Binary API connection index, ~0 if internal */
+  u32 api_client_index;
+  
+  /** Accept cookie, for multiple session flavors ($$$ maybe) */
+  u32 accept_cookie;
+
   /** Index of the listen session */
   u32 listen_session_index;
+
+  /*
+   * Callbacks
+   */
 
   /** Shoulder-taps for the server */
   int (*session_accept_callback) (struct _stream_server *server, 
@@ -176,8 +194,9 @@ typedef struct _stream_server
                                      stream_session_t *session);
   int (*add_segment_callback)(struct _stream_server *server,
                               char * segment_name, u32 segment_size);
-  int
-  (*session_connected_callback) (u32 index, stream_session_t *s,
+
+  /* Connection request callback */
+  int (*session_connected_callback) (u32 index, stream_session_t *s,
                                  u8 segment_name_length, char *segment_name,
                                  u32 segment_size,
                                  unix_shared_memory_queue_t * vpp_event_queue,
@@ -219,6 +238,9 @@ typedef struct _stream_server_main
 
   /** per-worker tx buffer free lists */
   u32 ** tx_buffers;
+
+  /** Per worker-thread vector of partially read events */
+  fifo_event_t **evts_partially_read;
 
   /** per-worker active event vectors */
   fifo_event_t ** fifo_events;
