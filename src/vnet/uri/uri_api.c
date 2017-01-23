@@ -45,7 +45,7 @@ _(DISCONNECT_SESSION, disconnect_session)                               \
 _(DISCONNECT_SESSION_REPLY, disconnect_session_reply)                   \
 
 int
-send_session_create_callback (stream_server_t * ss, stream_session_t * s,
+send_session_create_callback (application_t * ss, stream_session_t * s,
                               unix_shared_memory_queue_t * vpp_event_queue)
 {
   vl_api_accept_session_t * mp;
@@ -74,7 +74,7 @@ send_session_create_callback (stream_server_t * ss, stream_session_t * s,
 }
 
 int
-send_add_segment_callback (stream_server_t * ss, u8 * segment_name,
+send_add_segment_callback (application_t * ss, u8 * segment_name,
                            u32 segment_size)
 {
   vl_api_map_another_segment_t * mp;
@@ -98,7 +98,7 @@ send_add_segment_callback (stream_server_t * ss, u8 * segment_name,
 }
 
 int
-send_session_clear_callback (stream_server_main_t * ssm, stream_server_t * ss,
+send_session_clear_callback (session_manager_main_t * smm, application_t * ss,
                                  stream_session_t * s)
 
 {
@@ -184,17 +184,15 @@ redirect_connect_uri_callback (u32 server_api_client_index, void * mp_arg)
 }
 
 int
-session_connected_callback (u32 api_client_index, stream_session_t *s,
-                            u8 segment_name_length, char *segment_name,
-                            u32 segment_size,
+session_connected_callback (application_t *app, stream_session_t *s,
                             unix_shared_memory_queue_t * vpp_event_queue,
-                            unix_shared_memory_queue_t * client_event_queue,
                             u8 code)
 {
   vl_api_connect_uri_reply_t * mp;
   unix_shared_memory_queue_t * q;
+  u8 *seg_name;
 
-  q = vl_api_client_index_to_input_queue (api_client_index);
+  q = vl_api_client_index_to_input_queue (app->api_client_index);
 
   if (!q)
     return -1;
@@ -209,14 +207,13 @@ session_connected_callback (u32 api_client_index, stream_session_t *s,
   mp->session_index = s->session_index;
   mp->session_type = s->session_type;
   mp->vpp_event_queue_address = (u64) vpp_event_queue;
-  mp->client_event_queue_address = (u64) client_event_queue;
-  mp->segment_size = segment_size;
-  mp->segment_name_length = 0;
-  if (segment_name_length)
-    {
-      memcpy (mp->segment_name, segment_name, segment_name_length);
-      mp->segment_name_length = segment_name_length;
-    }
+  mp->client_event_queue_address = (u64) app->event_queue;
+
+  session_manager_get_segment_info (s->server_segment_index, &seg_name,
+                                    &mp->segment_size);
+  mp->segment_name_length = vec_len (seg_name);
+  if (mp->segment_name_length)
+    clib_memcpy (mp->segment_name, seg_name, mp->segment_name_length);
 
   vl_msg_api_send_shmem (q, (u8 *) & mp);
 
@@ -280,7 +277,6 @@ vl_api_unbind_uri_t_handler (vl_api_unbind_uri_t * mp)
 static void
 vl_api_connect_uri_t_handler (vl_api_connect_uri_t * mp)
 {
-//  vl_api_connect_uri_reply_t * rmp;
   char segment_name[128];
   u32 segment_name_length;
 
@@ -288,21 +284,6 @@ vl_api_connect_uri_t_handler (vl_api_connect_uri_t * mp)
 
   vnet_connect_uri ((char *) mp->uri, mp->client_index, mp->options,
                     segment_name, &segment_name_length, (void *) mp);
-
-//  if (rv != VNET_CONNECT_URI_REDIRECTED)
-//    {
-//      REPLY_MACRO2 (VL_API_CONNECT_URI_REPLY,
-//      ({
-//        rmp->segment_name_length = 0;
-//        if (segment_name_length)
-//          {
-//            memcpy (rmp->segment_name, segment_name, segment_name_length);
-//            rmp->segment_name_length = segment_name_length;
-//          }
-//      }));
-//      /* See bounce registration below */
-//      vl_msg_api_free (mp);
-//    }
 }
 
 static void
@@ -347,12 +328,12 @@ vl_api_map_another_segment_reply_t_handler
 static void
 vl_api_accept_session_reply_t_handler (vl_api_accept_session_reply_t * mp)
 {
-  stream_server_main_t * ssm = &stream_server_main;
-  stream_server_t * ss;
+  session_manager_main_t * smm = vnet_get_session_manager_main ();
+  application_t * ss;
   stream_session_t * s;
   int rv;
 
-  s = pool_elt_at_index (ssm->sessions[mp->session_thread_index],
+  s = pool_elt_at_index (smm->sessions[mp->session_thread_index],
                          mp->session_index);
 
   rv = mp->retval;
@@ -360,8 +341,8 @@ vl_api_accept_session_reply_t_handler (vl_api_accept_session_reply_t * mp)
   if (rv)
     {
       /* Server isn't interested, kill the session */
-      ss = pool_elt_at_index (ssm->servers, s->server_index);
-      ss->session_delete_callback (ssm, s);
+      ss = pool_elt_at_index (smm->applications, s->server_index);
+      ss->session_delete_callback (smm, s);
       return;
     }
 

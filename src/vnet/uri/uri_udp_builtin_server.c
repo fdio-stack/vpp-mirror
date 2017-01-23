@@ -21,7 +21,7 @@
 #include <vnet/ip/udp.h>
 
 static int builtin_session_create_callback 
-(stream_server_t * ss, stream_session_t * s,
+(application_t * ss, stream_session_t * s,
  unix_shared_memory_queue_t * vpp_event_queue)
 {
   /* Simple version: declare session ready-to-go... */
@@ -29,16 +29,16 @@ static int builtin_session_create_callback
   return 0;
 }
 
-static int builtin_session_clear_callback (stream_server_main_t * ssm, 
-                                           stream_server_t * ss, 
+static int builtin_session_clear_callback (session_manager_main_t * ssm, 
+                                           application_t * ss,
                                            stream_session_t * s)
 {
   stream_session_delete (ssm, s);
   return 0;
 }
 
-static int builtin_server_rx_callback (stream_server_main_t * ssm, 
-                                       stream_server_t * ss, 
+static int builtin_server_rx_callback (session_manager_main_t * ssm, 
+                                       application_t * ss,
                                        stream_session_t * s)
 {
   svm_fifo_t * rx_fifo, * tx_fifo;

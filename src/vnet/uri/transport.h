@@ -110,5 +110,51 @@ typedef struct _transport_connection
 #define c_thread_index connection.thread_index
 } transport_connection_t;
 
+typedef u32
+(*tp_application_bind) (vlib_main_t *, u32, ip46_address_t *, u16);
+
+typedef u32
+(*tp_application_unbind) (vlib_main_t *, u32);
+
+typedef u32
+(*tp_application_send) (transport_connection_t *tconn, vlib_buffer_t *b);
+
+typedef u8 *
+(*tp_connection_format) (u8 *s, va_list *args);
+
+typedef transport_connection_t *
+(*tp_connection_get) (u32 conn_index, u32 my_thread_index);
+
+typedef transport_connection_t *
+(*tp_listen_connection_get) (u32 conn_index);
+
+typedef transport_connection_t *
+(*tp_half_open_connection_get) (u32 conne_index);
+
+typedef void
+(*tp_connection_close) (u32 conn_index, u32 my_thread_index);
+
+typedef int
+(*tp_connection_open) (ip46_address_t *addr, u16 port_host_byte_order);
+
+typedef u16
+(*tp_connection_snd_mss) (transport_connection_t *tc);
+
+/*
+ * Transport protocol virtual function table
+ */
+typedef struct _transport_proto_vft
+{
+  tp_application_bind bind;
+  tp_application_unbind unbind;
+  tp_application_send push_header;
+  tp_connection_format format_connection;
+  tp_connection_get get_connection;
+  tp_listen_connection_get get_listener;
+  tp_half_open_connection_get get_half_open;
+  tp_connection_close delete;
+  tp_connection_open open;
+  tp_connection_snd_mss send_mss;
+} transport_proto_vft_t;
 
 #endif /* VNET_VNET_URI_TRANSPORT_H_ */

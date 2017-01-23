@@ -68,14 +68,14 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
 {
   u32 n_left_from, * from, * to_next;
   udp4_uri_input_next_t next_index;
-  stream_server_main_t * ssm = &stream_server_main;
+  session_manager_main_t * smm = vnet_get_session_manager_main ();
   u32 my_thread_index = vm->cpu_index;
   u8 my_enqueue_epoch;
   u32 * session_indices_to_enqueue;
   static u32 serial_number;
   int i;
 
-  my_enqueue_epoch = ++ssm->current_enqueue_epoch[my_thread_index];
+  my_enqueue_epoch = ++smm->current_enqueue_epoch[my_thread_index];
 
   from = vlib_frame_vector_args (frame);
   n_left_from = frame->n_vectors;
@@ -234,9 +234,9 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
               {
                   s0->enqueue_epoch = my_enqueue_epoch;
                   
-                  vec_add1 (ssm->session_indices_to_enqueue_by_thread
+                  vec_add1 (smm->session_indices_to_enqueue_by_thread
                             [my_thread_index], 
-                            s0 - ssm->sessions[my_thread_index]);
+                            s0 - smm->sessions[my_thread_index]);
               }
             }
           /* listener hit */
@@ -288,7 +288,7 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
 
               t->session = ~0;
               if (s0)
-                t->session = s0 - ssm->sessions[my_thread_index];
+                t->session = s0 - smm->sessions[my_thread_index];
               t->disposition = error0;
               t->thread_index = my_thread_index;
             }
@@ -305,26 +305,26 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
   /* Send enqueue events */
   
   session_indices_to_enqueue = 
-    ssm->session_indices_to_enqueue_by_thread[my_thread_index];
+    smm->session_indices_to_enqueue_by_thread[my_thread_index];
 
   for (i = 0; i < vec_len (session_indices_to_enqueue); i++)
     {
       fifo_event_t evt;
       unix_shared_memory_queue_t * q;
       stream_session_t * s0;
-      stream_server_t *ss0;
+      application_t *ss0;
       
       /* Get session */
-      s0 = pool_elt_at_index(ssm->sessions[my_thread_index], 
+      s0 = pool_elt_at_index(smm->sessions[my_thread_index],
                              session_indices_to_enqueue[i]);
       
       /* Get session's server */
-      ss0 = pool_elt_at_index (ssm->servers, s0->server_index);
+      ss0 = pool_elt_at_index (smm->applications, s0->server_index);
       
       /* Built-in server? Deliver the goods... */
       if (ss0->builtin_server_rx_callback)
         {
-          ss0->builtin_server_rx_callback(ssm, ss0, s0);
+          ss0->builtin_server_rx_callback(smm, ss0, s0);
           continue;
         }
 
@@ -363,7 +363,7 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
 
   vec_reset_length (session_indices_to_enqueue);
 
-  ssm->session_indices_to_enqueue_by_thread[my_thread_index] =
+  smm->session_indices_to_enqueue_by_thread[my_thread_index] =
     session_indices_to_enqueue;
 
   return frame->n_vectors;

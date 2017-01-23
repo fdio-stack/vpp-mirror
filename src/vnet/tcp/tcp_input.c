@@ -285,7 +285,7 @@ tcp_segment_validate (vlib_main_t *vm, tcp_connection_t *tc0, vlib_buffer_t *b0,
   /* 4th: check the SYN bit */
   if (tcp_syn (th0))
     {
-      /* TODO send RST */
+      tcp_send_reset (b0, tc0->c_is_ip4);
       return -1;
     }
 
@@ -683,7 +683,7 @@ tcp46_established_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
       vlib_put_next_frame (vm, node, next_index, n_left_to_next);
     }
 
-  errors = stream_server_flush_enqueue_events (my_thread_index);
+  errors = session_manager_flush_enqueue_events (my_thread_index);
   if (errors)
     {
       if (is_ip4)
@@ -909,6 +909,8 @@ tcp46_syn_sent_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
 
           /* Parse options */
           tcp_options_parse (tcp0, &new_tc0->opt);
+          new_tc0->tsval_recent = new_tc0->opt.tsval;
+          new_tc0->tsval_recent_age = tcp_time_now ();
 
           /* rcv_nxt is incremented when data segment is read */
           new_tc0->rcv_nxt = seq0;
@@ -973,7 +975,7 @@ tcp46_syn_sent_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
       vlib_put_next_frame (vm, node, next_index, n_left_to_next);
     }
 
-  errors = stream_server_flush_enqueue_events (my_thread_index);
+  errors = session_manager_flush_enqueue_events (my_thread_index);
   if (errors)
     {
       if (is_ip4)
@@ -1275,7 +1277,7 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
       vlib_put_next_frame (vm, node, next_index, n_left_to_next);
     }
 
-  errors = stream_server_flush_enqueue_events (my_thread_index);
+  errors = session_manager_flush_enqueue_events (my_thread_index);
   if (errors)
     {
       if (is_ip4)
@@ -1612,7 +1614,7 @@ tcp46_input_inline (vlib_main_t * vm,
   u32 n_left_from, next_index, * from, * to_next;
   u32 my_thread_index = vm->cpu_index;
   tcp_main_t *tm = vnet_get_tcp_main ();
-  stream_server_main_t *ssm = vnet_get_stream_server_main ();
+  session_manager_main_t *ssm = vnet_get_session_manager_main ();
 
   from = vlib_frame_vector_args (from_frame);
   n_left_from = from_frame->n_vectors;
