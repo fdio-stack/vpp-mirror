@@ -22,6 +22,7 @@
 #include <vnet/ethernet/ethernet.h>
 #include <vnet/fib/ip4_fib.h>
 #include <snat/snat.h>
+#include <snat/snat_ipfix_logging.h>
 
 #include <vppinfra/hash.h>
 #include <vppinfra/error.h>
@@ -210,7 +211,14 @@ create_session_for_static_mapping (snat_main_t *sm,
   if (clib_bihash_add_del_8_8 (&sm->out2in, &kv0, 1 /* is_add */))
       clib_warning ("out2in key add failed");
 
-  return s;
+  /* log NAT event */
+  snat_ipfix_logging_nat44_ses_create(s->in2out.addr.as_u32,
+                                      s->out2in.addr.as_u32,
+                                      s->in2out.protocol,
+                                      s->in2out.port,
+                                      s->out2in.port,
+                                      s->in2out.fib_index);
+   return s;
 }
 
 static inline u32 icmp_out2in_slow_path (snat_main_t *sm,
@@ -255,7 +263,10 @@ static inline u32 icmp_out2in_slow_path (snat_main_t *sm,
                 ip4_interface_first_address (sm->ip4_main, sw_if_index0,
                                              0 /* just want the address */);
               rt->cached_sw_if_index = sw_if_index0;
-              rt->cached_ip4_address = first_int_addr->as_u32;
+              if (first_int_addr)
+                rt->cached_ip4_address = first_int_addr->as_u32;
+              else
+                rt->cached_ip4_address = 0;
             }
           
           /* Don't NAT packet aimed at the intfc address */
@@ -890,8 +901,12 @@ snat_out2in_worker_handoff_fn (vlib_main_t * vm,
           if (clib_bihash_search_8_8 (&sm->worker_by_out, &kv0, &value0))
             {
               /* No, assign next available worker (RR) */
-              next_worker_index = sm->first_worker_index +
-                sm->workers[sm->next_worker++ % vec_len (sm->workers)];
+              next_worker_index = sm->first_worker_index;
+              if (vec_len (sm->workers))
+                {
+                  next_worker_index += 
+                    sm->workers[sm->next_worker++ % _vec_len (sm->workers)];
+                }
             }
           else
             {
@@ -1043,7 +1058,10 @@ static inline u32 icmp_out2in_fast (snat_main_t *sm,
             ip4_interface_first_address (sm->ip4_main, sw_if_index0,
                                          0 /* just want the address */);
           rt->cached_sw_if_index = sw_if_index0;
-          rt->cached_ip4_address = first_int_addr->as_u32;
+          if (first_int_addr)
+            rt->cached_ip4_address = first_int_addr->as_u32;
+          else
+            rt->cached_ip4_address = 0;
         }
 
       /* Don't NAT packet aimed at the intfc address */

@@ -195,8 +195,6 @@ do {                                                             \
 } while (0)
 #endif
 
-#if DPDK == 0
-
 typedef enum
 {
   /* Index is unknown. */
@@ -232,8 +230,6 @@ vlib_buffer_set_known_state (vlib_main_t * vm,
 u8 *vlib_validate_buffer (vlib_main_t * vm, u32 buffer_index,
 			  uword follow_chain);
 
-#endif /* DPDK == 0 */
-
 clib_error_t *vlib_buffer_pool_create (vlib_main_t * vm, unsigned num_mbufs,
 				       unsigned socket_id);
 
@@ -245,7 +241,15 @@ clib_error_t *vlib_buffer_pool_create (vlib_main_t * vm, unsigned num_mbufs,
     @return - (u32) number of buffers actually allocated, may be
     less than the number requested or zero
 */
-u32 vlib_buffer_alloc (vlib_main_t * vm, u32 * buffers, u32 n_buffers);
+always_inline u32
+vlib_buffer_alloc (vlib_main_t * vm, u32 * buffers, u32 n_buffers)
+{
+  vlib_buffer_main_t *bm = vm->buffer_main;
+
+  ASSERT (bm->cb.vlib_buffer_alloc_cb);
+
+  return bm->cb.vlib_buffer_alloc_cb (vm, buffers, n_buffers);
+}
 
 always_inline u32
 vlib_buffer_round_size (u32 size)
@@ -261,9 +265,18 @@ vlib_buffer_round_size (u32 size)
     @return - (u32) number of buffers actually allocated, may be
     less than the number requested or zero
 */
-u32 vlib_buffer_alloc_from_free_list (vlib_main_t * vm,
-				      u32 * buffers,
-				      u32 n_buffers, u32 free_list_index);
+always_inline u32
+vlib_buffer_alloc_from_free_list (vlib_main_t * vm,
+				  u32 * buffers,
+				  u32 n_buffers, u32 free_list_index)
+{
+  vlib_buffer_main_t *bm = vm->buffer_main;
+
+  ASSERT (bm->cb.vlib_buffer_alloc_from_free_list_cb);
+
+  return bm->cb.vlib_buffer_alloc_from_free_list_cb (vm, buffers, n_buffers,
+						     free_list_index);
+}
 
 /** \brief Free buffers
     Frees the entire buffer chain for each buffer
@@ -273,11 +286,19 @@ u32 vlib_buffer_alloc_from_free_list (vlib_main_t * vm,
     @param n_buffers - (u32) number of buffers to free
 
 */
-void vlib_buffer_free (vlib_main_t * vm,
-		       /* pointer to first buffer */
-		       u32 * buffers,
-		       /* number of buffers to free */
-		       u32 n_buffers);
+always_inline void
+vlib_buffer_free (vlib_main_t * vm,
+		  /* pointer to first buffer */
+		  u32 * buffers,
+		  /* number of buffers to free */
+		  u32 n_buffers)
+{
+  vlib_buffer_main_t *bm = vm->buffer_main;
+
+  ASSERT (bm->cb.vlib_buffer_free_cb);
+
+  return bm->cb.vlib_buffer_free_cb (vm, buffers, n_buffers);
+}
 
 /** \brief Free buffers, does not free the buffer chain for each buffer
 
@@ -286,11 +307,19 @@ void vlib_buffer_free (vlib_main_t * vm,
     @param n_buffers - (u32) number of buffers to free
 
 */
-void vlib_buffer_free_no_next (vlib_main_t * vm,
-			       /* pointer to first buffer */
-			       u32 * buffers,
-			       /* number of buffers to free */
-			       u32 n_buffers);
+always_inline void
+vlib_buffer_free_no_next (vlib_main_t * vm,
+			  /* pointer to first buffer */
+			  u32 * buffers,
+			  /* number of buffers to free */
+			  u32 n_buffers)
+{
+  vlib_buffer_main_t *bm = vm->buffer_main;
+
+  ASSERT (bm->cb.vlib_buffer_free_no_next_cb);
+
+  return bm->cb.vlib_buffer_free_no_next_cb (vm, buffers, n_buffers);
+}
 
 /** \brief Free one buffer
     Shorthand to free a single buffer chain.
@@ -307,11 +336,54 @@ vlib_buffer_free_one (vlib_main_t * vm, u32 buffer_index)
 /* Add/delete buffer free lists. */
 u32 vlib_buffer_create_free_list (vlib_main_t * vm, u32 n_data_bytes,
 				  char *fmt, ...);
-void vlib_buffer_delete_free_list (vlib_main_t * vm, u32 free_list_index);
+always_inline void
+vlib_buffer_delete_free_list (vlib_main_t * vm, u32 free_list_index)
+{
+  vlib_buffer_main_t *bm = vm->buffer_main;
+
+  ASSERT (bm->cb.vlib_buffer_delete_free_list_cb);
+
+  bm->cb.vlib_buffer_delete_free_list_cb (vm, free_list_index);
+}
 
 /* Find already existing public free list with given size or create one. */
 u32 vlib_buffer_get_or_create_free_list (vlib_main_t * vm, u32 n_data_bytes,
 					 char *fmt, ...);
+
+
+/* After free aligned buffers may not contain even sized chunks. */
+void vlib_buffer_free_list_trim_aligned (vlib_buffer_free_list_t * f);
+
+/* Merge two free lists */
+void vlib_buffer_merge_free_lists (vlib_buffer_free_list_t * dst,
+				   vlib_buffer_free_list_t * src);
+
+/* Make sure we have at least given number of unaligned buffers. */
+void vlib_buffer_free_list_fill_unaligned (vlib_main_t * vm,
+					   vlib_buffer_free_list_t *
+					   free_list,
+					   uword n_unaligned_buffers);
+
+always_inline u32
+vlib_buffer_get_free_list_with_size (vlib_main_t * vm, u32 size)
+{
+  vlib_buffer_main_t *bm = vm->buffer_main;
+
+  size = vlib_buffer_round_size (size);
+  uword *p = hash_get (bm->free_list_by_size, size);
+  return p ? p[0] : ~0;
+}
+
+always_inline vlib_buffer_free_list_t *
+vlib_buffer_get_buffer_free_list (vlib_main_t * vm, vlib_buffer_t * b,
+				  u32 * index)
+{
+  vlib_buffer_main_t *bm = vm->buffer_main;
+  u32 i;
+
+  *index = i = b->free_list_index;
+  return pool_elt_at_index (bm->buffer_free_list_pool, i);
+}
 
 always_inline vlib_buffer_free_list_t *
 vlib_buffer_get_free_list (vlib_main_t * vm, u32 free_list_index)
@@ -453,11 +525,6 @@ vlib_buffer_copy (vlib_main_t * vm, vlib_buffer_t * b)
   return fd;
 }
 
-/*
- * vlib_buffer_chain_* functions provide a way to create long buffers.
- * When DPDK is enabled, the 'hidden' DPDK header is taken care of transparently.
- */
-
 /* Initializes the buffer as an empty packet with no chained buffers. */
 always_inline void
 vlib_buffer_chain_init (vlib_buffer_t * first)
@@ -536,8 +603,6 @@ typedef struct
 {
   /* Vector of packet data. */
   u8 *packet_data;
-
-  /* Note: the next three fields are unused if DPDK == 1 */
 
   /* Number of buffers to allocate in each call to physmem
      allocator. */
@@ -642,6 +707,19 @@ vlib_buffer_init_for_free_list (vlib_buffer_t * _dst,
   _(free_list_index);
 #undef _
   ASSERT (dst->b.total_length_not_including_first_buffer == 0);
+}
+
+always_inline void
+vlib_buffer_add_to_free_list (vlib_main_t * vm,
+			      vlib_buffer_free_list_t * f,
+			      u32 buffer_index, u8 do_init)
+{
+  vlib_buffer_t *b;
+  b = vlib_get_buffer (vm, buffer_index);
+  if (PREDICT_TRUE (do_init))
+    vlib_buffer_init_for_free_list (b, f);
+  vec_add1_aligned (f->aligned_buffers, buffer_index,
+		    sizeof (vlib_copy_unit_t));
 }
 
 always_inline void

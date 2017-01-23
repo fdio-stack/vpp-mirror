@@ -41,7 +41,8 @@ def ip4_range(ip4, s, e):
 
 def ip4n_range(ip4n, s, e):
     ip4 = socket.inet_ntop(socket.AF_INET, ip4n)
-    return (socket.inet_pton(socket.AF_INET, ip) for ip in ip4_range(ip4, s, e))
+    return (socket.inet_pton(socket.AF_INET, ip)
+            for ip in ip4_range(ip4, s, e))
 
 
 class NumericConstant(object):
@@ -75,18 +76,23 @@ class Host(object):
 
     @property
     def ip4(self):
-        """ IPv4 address """
+        """ IPv4 address - string """
         return self._ip4
 
     @property
     def ip4n(self):
-        """ IPv4 address """
+        """ IPv4 address of remote host - raw, suitable as API parameter."""
         return socket.inet_pton(socket.AF_INET, self._ip4)
 
     @property
     def ip6(self):
-        """ IPv6 address """
+        """ IPv6 address - string """
         return self._ip6
+
+    @property
+    def ip6n(self):
+        """ IPv6 address of remote host - raw, suitable as API parameter."""
+        return socket.inet_pton(socket.AF_INET6, self._ip6)
 
     def __init__(self, mac=None, ip4=None, ip6=None):
         self._mac = mac

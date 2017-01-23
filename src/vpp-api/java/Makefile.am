@@ -19,7 +19,7 @@ AM_CFLAGS = -Wall -I${top_srcdir} -I${top_builddir} \
   -I$(JAVA_HOME)/include -I$(JAVA_HOME)/include/linux \
   -I@top_srcdir@/plugins -I@top_builddir@/plugins
 
-AM_LDFLAGS = -module -shared -avoid-version -rpath /none -no-undefined
+AM_LDFLAGS = -shared -avoid-version -rpath /none -no-undefined
 
 BUILT_SOURCES =
 bin_PROGRAMS =
@@ -36,6 +36,7 @@ nobase_include_HEADERS =                \
 
 lib_LTLIBRARIES = libjvpp_common.la
 libjvpp_common_la_SOURCES = jvpp-common/jvpp_common.c
+libjvpp_common_la_LDFLAGS = shared -rpath /none -no-undefined
 
 JVPP_LIBS = \
   libjvpp_common.la \

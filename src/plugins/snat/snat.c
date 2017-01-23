@@ -21,6 +21,7 @@
 #include <vnet/plugin/plugin.h>
 #include <vlibapi/api.h>
 #include <snat/snat.h>
+#include <snat/snat_ipfix_logging.h>
 
 #include <vlibapi/api.h>
 #include <vlibmemory/api.h>
@@ -278,6 +279,13 @@ int snat_del_address (snat_main_t *sm, ip4_address_t addr)
           pool_foreach (ses, tsm->sessions, ({
             if (ses->out2in.addr.as_u32 == addr.as_u32)
               {
+                /* log NAT event */
+                snat_ipfix_logging_nat44_ses_delete(ses->in2out.addr.as_u32,
+                                                    ses->out2in.addr.as_u32,
+                                                    ses->in2out.protocol,
+                                                    ses->in2out.port,
+                                                    ses->out2in.port,
+                                                    ses->in2out.fib_index);
                 vec_add1 (ses_to_be_removed, ses - tsm->sessions);
                 kv.key = ses->in2out.as_u64;
                 clib_bihash_add_del_8_8 (&sm->in2out, &kv, 0);
@@ -315,6 +323,28 @@ static void increment_v4_address (ip4_address_t * a)
   a->as_u32 = clib_host_to_net_u32(v);
 }
 
+static void 
+snat_add_static_mapping_when_resolved (snat_main_t * sm, 
+                                       ip4_address_t l_addr, 
+                                       u16 l_port, 
+                                       u32 sw_if_index, 
+                                       u16 e_port, 
+                                       u32 vrf_id,
+                                       int addr_only,  
+                                       int is_add)
+{
+  snat_static_map_resolve_t *rp;
+
+  vec_add2 (sm->to_resolve, rp, 1);
+  rp->l_addr.as_u32 = l_addr.as_u32;
+  rp->l_port = l_port;
+  rp->sw_if_index = sw_if_index;
+  rp->e_port = e_port;
+  rp->vrf_id = vrf_id;
+  rp->addr_only = addr_only;
+  rp->is_add = is_add;
+}
+
 /**
  * @brief Add static mapping.
  *
@@ -332,7 +362,7 @@ static void increment_v4_address (ip4_address_t * a)
  */
 int snat_add_static_mapping(ip4_address_t l_addr, ip4_address_t e_addr,
                             u16 l_port, u16 e_port, u32 vrf_id, int addr_only,
-                            int is_add)
+                            u32 sw_if_index, int is_add)
 {
   snat_main_t * sm = &snat_main;
   snat_static_mapping_t *m;
@@ -350,6 +380,27 @@ int snat_add_static_mapping(ip4_address_t l_addr, ip4_address_t e_addr,
       if (!p)
         return VNET_API_ERROR_NO_SUCH_FIB;
       sm->outside_fib_index = p[0];
+    }
+
+  /* If the external address is a specific interface address */
+  if (sw_if_index != ~0)
+    {
+      ip4_address_t * first_int_addr;
+
+      /* Might be already set... */
+      first_int_addr = ip4_interface_first_address 
+        (sm->ip4_main, sw_if_index, 0 /* just want the address*/);
+
+      /* DHCP resolution required? */
+      if (first_int_addr == 0)
+        {
+          snat_add_static_mapping_when_resolved 
+            (sm, l_addr, l_port, sw_if_index, e_port, vrf_id, 
+             addr_only,  is_add);
+          return 0;
+        }
+        else
+          e_addr.as_u32 = first_int_addr->as_u32;
     }
 
   m_key.addr = e_addr;
@@ -549,6 +600,14 @@ int snat_add_static_mapping(ip4_address_t l_addr, ip4_address_t e_addr,
                               (clib_net_to_host_u16 (s->out2in.port) != e_port))
                             continue;
                         }
+
+                      /* log NAT event */
+                      snat_ipfix_logging_nat44_ses_delete(s->in2out.addr.as_u32,
+                                                          s->out2in.addr.as_u32,
+                                                          s->in2out.protocol,
+                                                          s->in2out.port,
+                                                          s->out2in.port,
+                                                          s->in2out.fib_index);
 
                       value.key = s->in2out.as_u64;
                       clib_bihash_add_del_8_8 (&sm->in2out, &value, 0);
@@ -865,6 +924,7 @@ vl_api_snat_add_static_mapping_t_handler
 
   rv = snat_add_static_mapping(local_addr, external_addr, local_port,
                                external_port, vrf_id, mp->addr_only,
+                               ~0 /* sw_if_index */,
                                mp->is_add);
 
  send_reply:
@@ -1172,6 +1232,37 @@ static void *vl_api_snat_interface_addr_dump_t_print
   FINISH;
 }
 
+static void
+vl_api_snat_ipfix_enable_disable_t_handler
+(vl_api_snat_ipfix_enable_disable_t * mp)
+{
+  snat_main_t * sm = &snat_main;
+  vl_api_snat_ipfix_enable_disable_reply_t * rmp;
+  int rv = 0;
+
+  rv = snat_ipfix_logging_enable_disable(mp->enable,
+                                         clib_host_to_net_u32 (mp->domain_id),
+                                         clib_host_to_net_u16 (mp->src_port));
+
+  REPLY_MACRO (VL_API_SNAT_IPFIX_ENABLE_DISABLE_REPLY);
+}
+
+static void *vl_api_snat_ipfix_enable_disable_t_print
+(vl_api_snat_ipfix_enable_disable_t *mp, void * handle)
+{
+  u8 * s;
+
+  s = format (0, "SCRIPT: snat_ipfix_enable_disable ");
+  if (mp->domain_id)
+    s = format (s, "domain %d ", clib_net_to_host_u32 (mp->domain_id));
+  if (mp->src_port)
+    s = format (s, "src_port %d ", clib_net_to_host_u16 (mp->src_port));
+  if (!mp->enable)
+    s = format (s, "disable ");
+
+  FINISH;
+}
+
 /* List of message types that this plugin understands */
 #define foreach_snat_plugin_api_msg                                     \
 _(SNAT_ADD_ADDRESS_RANGE, snat_add_address_range)                       \
@@ -1185,7 +1276,8 @@ _(SNAT_INTERFACE_DUMP, snat_interface_dump)                             \
 _(SNAT_SET_WORKERS, snat_set_workers)                                   \
 _(SNAT_WORKER_DUMP, snat_worker_dump)                                   \
 _(SNAT_ADD_DEL_INTERFACE_ADDR, snat_add_del_interface_addr)             \
-_(SNAT_INTERFACE_ADDR_DUMP, snat_interface_addr_dump)
+_(SNAT_INTERFACE_ADDR_DUMP, snat_interface_addr_dump)                   \
+_(SNAT_IPFIX_ENABLE_DISABLE, snat_ipfix_enable_disable)
 
 /* Set up the API message handling tables */
 static clib_error_t *
@@ -1227,6 +1319,7 @@ static void plugin_custom_dump_configure (snat_main_t * sm)
   foreach_snat_plugin_api_msg;
 #undef _
 }
+
 
 static void
 snat_ip4_add_del_interface_address_cb (ip4_main_t * im,
@@ -1302,6 +1395,9 @@ static clib_error_t * snat_init (vlib_main_t * vm)
   cb4.function_opaque = 0;
 
   vec_add1 (im->add_del_interface_address_callbacks, cb4);
+
+  /* Init IPFIX logging */
+  snat_ipfix_logging_init(vm);
 
   return error;
 }
@@ -1420,6 +1516,7 @@ int snat_alloc_outside_address_and_port (snat_main_t * sm,
         }
     }
   /* Totally out of translations to use... */
+  snat_ipfix_logging_addresses_exhausted(0);
   return 1;
 }
 
@@ -1584,6 +1681,8 @@ add_static_mapping_command_fn (vlib_main_t * vm,
   u32 l_port = 0, e_port = 0, vrf_id = ~0;
   int is_add = 1;
   int addr_only = 1;
+  u32 sw_if_index = ~0;
+  vnet_main_t * vnm = vnet_get_main();
   int rv;
 
   /* Get a line of input. */
@@ -1603,6 +1702,14 @@ add_static_mapping_command_fn (vlib_main_t * vm,
       else if (unformat (line_input, "external %U", unformat_ip4_address,
                          &e_addr))
         ;
+      else if (unformat (line_input, "external %U %u",
+                         unformat_vnet_sw_interface, vnm, &sw_if_index,
+                         &e_port))
+        addr_only = 0;
+
+      else if (unformat (line_input, "external %U",
+                         unformat_vnet_sw_interface, vnm, &sw_if_index))
+        ;
       else if (unformat (line_input, "vrf %u", &vrf_id))
         ;
       else if (unformat (line_input, "del"))
@@ -1614,7 +1721,7 @@ add_static_mapping_command_fn (vlib_main_t * vm,
   unformat_free (line_input);
 
   rv = snat_add_static_mapping(l_addr, e_addr, (u16) l_port, (u16) e_port,
-                               vrf_id, addr_only, is_add);
+                               vrf_id, addr_only, sw_if_index, is_add);
 
   switch (rv)
     {
@@ -1717,6 +1824,58 @@ VLIB_CLI_COMMAND (set_workers_command, static) = {
   .function = set_workers_command_fn,
   .short_help =
     "set snat workers <workers-list>",
+};
+
+static clib_error_t *
+snat_ipfix_logging_enable_disable_command_fn (vlib_main_t * vm,
+                                              unformat_input_t * input,
+                                              vlib_cli_command_t * cmd)
+{
+  unformat_input_t _line_input, *line_input = &_line_input;
+  u32 domain_id = 0;
+  u32 src_port = 0;
+  u8 enable = 1;
+  int rv = 0;
+
+  /* Get a line of input. */
+  if (!unformat_user (input, unformat_line_input, line_input))
+    return 0;
+
+  while (unformat_check_input (line_input) != UNFORMAT_END_OF_INPUT)
+    {
+      if (unformat (line_input, "domain %d", &domain_id))
+        ;
+      else if (unformat (line_input, "src-port %d", &src_port))
+        ;
+      else if (unformat (line_input, "disable"))
+        enable = 0;
+      else
+        return clib_error_return (0, "unknown input '%U'",
+          format_unformat_error, input);
+     }
+  unformat_free (line_input);
+
+  rv = snat_ipfix_logging_enable_disable (enable, domain_id, (u16) src_port);
+
+  if (rv)
+    return clib_error_return (0, "ipfix logging enable failed");
+
+  return 0;
+}
+
+/*?
+ * @cliexpar
+ * @cliexstart{snat ipfix logging}
+ * To enable SNAT IPFIX logging use:
+ *  vpp# snat ipfix logging
+ * To set IPFIX exporter use:
+ *  vpp# set ipfix exporter collector 10.10.10.3 src 10.10.10.1
+ * @cliexend
+?*/
+VLIB_CLI_COMMAND (snat_ipfix_logging_enable_disable_command, static) = {
+  .path = "snat ipfix logging",
+  .function = snat_ipfix_logging_enable_disable_command_fn,
+  .short_help = "snat ipfix logging [domain <domain-id>] [src-port <port>] [disable]",
 };
 
 static clib_error_t *
@@ -1968,7 +2127,7 @@ show_snat_command_fn (vlib_main_t * vm,
             ({
               s = format (s, " %d", j);
             }));
-          vlib_cli_output (vm, "  %d busy ports:%v", ap->busy_ports, s);
+          vlib_cli_output (vm, "  %d busy ports:%s", ap->busy_ports, s);
         }
     }
 
@@ -1981,7 +2140,7 @@ show_snat_command_fn (vlib_main_t * vm,
             {
               vlib_worker_thread_t *w =
                 vlib_worker_threads + *worker + sm->first_worker_index;
-              vlib_cli_output (vm, "  %v", w->name);
+              vlib_cli_output (vm, "  %s", w->name);
             }
         }
     }
@@ -2032,7 +2191,7 @@ show_snat_command_fn (vlib_main_t * vm,
                 continue;
 
               vlib_worker_thread_t *w = vlib_worker_threads + j;
-              vlib_cli_output (vm, "Thread %d (%v at lcore %u):", j, w->name,
+              vlib_cli_output (vm, "Thread %d (%s at lcore %u):", j, w->name,
                                w->lcore_id);
               vlib_cli_output (vm, "  %d list pool elements",
                                pool_elts (tsm->list_pool));
@@ -2075,7 +2234,10 @@ snat_ip4_add_del_interface_address_cb (ip4_main_t * im,
                                        u32 is_delete)
 {
   snat_main_t *sm = &snat_main;
+  snat_static_map_resolve_t *rp;
+  u32 *indices_to_delete = 0;
   int i, j;
+  int rv;
 
   for (i = 0; i < vec_len(sm->auto_add_sw_if_indices); i++)
     {
@@ -2089,6 +2251,36 @@ snat_ip4_add_del_interface_address_cb (ip4_main_t * im,
                   return;
 
               snat_add_address (sm, address);
+              /* Scan static map resolution vector */
+              for (j = 0; j < vec_len (sm->to_resolve); j++)
+                {
+                  rp = sm->to_resolve + j;
+                  /* On this interface? */
+                  if (rp->sw_if_index == sw_if_index)
+                    {
+                      /* Add the static mapping */
+                      rv = snat_add_static_mapping (rp->l_addr,
+                                                    address[0],
+                                                    rp->l_port,
+                                                    rp->e_port,
+                                                    rp->vrf_id,
+                                                    rp->addr_only,
+                                                    ~0 /* sw_if_index */,
+                                                    rp->is_add);
+                      if (rv)
+                        clib_warning ("snat_add_static_mapping returned %d", 
+                                      rv);
+                      vec_add1 (indices_to_delete, j);
+                    }
+                }
+              /* If we resolved any of the outstanding static mappings */
+              if (vec_len(indices_to_delete))
+                {
+                  /* Delete them */
+                  for (j = vec_len(indices_to_delete)-1; j >= 0; j--)
+                    vec_delete(sm->to_resolve, 1, j);
+                  vec_free(indices_to_delete);
+                }
               return;
             }
           else

@@ -11,8 +11,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-WS_ROOT=$(CURDIR)
-BR=$(WS_ROOT)/build-root
+export WS_ROOT=$(CURDIR)
+export BR=$(WS_ROOT)/build-root
 CCACHE_DIR?=$(BR)/.ccache
 GDB?=gdb
 PLATFORM?=vpp
@@ -28,6 +28,12 @@ GDB_ARGS= -ex "handle SIGUSR1 noprint nostop"
 ifneq ($(shell uname),Darwin)
 OS_ID        = $(shell grep '^ID=' /etc/os-release | cut -f2- -d= | sed -e 's/\"//g')
 OS_VERSION_ID= $(shell grep '^VERSION_ID=' /etc/os-release | cut -f2- -d= | sed -e 's/\"//g')
+endif
+
+ifeq ($(OS_ID),ubuntu)
+PKG=deb
+else ifeq ($(OS_ID),centos)
+PKG=rpm
 endif
 
 DEB_DEPENDS  = curl build-essential autoconf automake bison libssl-dev ccache
@@ -84,6 +90,7 @@ help:
 	@echo " run-vat             - run vpp-api-test tool"
 	@echo " pkg-deb             - build DEB packages"
 	@echo " pkg-rpm             - build RPM packages"
+	@echo " dpdk-install-dev    - install DPDK development packages"
 	@echo " ctags               - (re)generate ctags database"
 	@echo " gtags               - (re)generate gtags database"
 	@echo " cscope              - (re)generate cscope database"
@@ -96,6 +103,7 @@ help:
 	@echo " test-wipe-doc       - wipe documentation for test framework"
 	@echo " test-cov            - generate code coverage report for test framework"
 	@echo " test-wipe-cov       - wipe code coverage report for test framework"
+	@echo " test-checkstyle     - check PEP8 compliance for test framework"
 	@echo ""
 	@echo "Make Arguments:"
 	@echo " V=[0|1]             - set build verbosity level"
@@ -202,18 +210,17 @@ wipe-release: $(BR)/.bootstrap.ok
 
 rebuild-release: wipe-release build-release
 
-VPP_PYTHON_PREFIX=$(BR)/python
+export VPP_PYTHON_PREFIX=$(BR)/python
 
 define test
 	$(if $(filter-out $(3),retest),make -C $(BR) PLATFORM=$(1) TAG=$(2) vpp-install,)
 	make -C test \
-	  BR=$(BR) \
 	  VPP_TEST_BUILD_DIR=$(BR)/build-$(2)-native \
 	  VPP_TEST_BIN=$(BR)/install-$(2)-native/vpp/bin/vpp \
 	  VPP_TEST_PLUGIN_PATH=$(BR)/install-$(2)-native/vpp/lib64/vpp_plugins \
 	  VPP_TEST_INSTALL_PATH=$(BR)/install-$(2)-native/ \
 	  LD_LIBRARY_PATH=$(BR)/install-$(2)-native/vpp/lib64/ \
-	  WS_ROOT=$(WS_ROOT) V=$(V) TEST=$(TEST) VPP_PYTHON_PREFIX=$(VPP_PYTHON_PREFIX) $(3)
+	  $(3)
 endef
 
 test: bootstrap
@@ -229,16 +236,19 @@ test-wipe:
 	@make -C test wipe
 
 test-doc:
-	@make -C test WS_ROOT=$(WS_ROOT) BR=$(BR) VPP_PYTHON_PREFIX=$(VPP_PYTHON_PREFIX) doc
+	@make -C test doc
 
 test-wipe-doc:
-	@make -C test wipe-doc BR=$(BR)
+	@make -C test wipe-doc
 
 test-cov: bootstrap
 	$(call test,vpp_lite,vpp_lite_gcov,cov)
 
 test-wipe-cov:
-	@make -C test wipe-cov BR=$(BR)
+	@make -C test wipe-cov
+
+test-checkstyle:
+	@make -C test checkstyle
 
 retest:
 	$(call test,vpp_lite,vpp_lite,retest)
@@ -292,6 +302,9 @@ pkg-deb:
 pkg-rpm: dist
 	$(call make,$(PLATFORM),install-rpm)
 
+dpdk-install-dev:
+	make -C dpdk install-$(PKG)
+
 ctags: ctags.files
 	@ctags --totals --tag-relative -L $<
 	@rm $<
@@ -316,7 +329,7 @@ fixstyle:
 export DOXY_DIR ?= $(WS_ROOT)/doxygen
 
 define make-doxy
-	@OS_ID="$(OS_ID)" WS_ROOT="$(WS_ROOT)" BR="$(BR)" make -C $(DOXY_DIR) $@
+	@OS_ID="$(OS_ID)" make -C $(DOXY_DIR) $@
 endef
 
 .PHONY: bootstrap-doxygen doxygen wipe-doxygen
@@ -337,25 +350,19 @@ define banner
 	@echo " "
 endef
 
-verify: install-dep $(BR)/.bootstrap.ok
+verify: install-dep $(BR)/.bootstrap.ok dpdk-install-dev
 	$(call banner,"Building for PLATFORM=vpp using gcc")
 	@make -C build-root PLATFORM=vpp TAG=vpp wipe-all install-packages
 	$(call banner,"Building for PLATFORM=vpp_lite using gcc")
 	@make -C build-root PLATFORM=vpp_lite TAG=vpp_lite wipe-all install-packages
-ifeq ($(OS_ID),ubuntu)
-ifeq ($(OS_VERSION_ID),16.04)
+ifeq ($(OS_ID)-$(OS_VERSION_ID),ubuntu-16.04)
 	$(call banner,"Installing dependencies")
 	@sudo -E apt-get update
 	@sudo -E apt-get $(CONFIRM) $(FORCE) install clang
 	$(call banner,"Building for PLATFORM=vpp using clang")
 	@make -C build-root CC=clang PLATFORM=vpp TAG=vpp_clang wipe-all install-packages
 endif
-	$(call banner,"Building deb packages")
-	@make pkg-deb
-endif
-ifeq ($(OS_ID),centos)
-	$(call banner,"Building rpm packages")
-	@make pkg-rpm
-endif
+	$(call banner,"Building $(PKG) packages")
+	@make pkg-$(PKG)
 
 

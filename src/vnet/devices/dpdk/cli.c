@@ -164,9 +164,9 @@ show_dpdk_buffer (vlib_main_t * vm, unformat_input_t * input,
   struct rte_mempool *rmp;
   int i;
 
-  for (i = 0; i < vec_len (vm->buffer_main->pktmbuf_pools); i++)
+  for (i = 0; i < vec_len (dpdk_main.pktmbuf_pools); i++)
     {
-      rmp = vm->buffer_main->pktmbuf_pools[i];
+      rmp = dpdk_main.pktmbuf_pools[i];
       if (rmp)
 	{
 	  unsigned count = rte_mempool_avail_count (rmp);
@@ -1276,6 +1276,26 @@ VLIB_CLI_COMMAND (cmd_show_dpdk_hqos_queue_stats, static) = {
   .path = "show dpdk hqos queue",
   .short_help = "show dpdk hqos queue <if-name> subport <subport> pipe <pipe> tc <tc> tc_q <tc_q>",
   .function = show_dpdk_hqos_queue_stats,
+};
+/* *INDENT-ON* */
+
+static clib_error_t *
+show_dpdk_version_command_fn (vlib_main_t * vm,
+			      unformat_input_t * input,
+			      vlib_cli_command_t * cmd)
+{
+#define _(a,b,c) vlib_cli_output (vm, "%-25s " b, a ":", c);
+  _("DPDK Version", "%s", rte_version ());
+  _("DPDK EAL init args", "%s", dpdk_config_main.eal_init_args_str);
+#undef _
+  return 0;
+}
+
+/* *INDENT-OFF* */
+VLIB_CLI_COMMAND (show_vpe_version_command, static) = {
+  .path = "show dpdk version",
+  .short_help = "show dpdk version information",
+  .function = show_dpdk_version_command_fn,
 };
 /* *INDENT-ON* */
 

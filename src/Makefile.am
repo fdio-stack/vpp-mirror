@@ -28,6 +28,14 @@ noinst_HEADERS =
 dist_bin_SCRIPTS =
 lib_LTLIBRARIES =
 BUILT_SOURCES =
+install-data-local:
+	@echo "Building vppctl command list..."
+	@DIR_SEARCH="$(srcdir)" ; \
+	DIR_EXCLUDE="examples" ; \
+	GREP_TIME=`time (grep -wIr "\.path = " $$DIR_SEARCH --exclude-dir=$$DIR_EXCLUDE \
+	| cut -d '"' -f2 | sort -u > $(srcdir)/scripts/vppctl-cmd-list) 2>&1` ; \
+	GREP_TIME=`echo $$GREP_TIME | awk '{print $$2}'` ; \
+	echo "Command list built, Time taken: $$GREP_TIME"
 
 ###############################################################################
 # DPDK
@@ -37,7 +45,7 @@ if WITH_DPDK
 if ENABLE_DPDK_SHARED
 DPDK_LD_FLAGS = -Wl,--whole-archive,-ldpdk,--no-whole-archive
 else
-DPDK_LD_FLAGS = -Wl,--whole-archive,-l:libdpdk.a,--no-whole-archive
+DPDK_LD_FLAGS = -Wl,--whole-archive,-l:libdpdk.a,--no-whole-archive,-lm,-ldl
 endif
 if WITH_DPDK_CRYPTO
 DPDK_LD_ADD = -L$(AESNI_MULTI_BUFFER_LIB_PATH) -lIPSec_MB

@@ -2326,12 +2326,16 @@ vhost_user_process (vlib_main_t * vm,
 			   sizeof (sun.sun_path) - 1);
 
 		  /* Avoid hanging VPP if the other end does not accept */
-		  fcntl(sockfd, F_SETFL, O_NONBLOCK);
+		  if (fcntl(sockfd, F_SETFL, O_NONBLOCK) < 0)
+                      clib_unix_warning ("fcntl");
+
 		  if (connect (sockfd, (struct sockaddr *) &sun,
 			       sizeof (struct sockaddr_un)) == 0)
 		    {
 		      /* Set the socket to blocking as it was before */
-		      fcntl(sockfd, F_SETFL, 0);
+                      if (fcntl(sockfd, F_SETFL, 0) < 0)
+                        clib_unix_warning ("fcntl2");
+
 		      vui->sock_errno = 0;
 		      template.file_descriptor = sockfd;
 		      template.private_data =
@@ -2429,9 +2433,6 @@ vhost_user_delete_if (vnet_main_t * vnm, vlib_main_t * vm, u32 sw_if_index)
   // Disable and reset interface
   vhost_user_term_if (vui);
 
-  // Back to pool
-  pool_put (vum->vhost_user_interfaces, vui);
-
   // Reset renumbered iface
   if (hwif->dev_instance <
       vec_len (vum->show_dev_instance_by_real_dev_instance))
@@ -2439,6 +2440,10 @@ vhost_user_delete_if (vnet_main_t * vnm, vlib_main_t * vm, u32 sw_if_index)
 
   // Delete ethernet interface
   ethernet_delete_interface (vnm, vui->hw_if_index);
+
+  // Back to pool
+  pool_put (vum->vhost_user_interfaces, vui);
+
   return rv;
 }
 
