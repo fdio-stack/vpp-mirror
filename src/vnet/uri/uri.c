@@ -1751,14 +1751,14 @@ static clib_error_t *
 session_manager_main_init (vlib_main_t * vm)
 {
   u32 num_threads;
-  vlib_thread_main_t *tm = &vlib_thread_main;
+  vlib_thread_main_t *vtm = vlib_get_thread_main ();
   session_manager_main_t * smm = &session_manager_main;
   int i;
 
   smm->vlib_main = vm;
   smm->vnet_main = vnet_get_main();
 
-  num_threads = 1 /* main thread */ + tm->n_eal_threads;
+  num_threads = 1 /* main thread */ + vtm->n_threads;
 
   if (num_threads < 1)
     return clib_error_return (0, "n_thread_stacks not set");

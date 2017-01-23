@@ -417,7 +417,7 @@ tcp_init (vlib_main_t * vm)
   ip_main_t * im = &ip_main;
   ip_protocol_info_t * pi;
   tcp_main_t *tm = vnet_get_tcp_main ();
-  vlib_thread_main_t *vtm = &vlib_thread_main;
+  vlib_thread_main_t *vtm = vlib_get_thread_main ();
   clib_error_t * error = 0;
   f64 log2 = .69314718055994530941;
   u32 num_threads;
@@ -454,7 +454,7 @@ tcp_init (vlib_main_t * vm)
    * Initialize data structures
    */
 
-  num_threads = 1 /* main thread */ + vtm->n_eal_threads;
+  num_threads = 1 /* main thread */ + vtm->n_threads;
   vec_validate (tm->connections, num_threads - 1);
 
   /* Initialize per worker thread tx buffers (used for control messages) */

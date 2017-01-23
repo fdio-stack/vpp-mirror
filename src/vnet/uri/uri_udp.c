@@ -192,9 +192,9 @@ static clib_error_t *
 uri_udp4_module_init (vlib_main_t * vm)
 {
   u32 num_threads;
-  vlib_thread_main_t *tm = &vlib_thread_main;
+  vlib_thread_main_t *tm = vlib_get_thread_main ();
 
-  num_threads = 1 /* main thread */ + tm->n_eal_threads;
+  num_threads = 1 /* main thread */ + tm->n_threads;
 
   uri_register_transport (SESSION_TYPE_IP4_UDP, &udp4_proto);
 
