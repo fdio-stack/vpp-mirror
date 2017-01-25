@@ -33,3 +33,7 @@ fi
 
 # to test connectivity do:
 # sudo ip netns exec vppns1 telnet 6.0.1.1 1234
+# to push traffic to the server
+# dd if=/dev/zero bs=1024K count=512 | nc 6.0.1.1
+# to listen for incoming connection from vpp
+# nc -l 1234

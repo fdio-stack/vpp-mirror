@@ -274,7 +274,7 @@ typedef struct _session_manager_main
   /** Unique segment name counter */
   u32 unique_segment_name_counter;
 
-  /* Stream server used by incoming connects */
+  /* Connection manager used by incoming connects */
   u32 connect_manager_index[SESSION_TYPE_N_TYPES];
 
   session_manager_t *session_managers;

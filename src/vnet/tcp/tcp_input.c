@@ -405,7 +405,6 @@ tcp_session_enqueue_data (tcp_connection_t *tc, vlib_buffer_t *b, u16 data_len)
       return TCP_ERROR_PURE_ACK;
     }
 
-
   s0 = stream_session_get (tc->c_s_index, tc->c_thread_index);
 
   written = stream_session_enqueue_data (s0, vlib_buffer_get_current (b),
@@ -531,11 +530,16 @@ tcp_segment_rcv (tcp_main_t *tm, tcp_connection_t *tc, vlib_buffer_t *b,
   /* Check if ACK can be delayed */
   if (tcp_can_delack (tc))
     {
+      /* Nothing to do for pure ACKs */
+      if (n_data_bytes == 0)
+        goto done;
+
       /* If connection has not been previously marked for delay ack
        * add it to the list and flag it */
       if (!tc->flags & TCP_CONN_DELACK)
         {
-          vec_add1 (tm->delack_connections, tc->c_c_index);
+          vec_add1 (tm->delack_connections[tc->c_thread_index],
+                    tc->c_c_index);
           tc->flags |= TCP_CONN_DELACK;
         }
     }
@@ -561,24 +565,24 @@ tcp_segment_rcv (tcp_main_t *tm, tcp_connection_t *tc, vlib_buffer_t *b,
 }
 
 void
-delack_timers_init (tcp_main_t *tm)
+delack_timers_init (tcp_main_t *tm, u32 thread_index)
 {
   tcp_connection_t *tc;
-  u32 my_thread_index = tm->vlib_main->cpu_index;
   u32 i, *conns;
+  tcp_timer_wheel_t *tw;
 
-  conns = tm->delack_connections;
+  tw = &tm->timer_wheels[thread_index];
+  conns = tm->delack_connections[thread_index];
   for (i = 0; i < vec_len(conns); i++)
     {
-      tc = pool_elt_at_index (tm->connections[my_thread_index], conns[i]);
+      tc = pool_elt_at_index (tm->connections[thread_index], conns[i]);
       ASSERT(0 != tc);
 
-      tc->timers[TCP_TIMER_DELACK] = tcp_timer_start (&tm->timer_wheel,
-                                                      conns[i],
+      tc->timers[TCP_TIMER_DELACK] = tcp_timer_start (tw, conns[i],
                                                       TCP_TIMER_DELACK,
                                                       TCP_DELACK_TIME);
     }
-  vec_reset_length (tm->delack_connections);
+  vec_reset_length (tm->delack_connections[thread_index]);
 }
 
 always_inline uword
@@ -694,7 +698,7 @@ tcp46_established_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
                                      TCP_ERROR_EVENT_FIFO_FULL, errors);
     }
 
-  delack_timers_init (tm);
+  delack_timers_init (tm, my_thread_index);
 
   return from_frame->n_vectors;
 }
@@ -902,21 +906,25 @@ tcp46_syn_sent_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
           new_tc0->c_thread_index = my_thread_index;
 
           /* Stop connection establishment timer and cleanup syn_sent connection */
-          tcp_timer_stop (&tm->timer_wheel, new_tc0->timers[TCP_TIMER_KEEP]);
+          tcp_timer_stop (&tm->timer_wheels[my_thread_index],
+                          new_tc0->timers[TCP_TIMER_KEEP]);
 
           /* XXX lock */
           pool_put (tm->half_open_connections, tc0);
 
-          /* Parse options */
-          tcp_options_parse (tcp0, &new_tc0->opt);
-          new_tc0->tsval_recent = new_tc0->opt.tsval;
-          new_tc0->tsval_recent_age = tcp_time_now ();
-
           /* rcv_nxt is incremented when data segment is read */
-          new_tc0->rcv_nxt = seq0;
+          new_tc0->rcv_nxt = vnet_buffer (b0)->tcp.seq_end;
           new_tc0->irs = seq0;
 
-          if (new_tc0->opt.flags & TCP_OPTS_FLAG_WSCALE)
+          /* Parse options */
+          tcp_options_parse (tcp0, &new_tc0->opt);
+          if (tcp_opts_tstamp(&new_tc0->opt))
+            {
+              new_tc0->tsval_recent = new_tc0->opt.tsval;
+              new_tc0->tsval_recent_age = tcp_time_now ();
+            }
+
+          if (tcp_opts_wscale (&new_tc0->opt))
             new_tc0->snd_wscale = new_tc0->opt.wscale;
 
           new_tc0->snd_wnd = clib_net_to_host_u32 (tcp0->window)
@@ -958,7 +966,17 @@ tcp46_syn_sent_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
             }
 
           /* Read data, if any */
-          error0 = tcp_segment_rcv (tm, new_tc0, b0, n_data_bytes0, &next0);
+          if (n_data_bytes0)
+            {
+              error0 = tcp_segment_rcv (tm, new_tc0, b0, n_data_bytes0, &next0);
+              if (error0 == TCP_ERROR_PURE_ACK)
+                error0 = TCP_ERROR_SYN_ACKS_RCVD;
+            }
+          else
+            {
+              tcp_make_ack (new_tc0, b0);
+              next0 = tcp_next_output (new_tc0->c_is_ip4);
+            }
 
          drop:
 
@@ -1380,7 +1398,7 @@ tcp46_listen_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
           ip4_header_t * ip40;
           ip6_header_t * ip60;
           tcp_connection_t *child0;
-          u32 error0 = TCP_ERROR_NO_LISTENER, next0 = TCP_LISTEN_NEXT_DROP;
+          u32 error0 = TCP_ERROR_SYNS_RCVD, next0 = TCP_LISTEN_NEXT_DROP;
 
           bi0 = from[0];
           to_next[0] = bi0;
@@ -1759,10 +1777,10 @@ VLIB_REGISTER_NODE (tcp6_input_node) = {
 VLIB_NODE_FUNCTION_MULTIARCH (tcp6_input_node, tcp6_input)
 
 void
-tcp_update_time (f64 now)
+tcp_update_time (f64 now, u32 thread_index)
 {
   tcp_main_t *tm = vnet_get_tcp_main ();
-  tcp_timer_expire_timers (&tm->timer_wheel, now);
+  tcp_timer_expire_timers (&tm->timer_wheels[thread_index], now);
 }
 
 static void

@@ -216,6 +216,7 @@ tcp_connection_open (ip46_address_t *rmt_addr, u16 rmt_port, u8 is_ip4)
   u32 fei, sw_if_index;
   ip46_address_t lcl_addr;
   u16 lcl_port;
+  tcp_timer_wheel_t *tw;
 
   /*
    * Find the local address and allocate port
@@ -275,8 +276,8 @@ tcp_connection_open (ip46_address_t *rmt_addr, u16 rmt_port, u8 is_ip4)
   tc->state = TCP_CONNECTION_STATE_SYN_SENT;
 
   /* Set the connection establishment timer */
-  tc->timers[TCP_TIMER_KEEP] = tcp_timer_start (&tm->timer_wheel,
-                                                tc->c_c_index,
+  tw = &tm->timer_wheels[tc->c_thread_index];
+  tc->timers[TCP_TIMER_KEEP] = tcp_timer_start (tw, tc->c_c_index,
                                                 TCP_TIMER_KEEP,
                                                 TCP_ESTABLISH_TIME);
   return tc->c_c_index;
@@ -411,6 +412,17 @@ tcp_expired_timers_dispatch (u32 *expired_timers)
     }
 }
 
+void
+tcp_initialize_timer_wheels (tcp_main_t *tm)
+{
+  tcp_timer_wheel_t *tw;
+  vec_foreach (tw, tm->timer_wheels)
+  {
+    tcp_timer_wheel_init (tw, tcp_expired_timers_dispatch);
+    tw->last_run_time = vlib_time_now (tm->vlib_main);
+  }
+}
+
 clib_error_t *
 tcp_init (vlib_main_t * vm)
 {
@@ -460,9 +472,11 @@ tcp_init (vlib_main_t * vm)
   /* Initialize per worker thread tx buffers (used for control messages) */
   vec_validate (tm->tx_buffers, num_threads - 1);
 
-  /* Initialize timer wheel */
-  tcp_timer_wheel_init (&tm->timer_wheel, tcp_expired_timers_dispatch);
-  tm->timer_wheel.last_run_time = vlib_time_now (vm);
+  /* Initialize timer wheels */
+  vec_validate (tm->timer_wheels, num_threads - 1);
+  tcp_initialize_timer_wheels (tm);
+
+  vec_validate (tm->delack_connections, num_threads - 1);
 
   /* Initialize clocks per tick for TCP timestamp. Used to compute
    * monotonically increasing timestamps. */

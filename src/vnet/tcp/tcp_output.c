@@ -741,8 +741,8 @@ tcp46_output_inline (vlib_main_t * vm,
             }
 
           /* If an ACK  */
-          if (PREDICT_FALSE(vnet_buffer (b0)->tcp.flags & TCP_BUF_FLAG_ACK))
-            {
+//          if (vnet_buffer (b0)->tcp.flags & TCP_BUF_FLAG_ACK)
+//            {
               tc0->rcv_las = tc0->rcv_nxt;
 
               /* Stop DELACK timer and fix flags */
@@ -751,10 +751,10 @@ tcp46_output_inline (vlib_main_t * vm,
                   | TCP_CONN_BURSTACK);
               if (handle != TCP_TIMER_HANDLE_INVALID)
                 {
-                  tcp_timer_stop (&tm->timer_wheel, handle);
+                  tcp_timer_stop (&tm->timer_wheels[my_thread_index], handle);
                   tc0->timers[TCP_TIMER_DELACK] = TCP_TIMER_HANDLE_INVALID;
                 }
-            }
+//            }
 
           /* set fib index to default and lookup node */
           /* XXX network virtualization (vrf/vni)*/

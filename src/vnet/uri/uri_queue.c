@@ -129,8 +129,9 @@ session_fifo_rx (vlib_main_t *vm, vlib_node_runtime_t *node,
               vm, &smm->tx_buffers[my_thread_index][n_bufs],
               VLIB_FRAME_SIZE);
 
-          /* buffer shortage */
-          if (PREDICT_FALSE(n_bufs < VLIB_FRAME_SIZE))
+          /* buffer shortage
+           * XXX 0.9 because when debugging we might not get a full frame */
+          if (PREDICT_FALSE(n_bufs < 0.9 * VLIB_FRAME_SIZE))
             {
               /* Keep track of how much we've dequeued and exit */
               e0->enqueue_length = len_to_snd0;
@@ -139,6 +140,8 @@ session_fifo_rx (vlib_main_t *vm, vlib_node_runtime_t *node,
 
           _vec_len (smm->tx_buffers[my_thread_index]) = n_bufs;
         }
+
+      /* TODO check tx window is not full */
 
       vlib_get_next_frame(vm, node, next_index, to_next, n_left_to_next);
       while (len_to_snd0 && n_left_to_next)
@@ -247,7 +250,7 @@ uri_queue_node_fn (vlib_main_t * vm, vlib_node_runtime_t * node,
   /*
    *  Update TCP time
    */
-  tcp_update_time (vlib_time_now (vm));
+  tcp_update_time (vlib_time_now (vm), my_thread_index);
 
   /*
    * Get vpp queue events
@@ -307,7 +310,7 @@ uri_queue_node_fn (vlib_main_t * vm, vlib_node_runtime_t * node,
         {
         case FIFO_EVENT_SERVER_TX:
           /* Spray packets in per session type frames, since they go to
-           * different nodes, but always try to fill the frames */
+           * different nodes */
           rv = session_fifo_rx (vm, node, smm, e0, s0, my_thread_index,
                                 &n_tx_packets);
           if (rv < 0)

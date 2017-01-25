@@ -103,7 +103,7 @@ typedef enum _tcp_connection_flag
 #define TCP_ESTABLISH_TIME      750     /* 75s */
 
 void
-tcp_update_time (f64 now);
+tcp_update_time (f64 now, u32 thread_index);
 
 /** TCP buffer flags */
 #define foreach_tcp_buf_flag                            \
@@ -226,11 +226,11 @@ typedef struct _tcp_main
   /** per-worker tx buffer free lists */
   u32 **tx_buffers;
 
-  /* Timer wheel for connections timers */
-  tcp_timer_wheel_t timer_wheel;
+  /* Per worker-thread timer wheel for connections timers */
+  tcp_timer_wheel_t *timer_wheels;
 
-  /* Convenience vector of connections to DELACK */
-  u32 *delack_connections;
+  /* Convenience per worker-thread vector of connections to DELACK */
+  u32 **delack_connections;
 
   /* Pool of half-open connections on which we've sent a SYN */
   tcp_connection_t *half_open_connections;
