@@ -351,8 +351,11 @@ stream_session_get (u64 si, u32 thread_index)
 }
 
 int
-stream_session_enqueue_data (stream_session_t *s0, u8 *data, u16 len,
+stream_session_enqueue_data (transport_connection_t *tc, u8 *data, u16 len,
                              u8 queue_event);
+u32
+stream_session_peek_bytes (transport_connection_t *tc, u8 *buffer, u32 offset,
+                           u32 max_bytes);
 
 int
 stream_session_enqueue_notify (stream_session_t *s, u8 block);

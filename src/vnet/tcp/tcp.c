@@ -91,14 +91,29 @@ tcp_uri_session_get_listener (u32 listener_index)
   return &tc->connection;
 }
 
+/**
+ * Actively close a connection
+ */
 void
 tcp_connection_close (tcp_main_t *tm, tcp_connection_t *tc)
 {
   u32 tepi;
   transport_endpoint_t *tep;
 
-  /* Send FIN */
-  tcp_send_fin (tc);
+  /* Send FIN if needed */
+  if (tc->state == TCP_CONNECTION_STATE_ESTABLISHED
+      || tc->state == TCP_CONNECTION_STATE_SYN_RCVD
+      || TCP_CONNECTION_STATE_CLOSE_WAIT)
+    tcp_send_fin (tc);
+
+  /* Switch state */
+  if (tc->state == TCP_CONNECTION_STATE_ESTABLISHED
+      || tc->state == TCP_CONNECTION_STATE_SYN_RCVD)
+    tc->state = TCP_CONNECTION_STATE_FIN_WAIT_1;
+  else if (tc->state == TCP_CONNECTION_STATE_SYN_SENT)
+    tc->state = TCP_CONNECTION_STATE_CLOSED;
+  else if (tc->state == TCP_CONNECTION_STATE_CLOSE_WAIT)
+    tc->state = TCP_CONNECTION_STATE_LAST_ACK;
 
   /* Half-close connections are not supported XXX */
 
@@ -118,6 +133,15 @@ tcp_connection_close (tcp_main_t *tm, tcp_connection_t *tc)
 
   /* Deallocate connection */
   pool_put (tm->connections[tc->c_thread_index], tc);
+}
+
+/**
+ * Close a connection due to an error (e.g., too many retransmits)
+ */
+void
+tcp_connection_drop (tcp_main_t *tm, tcp_connection_t *tc)
+{
+  clib_warning ("TODO");
 }
 
 void
@@ -207,6 +231,20 @@ tcp_allocate_local_port (tcp_main_t *tm, ip46_address_t *ip)
   return -1;
 }
 
+void
+tcp_timers_init (tcp_connection_t *tc)
+{
+  int i;
+
+  /* Set all to invalid */
+  for (i = 0; i < TCP_N_TIMERS; i++)
+    {
+      tc->timers[i] = TCP_TIMER_HANDLE_INVALID;
+    }
+
+  tc->rto = TCP_RTO_INIT;
+}
+
 int
 tcp_connection_open (ip46_address_t *rmt_addr, u16 rmt_port, u8 is_ip4)
 {
@@ -216,7 +254,6 @@ tcp_connection_open (ip46_address_t *rmt_addr, u16 rmt_port, u8 is_ip4)
   u32 fei, sw_if_index;
   ip46_address_t lcl_addr;
   u16 lcl_port;
-  tcp_timer_wheel_t *tw;
 
   /*
    * Find the local address and allocate port
@@ -271,15 +308,12 @@ tcp_connection_open (ip46_address_t *rmt_addr, u16 rmt_port, u8 is_ip4)
   tc->c_c_index = tc - tm->half_open_connections;
   tc->c_is_ip4 = is_ip4;
 
+  tcp_timers_init (tc);
+
   tcp_send_syn (tc);
 
   tc->state = TCP_CONNECTION_STATE_SYN_SENT;
 
-  /* Set the connection establishment timer */
-  tw = &tm->timer_wheels[tc->c_thread_index];
-  tc->timers[TCP_TIMER_KEEP] = tcp_timer_start (tw, tc->c_c_index,
-                                                TCP_TIMER_KEEP,
-                                                TCP_ESTABLISH_TIME);
   return tc->c_c_index;
 }
 
@@ -392,8 +426,17 @@ tcp_timer_keep_handler (u32 conn_index)
     }
 }
 
-static timer_expiration_handler timer_expiration_handlers[TCP_N_TIMERS] =
-  { 0, timer_delack_handler, 0, tcp_timer_keep_handler, 0 };
+/* *INDENT-OFF* */
+static timer_expiration_handler *timer_expiration_handlers[TCP_N_TIMERS] =
+{
+    tcp_timer_retransmit_handler,
+    tcp_timer_delack_handler,
+    0,
+    tcp_timer_keep_handler,
+    0,
+    tcp_timer_retransmit_syn_handler
+};
+/* *INDENT-ON* */
 
 static void
 tcp_expired_timers_dispatch (u32 *expired_timers)
@@ -436,7 +479,7 @@ tcp_init (vlib_main_t * vm)
 
   tm->vlib_main = vm;
   tm->vnet_main = vnet_get_main ();
-  tm->ss_main = vnet_get_session_manager_main ();
+  tm->sm_main = vnet_get_session_manager_main ();
 
   if ((error = vlib_call_init_function(vm, ip_main_init)))
     return error;

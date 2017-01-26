@@ -774,7 +774,7 @@ stream_session_create_i (session_manager_main_t *smm, application_t *app,
  * event but on request can queue notification events for later delivery by
  * calling stream_server_flush_enqueue_events().
  *
- * @param s Stream session which is to be enqueued data
+ * @param tc Transport connection which is to be enqueued data
  * @param data Data to be enqueued
  * @param len Length of data to be enqueued
  * @param queue_event Flag to indicate if peer is to be notified or if event
@@ -783,10 +783,13 @@ stream_session_create_i (session_manager_main_t *smm, application_t *app,
  * @return Number of bytes enqueued or a negative value if enqueueing failed.
  */
 int
-stream_session_enqueue_data (stream_session_t *s, u8 *data, u16 len,
+stream_session_enqueue_data (transport_connection_t *tc, u8 *data, u16 len,
                              u8 queue_event)
 {
+  stream_session_t *s;
   int enqueued;
+
+  s = stream_session_get (tc->s_index, tc->thread_index);
 
   /* Make sure there's enough space left. We might've filled the pipes */
   if (PREDICT_FALSE(len > svm_fifo_max_enqueue (s->server_rx_fifo)))
@@ -826,6 +829,14 @@ stream_session_no_space (transport_connection_t *tc, u32 thread_index, u16 data_
     return 1;
 
   return 0;
+}
+
+u32
+stream_session_peek_bytes (transport_connection_t *tc, u8 *buffer, u32 offset,
+                           u32 max_bytes)
+{
+  stream_session_t *s = stream_session_get (tc->c_index, tc->thread_index);
+  return svm_fifo_peek (s->server_tx_fifo, s->pid, offset, max_bytes, buffer);
 }
 
 /**

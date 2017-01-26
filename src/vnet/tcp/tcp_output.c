@@ -79,10 +79,11 @@ tcp_window_compute_scale (u32 available_space)
 {
   u8 wnd_scale = 0;
   while (wnd_scale < TCP_MAX_WND_SCALE
-      && (available_space >> wnd_scale) > TCP_MAX_WND)
+      && (available_space >> wnd_scale) > TCP_WND_MAX)
     wnd_scale++;
   return wnd_scale;
 }
+
 /**
  * Compute initial window and scale factor. As per RFC1323, window field in
  * SYN and SYN-ACK segments is never scaled.
@@ -93,24 +94,34 @@ tcp_initial_window_to_advertise (tcp_connection_t *tc)
   stream_session_t *s;
   u32 available_space;
 
+  /* Initial wnd for SYN. Fifos are not allocated yet.
+   * Use some predefined value */
+  if (tc->state != TCP_CONNECTION_STATE_SYN_RCVD)
+    {
+      return 16 << 10;
+    }
+
   s = stream_session_get (tc->c_s_index, tc->c_thread_index);
 
   /* XXX Assuming here that we got max fifo size */
   available_space = svm_fifo_max_enqueue (s->server_rx_fifo);
   tc->rcv_wscale = tcp_window_compute_scale (available_space);
-  tc->rcv_wnd = clib_min (available_space, TCP_MAX_WND << tc->rcv_wscale);
+  tc->rcv_wnd = clib_min (available_space, TCP_WND_MAX << tc->rcv_wscale);
 
-  return clib_min (tc->rcv_wnd, TCP_MAX_WND);
+  return clib_min (tc->rcv_wnd, TCP_WND_MAX);
 }
 
 /**
  * Compute and return window to advertise, scaled as per RFC1323
  */
 u32
-tcp_window_to_advertise (tcp_connection_t *tc)
+tcp_window_to_advertise (tcp_connection_t *tc, tcp_state_t state)
 {
   stream_session_t *s;
   u32 available_space, wnd, scaled_space;
+
+  if (state != TCP_CONNECTION_STATE_ESTABLISHED)
+    return tcp_initial_window_to_advertise (tc);
 
   s = stream_session_get (tc->c_s_index, tc->c_thread_index);
 
@@ -119,10 +130,10 @@ tcp_window_to_advertise (tcp_connection_t *tc)
 
   /* Need to update scale */
   if (PREDICT_FALSE((scaled_space == 0 && available_space != 0))
-      || (scaled_space >= TCP_MAX_WND))
+      || (scaled_space >= TCP_WND_MAX))
     tc->rcv_wscale = tcp_window_compute_scale (available_space);
 
-  wnd = clib_min (available_space, TCP_MAX_WND << tc->rcv_wscale);
+  wnd = clib_min (available_space, TCP_WND_MAX << tc->rcv_wscale);
   tc->rcv_wnd = wnd;
 
   return wnd >> tc->rcv_wscale;
@@ -317,6 +328,25 @@ tcp_make_established_options (tcp_connection_t *tc, tcp_options_t *opts)
   return len;
 }
 
+always_inline int
+tcp_make_options (tcp_connection_t *tc, tcp_options_t *opts, tcp_state_t state)
+{
+  switch (state)
+    {
+    case TCP_CONNECTION_STATE_ESTABLISHED:
+    case TCP_CONNECTION_STATE_FIN_WAIT_1:
+      return tcp_make_established_options (tc, opts);
+    case TCP_CONNECTION_STATE_SYN_RCVD:
+      return tcp_make_synack_options (tc, opts);
+    case TCP_CONNECTION_STATE_SYN_SENT:
+      return tcp_make_syn_options (opts,
+                                   tcp_initial_window_to_advertise (tc));
+    default:
+      clib_warning ("Not handled!");
+      return 0;
+    }
+}
+
 #define tcp_get_free_buffer_index(tm, bidx)                             \
 do {                                                                    \
   u32 *my_tx_buffers, n_free_buffers;                                   \
@@ -370,7 +400,7 @@ tcp_make_ack (tcp_connection_t *tc, vlib_buffer_t *b)
   /* leave enough space for headers */
   vlib_buffer_make_headroom (b, MAX_HDRS_LEN);
 
-  wnd = tcp_window_to_advertise (tc);
+  wnd = tcp_window_to_advertise (tc, TCP_CONNECTION_STATE_ESTABLISHED);
 
   /* Make and write options */
   tcp_opts_len = tcp_make_established_options (tc, snd_opts);
@@ -497,7 +527,7 @@ tcp_send_reset (vlib_buffer_t *pkt, u8 is_ip4)
     {
       ip4_header_t * ih, *pkt_ih;
 
-      pkt_ih = vlib_buffer_get_current (b);
+      pkt_ih = (ip4_header_t *) (pkt_th - 1);
 
       ASSERT((pkt_ih->ip_version_and_header_length & 0xF0) == 0x40);
 
@@ -510,7 +540,7 @@ tcp_send_reset (vlib_buffer_t *pkt, u8 is_ip4)
       ip6_header_t * ih, *pkt_ih;
       int bogus = ~0;
 
-      pkt_ih = vlib_buffer_get_current (b);
+      pkt_ih = (ip6_header_t *) (pkt_th - 1);
 
       ASSERT((pkt_ih->ip_version_traffic_class_and_flow_label & 0xF0) == 0x60);
       ih = pkt_push_ipv6 (vm, b, &pkt_ih->dst_address, &pkt_ih->dst_address,
@@ -522,8 +552,37 @@ tcp_send_reset (vlib_buffer_t *pkt, u8 is_ip4)
   tcp_enqueue_to_ip_lookup (vm, b, bi, is_ip4);
 }
 
+void
+tcp_push_ip_hdr (tcp_main_t *tm, tcp_connection_t *tc, vlib_buffer_t *b)
+{
+  tcp_header_t *th = vlib_buffer_get_current (b);
+
+  if (tc->c_is_ip4)
+    {
+      ip4_header_t * ih;
+      ih = pkt_push_ipv4 (tm->vlib_main, b, &tc->c_lcl_ip4, &tc->c_rmt_ip4,
+                          IP_PROTOCOL_TCP);
+      th->checksum = ip4_tcp_udp_compute_checksum (tm->vlib_main, b, ih);
+    }
+  else
+    {
+      ip6_header_t * ih;
+      int bogus = ~0;
+
+      ih = pkt_push_ipv6 (tm->vlib_main, b, &tc->c_lcl_ip6, &tc->c_rmt_ip6,
+                          IP_PROTOCOL_TCP);
+      th->checksum = ip6_tcp_udp_icmp_compute_checksum (tm->vlib_main, b, ih,
+                                                        &bogus);
+      ASSERT(!bogus);
+    }
+}
+
 /**
  *  Send SYN
+ *
+ *  Builds a SYN packet for a half-open connection and sends it to ipx_lookup.
+ *  The packet is not forwarded through tcpx_output to avoid doing lookups
+ *  in the half_open pool.
  */
 void
 tcp_send_syn (tcp_connection_t *tc)
@@ -549,10 +608,9 @@ tcp_send_syn (tcp_connection_t *tc)
 
   tc->iss = random_u32 (&time_now);
   tc->snd_una = tc->iss;
-  tc->snd_nxt = tc->iss + 1;
+  tc->snd_una_max = tc->snd_nxt = tc->iss + 1;
 
-  /* fifos are not allocated yet. Use some predefined value */
-  initial_wnd = 16 << 10;
+  initial_wnd = tcp_initial_window_to_advertise(tc);
 
   /* Make and write options */
   memset (&snd_opts, 0, sizeof (snd_opts));
@@ -565,24 +623,19 @@ tcp_send_syn (tcp_connection_t *tc)
 
   tcp_options_write ((u8 *)(th + 1), &snd_opts);
 
-  if (tc->c_is_ip4)
-    {
-      ip4_header_t * ih;
-      ih = pkt_push_ipv4 (vm, b, &tc->c_lcl_ip4, &tc->c_rmt_ip4,
-                          IP_PROTOCOL_TCP);
-      th->checksum = ip4_tcp_udp_compute_checksum (vm, b, ih);
-    }
-  else
-    {
-      ip6_header_t * ih;
-      int bogus = ~0;
+  /* Measure RTT with this */
+  tc->rtt_ts = tcp_time_now ();
+  tc->rtt_seq = tc->snd_nxt;
 
-      ih = pkt_push_ipv6 (vm, b, &tc->c_lcl_ip6, &tc->c_rmt_ip6,
-                          IP_PROTOCOL_TCP);
-      th->checksum = ip6_tcp_udp_icmp_compute_checksum (vm, b, ih, &bogus);
-      ASSERT(!bogus);
-    }
+  /* Start retransmit trimer  */
+  tcp_timer_set (tm, tc, TCP_TIMER_RETRANSMIT_SYN,
+                 tc->rto * TCP_TO_TIMER_TICK);
+  tc->rto_boff = 0;
 
+  /* Set the connection establishment timer */
+  tcp_timer_set (tm, tc, TCP_TIMER_KEEP, TCP_ESTABLISH_TIME);
+
+  tcp_push_ip_hdr (tm, tc, b);
   tcp_enqueue_to_ip_lookup (vm, b, bi, tc->c_is_ip4);
 }
 
@@ -633,18 +686,74 @@ tcp_send_fin (tcp_connection_t *tc)
   tcp_enqueue_to_output (vm, b, bi, tc->c_is_ip4);
 }
 
+always_inline u8
+tcp_make_state_flags (tcp_state_t next_state)
+{
+  switch (next_state)
+    {
+    case TCP_CONNECTION_STATE_ESTABLISHED:
+      return TCP_FLAG_ACK;
+    case TCP_CONNECTION_STATE_SYN_RCVD:
+      return TCP_FLAG_SYN | TCP_FLAG_ACK;
+    case TCP_CONNECTION_STATE_SYN_SENT:
+      return TCP_FLAG_SYN;
+    case TCP_CONNECTION_STATE_LAST_ACK:
+    case TCP_CONNECTION_STATE_FIN_WAIT_1:
+      return TCP_FLAG_FIN;
+    default:
+      clib_warning("Shouldn't be here!");
+    }
+  return 0;
+}
+/**
+ * Push TCP header and update connection variables
+ */
+static void
+tcp_push_hdr_i (tcp_connection_t *tc, vlib_buffer_t *b, tcp_state_t next_state)
+{
+  u32 advertise_wnd, data_len;
+  u8 tcp_opts_len, tcp_hdr_opts_len, opts_write_len, flags;
+  tcp_options_t _snd_opts, *snd_opts = &_snd_opts;
+  tcp_header_t *th;
+
+  data_len = b->current_length;
+  vnet_buffer (b)->tcp.flags = 0;
+
+  /* Make and write options */
+  memset (snd_opts, 0, sizeof (*snd_opts));
+  tcp_opts_len = tcp_make_options (tc, snd_opts, next_state);
+  tcp_hdr_opts_len = tcp_opts_len + sizeof (tcp_header_t);
+
+  /* Get rcv window to advertise */
+  advertise_wnd = tcp_window_to_advertise (tc, next_state);
+  flags = tcp_make_state_flags (next_state);
+
+  /* Push header and options */
+  th = pkt_push_tcp (b, tc->c_lcl_port, tc->c_rmt_port, tc->snd_nxt,
+                     tc->rcv_nxt, tcp_hdr_opts_len, flags, advertise_wnd);
+
+  opts_write_len = tcp_options_write ((u8 *)(th + 1), snd_opts);
+
+  ASSERT (opts_write_len == tcp_opts_len);
+
+  /* Tag the buffer with the connection index  */
+  vnet_buffer (b)->tcp.connection_index = tc->c_c_index;
+
+  tc->snd_nxt += data_len;
+}
 
 /* Send delayed ACK when timer expires */
 void
-timer_delack_handler (u32 index)
+tcp_timer_delack_handler (u32 index)
 {
   tcp_main_t *tm = vnet_get_tcp_main ();
   vlib_main_t *vm = tm->vlib_main;
+  u32 thread_index = os_get_cpu_number ();
   tcp_connection_t *tc;
   vlib_buffer_t *b;
   u32 bi;
 
-  tc = tcp_connection_get (index, vm->cpu_index);
+  tc = tcp_connection_get (index, thread_index);
 
   /* Get buffer */
   tcp_get_free_buffer_index (tm, &bi);
@@ -658,6 +767,99 @@ timer_delack_handler (u32 index)
 
   tcp_enqueue_to_output (vm, b, bi, tc->c_is_ip4);
 }
+
+static void
+tcp_timer_retransmit_handler_i (u32 index, u8 is_syn)
+{
+  tcp_main_t *tm = vnet_get_tcp_main ();
+  vlib_main_t *vm = tm->vlib_main;
+  u32 thread_index = os_get_cpu_number ();
+  tcp_connection_t *tc;
+  vlib_buffer_t *b;
+  u32 bi, max_bytes, n_bytes;
+
+  if (is_syn)
+    {
+      tc = tcp_half_open_connection_get (index);
+    }
+  else
+    {
+      tc = tcp_connection_get (index, thread_index);
+    }
+
+  /* Increment RTO backoff (also equal to number of retries) */
+  tc->rto_boff += 1;
+
+  /* Go back to first un-acked byte */
+  tc->snd_nxt = tc->snd_una;
+
+  /* Get buffer */
+  tcp_get_free_buffer_index (tm, &bi);
+  b = vlib_get_buffer (vm, bi);
+  vlib_buffer_make_headroom (b, MAX_HDRS_LEN);
+
+  if (tc->state == TCP_CONNECTION_STATE_ESTABLISHED)
+    {
+      /* Exponential backoff */
+      tc->rto = clib_min (tc->rto << 1, TCP_RTO_MAX);
+
+      /* Figure out how many bytes we can send */
+      max_bytes = tcp_snd_mss (tc);
+      if (max_bytes > tc->snd_wnd)
+        max_bytes = tc->snd_wnd;
+
+      if (max_bytes != 0)
+        {
+          n_bytes = stream_session_peek_bytes (&tc->connection,
+                                               vlib_buffer_get_current (b),
+                                               0 /* no offset */, max_bytes);
+          ASSERT (n_bytes != 0);
+        }
+      else
+        {
+          clib_warning("bad, no window");
+        }
+    }
+  else
+    {
+      /* Retransmit for SYN/SYNACK */
+      ASSERT(tc->state == TCP_CONNECTION_STATE_SYN_RCVD
+              || tc->state == TCP_CONNECTION_STATE_SYN_SENT);
+
+      /* Try without increasing RTO a number of times. If this fails,
+       * start growing RTO exponentially */
+      if (tc->rto_boff > TCP_RTO_SYN_RETRIES)
+        tc->rto = clib_min (tc->rto << 1, TCP_RTO_MAX);
+    }
+
+  tcp_push_hdr_i (tc, b, tc->state);
+  if (is_syn && tc->state == TCP_CONNECTION_STATE_SYN_SENT)
+    {
+      /* This goes straight to ipx_lookup */
+      tcp_push_ip_hdr (tm, tc, b);
+      tcp_enqueue_to_ip_lookup (vm, b, bi, tc->c_is_ip4);
+
+      /* Re-enable retransmit timer */
+      tcp_timer_set (tm, tc, TCP_TIMER_RETRANSMIT_SYN, tc->rto * TCP_TO_TIMER_TICK);
+    }
+  else
+    {
+      tcp_enqueue_to_output (vm, b, bi, tc->c_is_ip4);
+    }
+}
+
+void
+tcp_timer_retransmit_handler (u32 index)
+{
+  tcp_timer_retransmit_handler_i (index, 0);
+}
+
+void
+tcp_timer_retransmit_syn_handler (u32 index)
+{
+  tcp_timer_retransmit_handler_i (index, 1);
+}
+
 
 always_inline u32
 tcp_session_has_ooo_data (tcp_connection_t *tc)
@@ -727,7 +929,7 @@ tcp46_output_inline (vlib_main_t * vm,
               ASSERT (!bogus);
             }
 
-          /* Filter DUPACKs if there are no OOO segments left */
+          /* Filter out DUPACKs if there are no OOO segments left */
           if (PREDICT_FALSE(vnet_buffer (b0)->tcp.flags & TCP_BUF_FLAG_DUPACK))
             {
               tc0->snt_dupacks --;
@@ -740,21 +942,39 @@ tcp46_output_inline (vlib_main_t * vm,
                 }
             }
 
-          /* If an ACK  */
-//          if (vnet_buffer (b0)->tcp.flags & TCP_BUF_FLAG_ACK)
-//            {
-              tc0->rcv_las = tc0->rcv_nxt;
+          /* Retransmitted SYNs do reach this but it should be harmless */
+          tc0->rcv_las = tc0->rcv_nxt;
 
-              /* Stop DELACK timer and fix flags */
-              u32 handle = tc0->timers[TCP_TIMER_DELACK];
-              tc0->flags &= ~(TCP_CONN_SNDACK | TCP_CONN_DELACK
-                  | TCP_CONN_BURSTACK);
-              if (handle != TCP_TIMER_HANDLE_INVALID)
+          /* Stop DELACK timer and fix flags */
+          tc0->flags &=
+              ~(TCP_CONN_SNDACK | TCP_CONN_DELACK | TCP_CONN_BURSTACK);
+          if (tcp_timer_is_active (tc0, TCP_TIMER_DELACK))
+            {
+              tcp_timer_reset (tm, tc0, TCP_TIMER_DELACK);
+            }
+
+          /* If not retransmitting
+           * 1) update snd_una_max (SYN, SYNACK, new data, FIN)
+           * 2) If we're not tracking an ACK, start tracking */
+          if (seq_lt (tc0->snd_una_max, tc0->snd_nxt))
+            {
+              tc0->snd_una_max = tc0->snd_nxt;
+              if (tc0->rtt_ts == 0)
                 {
-                  tcp_timer_stop (&tm->timer_wheels[my_thread_index], handle);
-                  tc0->timers[TCP_TIMER_DELACK] = TCP_TIMER_HANDLE_INVALID;
+                  tc0->rtt_ts = tcp_time_now ();
+                  tc0->rtt_seq = tc0->snd_nxt;
                 }
-//            }
+            }
+
+          /* Set the retransmit timer if not set already and not
+           * doing a pure ACK */
+          if (!tcp_timer_is_active (tc0, TCP_TIMER_RETRANSMIT)
+              && tc0->snd_nxt != tc0->snd_una)
+            {
+              tcp_timer_set (tm, tc0, TCP_TIMER_RETRANSMIT,
+                             tc0->rto * TCP_TO_TIMER_TICK);
+              tc0->rto_boff = 0;
+            }
 
           /* set fib index to default and lookup node */
           /* XXX network virtualization (vrf/vni)*/
@@ -841,51 +1061,12 @@ VLIB_REGISTER_NODE (tcp6_output_node) = {
 
 VLIB_NODE_FUNCTION_MULTIARCH (tcp6_output_node, tcp6_output)
 
-/**
- * Read as much data as possible from the tx fifo, build a tcp packet and
- * ask that it be sent to tcp-output
- */
 u32
 tcp_push_header_uri (transport_connection_t *tconn, vlib_buffer_t *b)
 {
-  u32 advertise_wnd, data_len;
   tcp_connection_t *tc;
-  u8 tcp_opts_len, tcp_hdr_opts_len, opts_write_len;
-  tcp_options_t _snd_opts, *snd_opts = &_snd_opts;
-  tcp_header_t *th;
 
-  tc = (tcp_connection_t *)tconn;
-
-  data_len = b->current_length;
-  vnet_buffer (b)->tcp.flags = 0;
-
-  /* Make and write options */
-  memset (snd_opts, 0, sizeof (*snd_opts));
-  tcp_opts_len = tcp_make_established_options (tc, snd_opts);
-  tcp_hdr_opts_len = tcp_opts_len + sizeof (tcp_header_t);
-
-  advertise_wnd = tcp_window_to_advertise (tc);
-
-  th = pkt_push_tcp (b, tc->c_lcl_port, tc->c_rmt_port, tc->snd_nxt,
-                     tc->rcv_nxt, tcp_hdr_opts_len, TCP_FLAG_ACK,
-                     advertise_wnd);
-
-  opts_write_len = tcp_options_write ((u8 *)(th + 1), snd_opts);
-
-  ASSERT (opts_write_len == tcp_opts_len);
-
-  /* Tag the buffer with the connection index  */
-  vnet_buffer (b)->tcp.connection_index = tc->c_c_index;
-
-  /* If we have un-ACKed data, tag the buffer as ACK XXX do flag fixing here */
-  if (seq_gt (tc->rcv_nxt, tc->rcv_las))
-    vnet_buffer (b)->tcp.flags = TCP_BUF_FLAG_ACK;
-
-  tc->rcv_las = tc->rcv_nxt;
-  tc->snd_nxt += data_len;
-
-  if (tc->c_is_ip4)
-    return URI_QUEUE_NEXT_TCP_IP4_OUTPUT;
-  else
-    return URI_QUEUE_NEXT_TCP_IP6_OUTPUT;
+  tc = (tcp_connection_t *) tconn;
+  tcp_push_hdr_i (tc, b, TCP_CONNECTION_STATE_ESTABLISHED);
+  return 0;
 }

@@ -657,7 +657,40 @@ int svm_fifo_dequeue_nowait2 (svm_fifo_t * f,
   return svm_fifo_dequeue_internal2 (f, pid, max_bytes, copy_here);
 }
 
+int svm_fifo_peek (svm_fifo_t *f, int pid, u32 offset, u32 max_bytes,
+                   u8 *copy_here)
+{
+  u32 total_copy_bytes, first_copy_bytes, second_copy_bytes;
+  u32 cursize, nitems;
 
+  if (PREDICT_FALSE(f->cursize == 0))
+    return -2; /* nothing in the fifo */
+
+  /* read cursize, which can only increase while we're working */
+  cursize = f->cursize;
+  nitems = f->nitems;
+
+  /* Number of bytes we're going to copy */
+  total_copy_bytes = (cursize < max_bytes) ? cursize : max_bytes;
+
+  if (PREDICT_TRUE(copy_here != 0))
+    {
+      /* Number of bytes in first copy segment */
+      first_copy_bytes =
+          ((nitems - f->head) < total_copy_bytes) ?
+              (nitems - f->head) : total_copy_bytes;
+      clib_memcpy (copy_here, &f->data[f->head], first_copy_bytes);
+
+      /* Number of bytes in second copy segment, if any */
+      second_copy_bytes = total_copy_bytes - first_copy_bytes;
+      if (second_copy_bytes)
+        {
+          clib_memcpy (copy_here + first_copy_bytes, &f->data[0],
+                       second_copy_bytes);
+        }
+    }
+  return total_copy_bytes;
+}
 
 /*
  * fd.io coding-style-patch-verification: ON

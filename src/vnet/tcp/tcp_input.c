@@ -100,7 +100,7 @@ vlib_node_registration_t tcp6_established_node;
  * This accepts only segments within the window.
  */
 always_inline u8
-tcp_segment_in_window (tcp_connection_t *tc, u32 seq, u32 end_seq)
+tcp_segment_in_rcv_wnd (tcp_connection_t *tc, u32 seq, u32 end_seq)
 {
   return seq_leq (end_seq, tc->rcv_las + tc->rcv_wnd)
       && seq_geq (seq, tc->rcv_nxt);
@@ -261,8 +261,8 @@ tcp_segment_validate (vlib_main_t *vm, tcp_connection_t *tc0, vlib_buffer_t *b0,
     }
 
   /* 1st: check sequence number */
-  if (!tcp_segment_in_window (tc0, vnet_buffer (b0)->tcp.seq_number,
-                              vnet_buffer (b0)->tcp.seq_end))
+  if (!tcp_segment_in_rcv_wnd (tc0, vnet_buffer (b0)->tcp.seq_number,
+                               vnet_buffer (b0)->tcp.seq_end))
     {
       if (!tcp_rst (th0))
         {
@@ -300,19 +300,105 @@ tcp_segment_validate (vlib_main_t *vm, tcp_connection_t *tc0, vlib_buffer_t *b0,
 }
 
 always_inline int
-tcp_incoming_ack_is_acceptable (tcp_connection_t *tc0, vlib_buffer_t *tb0)
+tcp_rcv_ack_is_acceptable (tcp_connection_t *tc0, vlib_buffer_t *tb0)
 {
   /* SND.UNA =< SEG.ACK =< SND.NXT */
   return (seq_leq (tc0->snd_una, vnet_buffer (tb0)->tcp.ack_number)
       && seq_leq (vnet_buffer (tb0)->tcp.ack_number, tc0->snd_nxt));
 }
 
-always_inline int
-tcp_incoming_ack_established (tcp_connection_t *tc0, vlib_buffer_t *tb0,
-                              tcp_header_t *tcp0, u32 *next0, u32 *error0)
+/**
+ * Compute smoothed RTT as per VJ's '88 SIGCOMM and RFC6298
+ *
+ * Note that although the original article, srtt and rttvar are scaled
+ * to minimize round-off errors, here we don't. Instead, we rely on
+ * better precision time measurements.
+ *
+ * TODO support us rtt resolution
+ */
+static void
+tcp_estimate_rtt (tcp_connection_t *tc, u32 mrtt)
+{
+  int err;
+
+  if (tc->srtt != 0)
+    {
+      err = mrtt - tc->srtt;
+      tc->srtt += err >> 3;
+
+      /* XXX Drop in RTT results in RTTVAR increase and bigger RTO.
+       * The increase should be bound */
+      tc->rttvar += (clib_abs(err) - tc->rttvar) >> 2;
+    }
+  else
+    {
+      /* First measurement. */
+      tc->srtt = mrtt;
+      tc->rttvar = mrtt << 1;
+    }
+}
+
+/** Update RTT estimate and RTO timer */
+static void
+tcp_update_rtt (tcp_connection_t *tc, u32 mrtt)
+{
+  tcp_estimate_rtt (tc, mrtt);
+
+  tc->rto = clib_min (tc->srtt + (tc->rttvar << 2), TCP_RTO_MAX);
+}
+
+/**
+ * Dequeue bytes that have been acked and while at it update RTT estimates.
+ */
+static void
+tcp_dequeue_acked (tcp_connection_t *tc, u32 ack)
+{
+  u32 mrtt = 0;
+  tcp_main_t *tm = vnet_get_tcp_main ();
+
+  /* Update acked local seq number */
+  tc->snd_una = ack;
+
+  /* TODO dequeue */
+
+  /* Good ACK received, make sure retransmit backoff is 0 */
+  tc->rto_boff = 0;
+
+  /* XXX Karn's rule, remove retransmits ! */
+
+  /* We have two sources of RTT measurements: TSOPT and ACK timing.
+   * Middle boxes are known to fiddle with TCP options so we
+   * should give higher priority to ACK timing. */
+  if (tc->rtt_seq && seq_gt(ack, tc->rtt_seq))
+    {
+      mrtt = tcp_time_now () - tc->rtt_ts;
+      tc->rtt_seq = 0;
+    }
+  else if (tcp_opts_tstamp(&tc->opt) && tc->opt.tsecr)
+    {
+      mrtt = tcp_time_now () - tc->opt.tsecr;
+    }
+
+  /* Ignore dubious measurements */
+  if (mrtt == 0 || mrtt > TCP_RTT_MAX)
+    return;
+
+  tcp_update_rtt (tc, mrtt);
+
+  /* If everything has been acked, stop retransmit timer
+   * otherwise update */
+  if (tc->snd_una == tc->snd_una_max)
+    tcp_timer_reset (tm, tc, TCP_TIMER_RETRANSMIT);
+  else
+    tcp_timer_update (tm, tc, TCP_TIMER_RETRANSMIT, tc->rto);
+}
+
+static int
+tcp_rcv_ack (tcp_connection_t *tc0, vlib_buffer_t *b0,
+             tcp_header_t *tcp0, u32 *next0, u32 *error0)
 {
   /* If the ACK is a duplicate (SEG.ACK < SND.UNA), it can be ignored.*/
-  if (seq_lt(vnet_buffer (tb0)->tcp.ack_number, tc0->snd_una))
+  if (seq_lt(vnet_buffer (b0)->tcp.ack_number, tc0->snd_una))
     {
       *error0 = TCP_ERROR_ACK_DUP;
       return -1;
@@ -320,21 +406,27 @@ tcp_incoming_ack_established (tcp_connection_t *tc0, vlib_buffer_t *tb0,
 
   /* If the ACK acks something not yet sent (SEG.ACK > SND.NXT) then send an
    * ACK, drop the segment, and return  */
-  if (seq_gt(vnet_buffer (tb0)->tcp.ack_number, tc0->snd_nxt))
+  if (seq_gt(vnet_buffer (b0)->tcp.ack_number, tc0->snd_nxt))
     {
-      tcp_make_ack (tc0, tb0);
+      tcp_make_ack (tc0, b0);
       *next0 = tcp_next_output (tc0->c_is_ip4);
       *error0 = TCP_ERROR_ACK_INVALID;
       return -1;
     }
 
-  /* Update acked local seq number and remove acked segments from
-   * retransmission queue TODO*/
-  tc0->snd_una = vnet_buffer (tb0)->tcp.ack_number;
+  /* Dequeue ACKed packet and update RTT */
+  tcp_dequeue_acked (tc0, vnet_buffer (b0)->tcp.ack_number);
 
-  /* Update window TODO wnd scaling*/
-  tc0->snd_wnd = clib_net_to_host_u32 (tcp0->window) << tc0->opt.wscale;
-  tc0->snd_wl1 = vnet_buffer (tb0)->tcp.seq_number;
+  /* If (SND.WL1 < SEG.SEQ or (SND.WL1 = SEG.SEQ and SND.WL2 =< SEG.ACK)), set
+   * SND.WND <- SEG.WND, set SND.WL1 <- SEG.SEQ, and set SND.WL2 <- SEG.ACK */
+  if (tc0->snd_wl1 < vnet_buffer (b0)->tcp.seq_number
+      || (tc0->snd_wl1 == vnet_buffer (b0)->tcp.seq_number
+          && tc0->snd_wl2 <= vnet_buffer (b0)->tcp.ack_number))
+    {
+      tc0->snd_wnd = clib_net_to_host_u32 (tcp0->window) << tc0->snd_wscale;
+      tc0->snd_wl1 = vnet_buffer (b0)->tcp.seq_number;
+      tc0->snd_wl2 = vnet_buffer (b0)->tcp.ack_number;
+    }
 
   return 0;
 }
@@ -351,7 +443,7 @@ tcp_incoming_ack_established (tcp_connection_t *tc0, vlib_buffer_t *tb0,
  * @param end End sequence of the newest SACK block
  */
 static void
-tcp_sack_list_update (tcp_connection_t *tc, u32 start, u32 end)
+tcp_update_sack_list (tcp_connection_t *tc, u32 start, u32 end)
 {
   sack_block_t *new_list = 0, block;
   u32 n_elts;
@@ -395,20 +487,18 @@ tcp_sack_list_update (tcp_connection_t *tc, u32 start, u32 end)
 always_inline u32
 tcp_session_enqueue_data (tcp_connection_t *tc, vlib_buffer_t *b, u16 data_len)
 {
-  stream_session_t *s0;
   int written;
 
   /* Pure ACK. Update rcv_nxt and be done. */
-  if (PREDICT_FALSE (data_len == 0))
+  if (PREDICT_FALSE(data_len == 0))
     {
       tc->rcv_nxt = vnet_buffer (b)->tcp.seq_end;
       return TCP_ERROR_PURE_ACK;
     }
 
-  s0 = stream_session_get (tc->c_s_index, tc->c_thread_index);
-
-  written = stream_session_enqueue_data (s0, vlib_buffer_get_current (b),
-                                         data_len, 1 /* queue event */);
+  written = stream_session_enqueue_data (&tc->connection,
+                                         vlib_buffer_get_current (b), data_len,
+                                         1 /* queue event */);
 
   /* Update rcv_nxt */
   if (PREDICT_TRUE(written == data_len))
@@ -427,7 +517,7 @@ tcp_session_enqueue_data (tcp_connection_t *tc, vlib_buffer_t *b, u16 data_len)
       if (tcp_opts_sack_permitted (&tc->opt))
         {
           /* Remove SACK blocks that have been delivered */
-          tcp_sack_list_update (tc, tc->rcv_nxt, tc->rcv_nxt);
+          tcp_update_sack_list (tc, tc->rcv_nxt, tc->rcv_nxt);
         }
     }
   else
@@ -465,16 +555,10 @@ tcp_session_enqueue_ooo (tcp_connection_t *tc, vlib_buffer_t *b, u16 data_len)
       start = tc->rcv_nxt + ooo_segment_offset (s0->server_rx_fifo, newest);
       end = tc->rcv_nxt + ooo_segment_end_offset (s0->server_rx_fifo, newest);
 
-      tcp_sack_list_update (tc, start, end);
+      tcp_update_sack_list (tc, start, end);
     }
 
   return TCP_ERROR_ENQUEUED;
-}
-
-always_inline u8
-tcp_timer_is_active (tcp_connection_t *tc, tcp_timers_e timer)
-{
-  return tc->timers[timer] != TCP_TIMER_HANDLE_INVALID;
 }
 
 /**
@@ -662,7 +746,7 @@ tcp46_established_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
             }
 
           /* 5: check the ACK field  */
-          if (tcp_incoming_ack_established (tc0, b0, th0, &next0, &error0))
+          if (tcp_rcv_ack (tc0, b0, th0, &next0, &error0))
             {
               goto drop;
             }
@@ -757,16 +841,6 @@ VLIB_NODE_FUNCTION_MULTIARCH (tcp6_established_node, tcp6_established)
 
 vlib_node_registration_t tcp4_syn_sent_node;
 vlib_node_registration_t tcp6_syn_sent_node;
-
-static void
-tcp_timers_init (tcp_connection_t *tc)
-{
-  int i;
-  for (i = 0; i < TCP_N_TIMERS; i++)
-    {
-      tc->timers[i] = TCP_TIMER_HANDLE_INVALID;
-    }
-}
 
 always_inline uword
 tcp46_syn_sent_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
@@ -898,6 +972,10 @@ tcp46_syn_sent_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
           if (!tcp_syn (tcp0))
             goto drop;
 
+          /* Stop connection establishment and retransmit timers */
+          tcp_timer_reset (tm, tc0, TCP_TIMER_KEEP);
+          tcp_timer_reset (tm, tc0, TCP_TIMER_RETRANSMIT_SYN);
+
           /* Valid SYN or SYN-ACK. Move connection from half-open pool to
            * current thread pool. */
           pool_get(tm->connections[my_thread_index], new_tc0);
@@ -905,14 +983,9 @@ tcp46_syn_sent_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
 
           new_tc0->c_thread_index = my_thread_index;
 
-          /* Stop connection establishment timer and cleanup syn_sent connection */
-          tcp_timer_stop (&tm->timer_wheels[my_thread_index],
-                          new_tc0->timers[TCP_TIMER_KEEP]);
-
-          /* XXX lock */
+          /* Cleanup half-open connection XXX lock */
           pool_put (tm->half_open_connections, tc0);
 
-          /* rcv_nxt is incremented when data segment is read */
           new_tc0->rcv_nxt = vnet_buffer (b0)->tcp.seq_end;
           new_tc0->irs = seq0;
 
@@ -928,20 +1001,19 @@ tcp46_syn_sent_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
             new_tc0->snd_wscale = new_tc0->opt.wscale;
 
           new_tc0->snd_wnd = clib_net_to_host_u32 (tcp0->window)
-              << new_tc0->opt.wscale;
-
+              << new_tc0->snd_wscale;
           new_tc0->snd_wl1 = seq0;
+          new_tc0->snd_wl2 = ack0;
 
           tcp_timers_init (new_tc0);
 
           /* SYN-ACK: See if we can switch to ESTABLISHED state */
           if (tcp_ack (tcp0))
             {
-              new_tc0->snd_una = ack0;
-
               /* Our SYN is ACKed: we have iss < ack = snd_una */
 
-              /* TODO XXX dequeue acknowledged segments */
+              /* Dequeue acknowledged segments */
+              tcp_dequeue_acked (new_tc0, ack0);
 
               new_tc0->state = TCP_CONNECTION_STATE_ESTABLISHED;
 
@@ -1169,7 +1241,7 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
                *  <SEQ=SEG.ACK><CTL=RST>
                * and send it.
                */
-              if (!tcp_incoming_ack_is_acceptable (tc0, b0))
+              if (!tcp_rcv_ack_is_acceptable (tc0, b0))
                 {
                   tcp_send_reset (b0, is_ip4);
                   goto drop;
@@ -1189,7 +1261,7 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
               break;
             case TCP_CONNECTION_STATE_ESTABLISHED:
               /* XXX Packets may have been enqueued before state change */
-              if (tcp_incoming_ack_established (tc0, b0, tcp0, &next0,
+              if (tcp_rcv_ack (tc0, b0, tcp0, &next0,
                                                 &error0))
                 goto drop;
 
@@ -1198,7 +1270,7 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
               /* XXX In addition to the processing for the ESTABLISHED state, if
                * our FIN is now acknowledged then enter FIN-WAIT-2 and
                * continue processing in that state. */
-              if (!tcp_incoming_ack_established (tc0, b0, tcp0, &next0,
+              if (!tcp_rcv_ack (tc0, b0, tcp0, &next0,
                                                  &error0))
                 tc0->state = TCP_CONNECTION_STATE_FIN_WAIT_2;
               else
@@ -1208,7 +1280,7 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
               /* In addition to the processing for the ESTABLISHED state, if
                * the retransmission queue is empty, the user's CLOSE can be
                * acknowledged ("ok") but do not delete the TCB. */
-              if (tcp_incoming_ack_established (tc0, b0, tcp0, &next0,
+              if (tcp_rcv_ack (tc0, b0, tcp0, &next0,
                                                 &error0))
                 {
                   /* check if rtx queue is empty and ack CLOSE TODO*/
@@ -1220,7 +1292,7 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
               break;
             case TCP_CONNECTION_STATE_CLOSE_WAIT:
               /* Do the same processing as for the ESTABLISHED state. */
-              if (tcp_incoming_ack_established (tc0, b0, tcp0, &next0,
+              if (tcp_rcv_ack (tc0, b0, tcp0, &next0,
                                                 &error0))
                 goto drop;
               break;
@@ -1228,7 +1300,7 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
               /* In addition to the processing for the ESTABLISHED state, if
                * the ACK acknowledges our FIN then enter the TIME-WAIT state,
                * otherwise ignore the segment. */
-              if (tcp_incoming_ack_established (tc0, b0, tcp0, &next0,
+              if (tcp_rcv_ack (tc0, b0, tcp0, &next0,
                                                 &error0))
                 goto drop;
 
@@ -1242,7 +1314,7 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
                * acknowledgment of our FIN. If our FIN is now acknowledged,
                * delete the TCB, enter the CLOSED state, and return. */
 
-              if (!tcp_incoming_ack_is_acceptable (tc0, b0))
+              if (!tcp_rcv_ack_is_acceptable (tc0, b0))
                 goto drop;
 
               tcp_session_close (tc0);
@@ -1598,7 +1670,7 @@ tcp_fsm_states[] = {
 u8 *
 format_tcp_state (u8 *s, va_list *args)
 {
-  tcp_fsm_states_t *state = va_arg (*args, tcp_fsm_states_t *);
+  tcp_state_t *state = va_arg (*args, tcp_state_t *);
 
   if (state[0] < TCP_N_CONNECTION_STATE)
     s = format (s, "%s", tcp_fsm_states[state[0]]);

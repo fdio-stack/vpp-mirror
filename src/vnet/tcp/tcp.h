@@ -23,8 +23,10 @@
 #include <vnet/uri/transport.h>
 #include <vnet/uri/uri.h>
 
-#define TCP_TSTAMP_RESOLUTION 1e-3
-#define TCP_PAWS_IDLE 24 * 24 * 60 * 60 / TCP_TSTAMP_RESOLUTION /* 24 days */
+#define TCP_TICK 10e-3                  /**< TCP tick time period (s) */
+#define THZ 1/TCP_TICK                  /**< TCP tick frequency */
+#define TCP_TSTAMP_RESOLUTION TCP_TICK  /**< Time stamp resolution */
+#define TCP_PAWS_IDLE 24 * 24 * 60 * 60 * THZ /**< 24 days */
 #define TCP_MAX_OPTION_SPACE 40
 
 /** TCP FSM state definitions as per RFC793. */
@@ -41,23 +43,24 @@
   _(FIN_WAIT_2, "FIN_WAIT_2")   \
   _(TIME_WAIT, "TIME_WAIT")
 
-typedef enum _tcp_fsm_states
+typedef enum _tcp_state
 {
 #define _(sym, str) TCP_CONNECTION_STATE_##sym,
   foreach_tcp_fsm_state
 #undef _
   TCP_N_CONNECTION_STATE
-} tcp_fsm_states_t;
+} tcp_state_t;
 
 format_function_t format_tcp_state;
 
 /** TCP timers */
-#define foreach_tcp_timer       \
-  _(RETRANSMIT, "RETRANSMIT")   \
-  _(DELACK, "DELAYED ACK")      \
-  _(PERSIST, "PERSIST")         \
-  _(KEEP, "KEEP")               \
-  _(2MSL, "2MSL")
+#define foreach_tcp_timer               \
+  _(RETRANSMIT, "RETRANSMIT")           \
+  _(DELACK, "DELAYED ACK")              \
+  _(PERSIST, "PERSIST")                 \
+  _(KEEP, "KEEP")                       \
+  _(2MSL, "2MSL")                       \
+  _(RETRANSMIT_SYN, "RETRANSMIT_SYN")
 
 typedef enum _tcp_timers
 {
@@ -67,11 +70,11 @@ typedef enum _tcp_timers
   TCP_N_TIMERS
 } tcp_timers_e;
 
-typedef void
-(*timer_expiration_handler) (u32 index);
+typedef void (timer_expiration_handler) (u32 index);
 
-void
-timer_delack_handler (u32 conn_index);
+extern timer_expiration_handler tcp_timer_delack_handler;
+extern timer_expiration_handler tcp_timer_retransmit_handler;
+extern timer_expiration_handler tcp_timer_retransmit_syn_handler;
 
 #define TCP_TIMER_HANDLE_INVALID ((u32) ~0)
 
@@ -99,8 +102,15 @@ typedef enum _tcp_connection_flag
 } tcp_connection_flags_e;
 
 /* Timer delays as multiples of 100ms */
+#define TCP_TO_TIMER_TICK       TCP_TICK*10  /* Period for converting from TCP
+                                              * ticks to timer units */
 #define TCP_DELACK_TIME         1       /* 0.1s */
 #define TCP_ESTABLISH_TIME      750     /* 75s */
+
+#define TCP_RTO_MAX 60 * THZ    /* Min max RTO (60s) as per RFC6298 */
+#define TCP_RTT_MAX 30 * THZ    /* 30s (probably too much) */
+#define TCP_RTO_SYN_RETRIES 3   /* SYN retries without doubling RTO */
+#define TCP_RTO_INIT 1 * THZ    /* Initial retransmit timer */
 
 void
 tcp_update_time (f64 now, u32 thread_index);
@@ -125,13 +135,6 @@ enum
 #undef _
 };
 
-typedef struct
-{
-  /* sum, sum**2 */
-  f64 sum, sum_sq;
-  f64 count;
-} tcp_rtt_stats_t;
-
 #define TCP_MAX_SACK_BLOCKS 5   /**< Max number of SACK blocks stored */
 
 typedef struct _tcp_connection
@@ -146,7 +149,8 @@ typedef struct _tcp_connection
 
   /** Send sequence variables RFC793 */
   u32 snd_una;          /**< oldest unacknowledged sequence number */
-  u16 snd_wnd;          /**< send window */
+  u32 snd_una_max;      /**< newest unacknowledged sequence number + 1*/
+  u32 snd_wnd;          /**< send window */
   u32 snd_wl1;          /**< seq number used for last snd.wnd update */
   u32 snd_wl2;          /**< ack number used for last snd.wnd update */
   u32 snd_nxt;          /**< next seq number to be sent */
@@ -170,6 +174,13 @@ typedef struct _tcp_connection
 
   u8 snt_dupacks;       /**< Number of DUPACKs sent in a burst */
 
+  u32 rto;              /**< Retransmission timeout */
+  u32 rto_boff;         /**< Index for RTO backoff */
+  u32 srtt;             /**< Smoothed RTT */
+  u32 rttvar;           /**< Smoothed mean RTT difference. Approximates variance */
+  u32 rtt_ts;           /**< Timestamp for tracked ACK */
+  u32 rtt_seq;          /**< Sequence number for tracked ACK */
+
   /* XXX Everything lower may be removed */
 
   u16 max_segment_size;
@@ -178,7 +189,6 @@ typedef struct _tcp_connection
   /* tos, ttl to use on tx */
   u8 tos;
   u8 ttl;
-  tcp_rtt_stats_t stats;
 
   /*
    * At high scale, pre-built (src,dst,src-port,dst-port)
@@ -248,7 +258,7 @@ typedef struct _tcp_main
   uword * dst_port_info_by_dst_port[TCP_N_AF];
 
   /* convenience */
-  session_manager_main_t *ss_main;
+  session_manager_main_t *sm_main;
   vlib_main_t * vlib_main;
   vnet_main_t * vnet_main;
   ip4_main_t * ip4_main;
@@ -275,6 +285,8 @@ tcp_connection_get (u32 conn_index, u32 thread_index)
 
 void
 tcp_connection_close (tcp_main_t *tm, tcp_connection_t *tc);
+void
+tcp_connection_drop (tcp_main_t *tm, tcp_connection_t *tc);
 
 always_inline tcp_connection_t *
 tcp_listener_get (u32 tli)
@@ -336,9 +348,9 @@ tcp_actual_receive_window (const tcp_connection_t *ts)
 }
 
 always_inline u32
-tcp_snd_wnd_end (const tcp_connection_t *ts)
+tcp_snd_wnd_space (tcp_connection_t *tc)
 {
-  return ts->snd_una + ts->snd_wnd;
+  return tc->snd_wnd - (tc->snd_una_max - tc->snd_una);
 }
 
 always_inline u32
@@ -349,6 +361,43 @@ tcp_time_now (void)
 
 u32
 tcp_push_header_uri (transport_connection_t *tconn, vlib_buffer_t *b);
+
+always_inline void
+tcp_timer_set (tcp_main_t *tm, tcp_connection_t *tc, u8 timer_id, u32 interval)
+{
+  tc->timers[timer_id] = tcp_timer_start (&tm->timer_wheels[tc->c_thread_index],
+                                          tc->c_c_index, timer_id, interval);
+}
+
+always_inline void
+tcp_timer_reset (tcp_main_t *tm, tcp_connection_t *tc, u8 timer_id)
+{
+  if (tc->timers[timer_id] == TCP_TIMER_HANDLE_INVALID)
+    return;
+
+  tcp_timer_stop (&tm->timer_wheels[tc->c_thread_index], tc->timers[timer_id]);
+  tc->timers[timer_id] = TCP_TIMER_HANDLE_INVALID;
+}
+
+always_inline void
+tcp_timer_update (tcp_main_t *tm, tcp_connection_t *tc, u8 timer_id,
+                  u32 interval)
+{
+  if (tc->timers[timer_id] != TCP_TIMER_HANDLE_INVALID)
+    tcp_timer_stop (&tm->timer_wheels[tc->c_thread_index],
+                    tc->timers[timer_id]);
+  tc->timers[timer_id] = tcp_timer_start (&tm->timer_wheels[tc->c_thread_index],
+                                          tc->c_c_index, timer_id, interval);
+}
+
+void
+tcp_timers_init (tcp_connection_t *tc);
+
+always_inline u8
+tcp_timer_is_active (tcp_connection_t *tc, tcp_timers_e timer)
+{
+  return tc->timers[timer] != TCP_TIMER_HANDLE_INVALID;
+}
 
 #endif /* _vnet_tcp_h_ */
 

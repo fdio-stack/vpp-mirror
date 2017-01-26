@@ -132,6 +132,9 @@ int svm_fifo_enqueue_with_offset2 (svm_fifo_t * f, int pid,
 int svm_fifo_dequeue_nowait2 (svm_fifo_t * f, int pid, u32 max_bytes, 
                              u8 * copy_here);
 
+int svm_fifo_peek (svm_fifo_t *f, int pid, u32 offset, u32 max_bytes,
+                   u8 *copy_here);
+
 always_inline ooo_segment_t *
 svm_fifo_newest_ooo_segment (svm_fifo_t *f)
 {
