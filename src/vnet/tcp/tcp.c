@@ -384,6 +384,13 @@ tcp_send_mss_uri (transport_connection_t *trans_conn)
   return tcp_snd_mss (tc);
 }
 
+u32
+tcp_rx_fifo_offset_uri (transport_connection_t *trans_conn)
+{
+  tcp_connection_t *tc = (tcp_connection_t *)trans_conn;
+  return (tc->snd_una_max - tc->snd_una);
+}
+
 const static transport_proto_vft_t tcp4_proto = {
   .bind = tcp_uri_bind_ip4,
   .unbind = tcp_uri_unbind_ip4,
@@ -394,6 +401,7 @@ const static transport_proto_vft_t tcp4_proto = {
   .delete = tcp_connection_delete_uri,
   .open = tcp_connection_open_ip4,
   .send_mss = tcp_send_mss_uri,
+  .rx_fifo_offset = tcp_rx_fifo_offset_uri,
   .format_connection = format_tcp_stream_session_ip4
 };
 
@@ -407,6 +415,7 @@ const static transport_proto_vft_t tcp6_proto = {
   .open = tcp_connection_open_ip6,
   .delete = tcp_connection_delete_uri,
   .send_mss = tcp_send_mss_uri,
+  .rx_fifo_offset = tcp_rx_fifo_offset_uri,
   .format_connection = format_tcp_stream_session_ip6
 };
 

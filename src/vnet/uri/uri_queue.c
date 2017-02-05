@@ -78,21 +78,22 @@ static u32 session_type_to_next[] =
 };
 
 always_inline int
-session_fifo_rx (vlib_main_t *vm, vlib_node_runtime_t *node,
+session_fifo_rx_i (vlib_main_t *vm, vlib_node_runtime_t *node,
                  session_manager_main_t *smm, fifo_event_t *e0,
-                 stream_session_t *s0, u32 my_thread_index, int *n_tx_packets)
+                 stream_session_t *s0, u32 my_thread_index, int *n_tx_packets,
+                 u8 peek_data)
 {
   u32 n_trace = vlib_get_trace_count (vm, node);
   u32 len_to_snd0, len_to_deq0, max_dequeue0, n_bufs;
-  u16 snd_mss0;
-  u8 *data0;
-  u32 next_index, next0, bi0;
-  vlib_buffer_t *b0;
   u32 n_frame_bytes, n_frames_per_evt;
   transport_connection_t *tc0;
   transport_proto_vft_t *transport_vft;
+  u32 next_index, next0, *to_next, n_left_to_next, bi0;
+  vlib_buffer_t *b0;
+  u32 rx_offset;
+  u16 snd_mss0;
+  u8 *data0;
   int i;
-  u32 *to_next, n_left_to_next;
 
   next_index = next0 = session_type_to_next[s0->session_type];
 
@@ -109,6 +110,12 @@ session_fifo_rx (vlib_main_t *vm, vlib_node_runtime_t *node,
 
   /* Get the maximum segment size for this transport */
   snd_mss0 = transport_vft->send_mss (tc0);
+
+  if (peek_data)
+    {
+      /* Offset in rx fifo from where to peek data  */
+      rx_offset = transport_vft->rx_fifo_offset (tc0);
+    }
 
   /* TODO check if transport is willing to send len_to_snd0
    * bytes (Nagle) */
@@ -199,10 +206,24 @@ session_fifo_rx (vlib_main_t *vm, vlib_node_runtime_t *node,
           /* Dequeue the data
            * TODO 1) peek instead of dequeue
            *      2) buffer chains */
-          if (svm_fifo_dequeue_nowait2 (s0->server_tx_fifo, 0, len_to_deq0,
-                                          data0) < 0)
-            goto dequeue_fail;
+          if (peek_data)
+            {
+              u32 n_bytes_read;
+              n_bytes_read = svm_fifo_peek (s0->server_tx_fifo, s0->pid,
+                                            rx_offset, len_to_deq0, data0);
+              if (n_bytes_read < 0)
+                goto dequeue_fail;
 
+              /* Keep track of progress locally, transport is also supposed to
+               * increment it independently when pushing header */
+              rx_offset += n_bytes_read;
+            }
+          else
+            {
+              if (svm_fifo_dequeue_nowait2 (s0->server_tx_fifo, s0->pid,
+                                            len_to_deq0, data0) < 0)
+                goto dequeue_fail;
+            }
 
           b0->current_length = len_to_deq0;
 
@@ -233,6 +254,22 @@ session_fifo_rx (vlib_main_t *vm, vlib_node_runtime_t *node,
 
   clib_warning ("dequeue fail");
   return 0;
+}
+
+int
+session_fifo_rx_peek (vlib_main_t *vm, vlib_node_runtime_t *node,
+                      session_manager_main_t *smm, fifo_event_t *e0,
+                      stream_session_t *s0, u32 thread_index, int *n_tx_pkts)
+{
+  return session_fifo_rx_i (vm, node, smm, e0, s0, thread_index, n_tx_pkts, 1);
+}
+
+int
+session_fifo_rx_dequeue (vlib_main_t *vm, vlib_node_runtime_t *node,
+                         session_manager_main_t *smm, fifo_event_t *e0,
+                         stream_session_t *s0, u32 thread_index, int *n_tx_pkts)
+{
+  return session_fifo_rx_i (vm, node, smm, e0, s0, thread_index, n_tx_pkts, 0);
 }
 
 static uword
@@ -311,8 +348,9 @@ uri_queue_node_fn (vlib_main_t * vm, vlib_node_runtime_t * node,
         case FIFO_EVENT_SERVER_TX:
           /* Spray packets in per session type frames, since they go to
            * different nodes */
-          rv = session_fifo_rx (vm, node, smm, e0, s0, my_thread_index,
-                                &n_tx_packets);
+          rv = (smm->session_rx_fns[s0->session_type]) (vm, node, smm, e0, s0,
+                                                        my_thread_index,
+                                                        &n_tx_packets);
           if (rv < 0)
             goto done;
 

@@ -140,6 +140,9 @@ typedef int
 typedef u16
 (*tp_connection_snd_mss) (transport_connection_t *tc);
 
+typedef u32
+(*tp_connection_get_rx_fifo_offset) (transport_connection_t *tc);
+
 /*
  * Transport protocol virtual function table
  */
@@ -155,6 +158,8 @@ typedef struct _transport_proto_vft
   tp_connection_close delete;
   tp_connection_open open;
   tp_connection_snd_mss send_mss;
+  tp_connection_get_rx_fifo_offset rx_fifo_offset;
+
 } transport_proto_vft_t;
 
 #endif /* VNET_VNET_URI_TRANSPORT_H_ */

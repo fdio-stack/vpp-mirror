@@ -818,7 +818,8 @@ stream_session_enqueue_data (transport_connection_t *tc, u8 *data, u16 len,
 
 /** Check if we have space in rx fifo to push more bytes */
 u8
-stream_session_no_space (transport_connection_t *tc, u32 thread_index, u16 data_len)
+stream_session_no_space (transport_connection_t *tc, u32 thread_index,
+                         u16 data_len)
 {
   stream_session_t *s = stream_session_get (tc->c_index, thread_index);
 
@@ -837,6 +838,13 @@ stream_session_peek_bytes (transport_connection_t *tc, u8 *buffer, u32 offset,
 {
   stream_session_t *s = stream_session_get (tc->s_index, tc->thread_index);
   return svm_fifo_peek (s->server_tx_fifo, s->pid, offset, max_bytes, buffer);
+}
+
+u32
+stream_session_dequeue_drop (transport_connection_t *tc, u32 max_bytes)
+{
+  stream_session_t *s = stream_session_get (tc->s_index, tc->thread_index);
+  return svm_fifo_dequeue_drop (s->server_tx_fifo, s->pid, max_bytes);
 }
 
 /**
@@ -1733,8 +1741,14 @@ vnet_disconnect_uri (u32 client_index, u32 session_index, u32 thread_index)
 void
 uri_register_transport (u8 type, const transport_proto_vft_t *vft)
 {
+  session_manager_main_t *smm = vnet_get_session_manager_main ();
+
   vec_validate (tp_vfts, type);
   tp_vfts[type] = *vft;
+
+  /* If an offset function is provided, then peek instead of dequeue */
+  smm->session_rx_fns[type] =
+      (vft->rx_fifo_offset) ? session_fifo_rx_peek : session_fifo_rx_dequeue;
 }
 
 transport_proto_vft_t *

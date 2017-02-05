@@ -458,6 +458,10 @@ tcp_make_synack (tcp_connection_t *tc, vlib_buffer_t *b)
 
   vnet_buffer (b)->tcp.connection_index = tc->c_c_index;
   vnet_buffer (b)->tcp.flags = TCP_BUF_FLAG_ACK;
+
+  /* Init retransmit timer */
+  tcp_timer_set (tm, tc, TCP_TIMER_RETRANSMIT_SYN,
+                 tc->rto * TCP_TO_TIMER_TICK);
 }
 
 always_inline void
@@ -787,9 +791,6 @@ tcp_timer_retransmit_handler_i (u32 index, u8 is_syn)
       tc = tcp_connection_get (index, thread_index);
     }
 
-  /* Invalidate our copy of the timer handle, it just expired... */
-  tc->timers[is_syn] = ~0;
-
   /* Increment RTO backoff (also equal to number of retries) */
   tc->rto_boff += 1;
 
@@ -848,6 +849,9 @@ tcp_timer_retransmit_handler_i (u32 index, u8 is_syn)
   else
     {
       tcp_enqueue_to_output (vm, b, bi, tc->c_is_ip4);
+
+      /* Re-enable retransmit timer */
+      tcp_timer_set (tm, tc, TCP_TIMER_RETRANSMIT, tc->rto * TCP_TO_TIMER_TICK);
     }
 }
 

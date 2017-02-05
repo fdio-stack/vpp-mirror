@@ -692,6 +692,41 @@ int svm_fifo_peek (svm_fifo_t *f, int pid, u32 offset, u32 max_bytes,
   return total_copy_bytes;
 }
 
+int svm_fifo_dequeue_drop (svm_fifo_t *f, int pid, u32 max_bytes)
+{
+  u32 total_drop_bytes, first_drop_bytes, second_drop_bytes;
+  u32 cursize, nitems;
+
+  if (PREDICT_FALSE(f->cursize == 0))
+    return -2; /* nothing in the fifo */
+
+  /* read cursize, which can only increase while we're working */
+  cursize = f->cursize;
+  nitems = f->nitems;
+
+  /* Number of bytes we're going to copy */
+  total_drop_bytes = (cursize < max_bytes) ? cursize : max_bytes;
+
+  /* Number of bytes in first copy segment */
+  first_drop_bytes =
+      ((nitems - f->head) < total_drop_bytes) ?
+          (nitems - f->head) : total_drop_bytes;
+  f->head += first_drop_bytes;
+  f->head = (f->head == nitems) ? 0 : f->head;
+
+  /* Number of bytes in second copy segment, if any */
+  second_drop_bytes = total_drop_bytes - first_drop_bytes;
+  if (second_drop_bytes)
+    {
+      f->head += second_drop_bytes;
+      f->head = (f->head == nitems) ? 0 : f->head;
+    }
+
+  __sync_fetch_and_sub (&f->cursize, total_drop_bytes);
+
+  return total_drop_bytes;
+}
+
 /*
  * fd.io coding-style-patch-verification: ON
  *

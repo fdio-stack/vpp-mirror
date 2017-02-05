@@ -228,6 +228,11 @@ struct _application
 typedef clib_bihash_kv_16_8_t session_kv4_t;
 typedef clib_bihash_kv_48_8_t session_kv6_t;
 
+typedef int
+(session_fifo_rx_fn) (vlib_main_t *vm, vlib_node_runtime_t *node,
+                      session_manager_main_t *smm, fifo_event_t *e0,
+                      stream_session_t *s0, u32 thread_index, int *n_tx_pkts);
+
 typedef struct _session_manager_main
 {
   /** Lookup tables for established sessions and listeners */
@@ -278,6 +283,8 @@ typedef struct _session_manager_main
   u32 connect_manager_index[SESSION_TYPE_N_TYPES];
 
   session_manager_t *session_managers;
+
+  session_fifo_rx_fn *session_rx_fns[SESSION_TYPE_N_TYPES];
 
   /* Convenience */
   vlib_main_t *vlib_main;
@@ -356,6 +363,8 @@ stream_session_enqueue_data (transport_connection_t *tc, u8 *data, u16 len,
 u32
 stream_session_peek_bytes (transport_connection_t *tc, u8 *buffer, u32 offset,
                            u32 max_bytes);
+u32
+stream_session_dequeue_drop (transport_connection_t *tc, u32 max_bytes);
 
 int
 stream_session_enqueue_notify (stream_session_t *s, u8 block);
@@ -378,6 +387,9 @@ session_manager_flush_enqueue_events (u32 my_thread_index);
 
 #define HALF_OPEN_LOOKUP_INVALID_VALUE ((u64)~0)
 #define INVALID_INDEX ((u32)~0)
+
+extern session_fifo_rx_fn session_fifo_rx_peek;
+extern session_fifo_rx_fn session_fifo_rx_dequeue;
 
 void
 uri_register_transport (u8 type, const transport_proto_vft_t *vft);

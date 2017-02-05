@@ -353,28 +353,34 @@ tcp_update_rtt (tcp_connection_t *tc, u32 mrtt)
 static void
 tcp_dequeue_acked (tcp_connection_t *tc, u32 ack)
 {
-  u32 mrtt = 0;
   tcp_main_t *tm = vnet_get_tcp_main ();
+  u32 old_snd_una;
+  u32 mrtt = 0;
 
-  /* Update acked local seq number */
+  /* Dequeue the newly ACKed bytes */
+  stream_session_dequeue_drop (&tc->connection, ack - tc->snd_una);
+
+  /* Update acked seq number but keep track of current snd_una */
+  old_snd_una = tc->snd_una;
   tc->snd_una = ack;
 
-  /* TODO dequeue */
+  /*
+   * Measure RTT: We have two sources of RTT measurements: TSOPT and ACK
+   * timing. Middle boxes are known to fiddle with TCP options so we
+   * should give higher priority to ACK timing.
+   */
 
-  /* Good ACK received, make sure retransmit backoff is 0 */
-  tc->rto_boff = 0;
-
-  /* XXX Karn's rule, remove retransmits ! */
-
-  /* We have two sources of RTT measurements: TSOPT and ACK timing.
-   * Middle boxes are known to fiddle with TCP options so we
-   * should give higher priority to ACK timing. */
-  if (tc->rtt_seq && seq_gt(ack, tc->rtt_seq))
+  /* Karn's rule, part 1. Don't use retransmitted segments to estimate
+   * RTT because they're ambiguous. */
+  if (tc->rtt_seq && seq_gt(ack, tc->rtt_seq) && !tc->rto_boff)
     {
       mrtt = tcp_time_now () - tc->rtt_ts;
       tc->rtt_seq = 0;
     }
-  else if (tcp_opts_tstamp(&tc->opt) && tc->opt.tsecr)
+  /* As per RFC7323 TSecr can be used for RTTM only if the segment advances
+   * snd_una, i.e., the left side of the send window */
+  else if (tcp_opts_tstamp(&tc->opt) && tc->opt.tsecr
+           && seq_lt (old_snd_una, ack))
     {
       mrtt = tcp_time_now () - tc->opt.tsecr;
     }
@@ -391,6 +397,9 @@ tcp_dequeue_acked (tcp_connection_t *tc, u32 ack)
     tcp_timer_reset (tm, tc, TCP_TIMER_RETRANSMIT);
   else
     tcp_timer_update (tm, tc, TCP_TIMER_RETRANSMIT, tc->rto);
+
+  /* Good ACK received and valid RTT, make sure retransmit backoff is 0 */
+  tc->rto_boff = 0;
 }
 
 static int
@@ -1013,9 +1022,8 @@ tcp46_syn_sent_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
             {
               /* Our SYN is ACKed: we have iss < ack = snd_una */
 
-              /* Dequeue acknowledged segments */
-              tcp_dequeue_acked (new_tc0, ack0);
-
+              /* TODO Dequeue acknowledged segments if we support Fast Open */
+              new_tc0->snd_una = ack0;
               new_tc0->state = TCP_CONNECTION_STATE_ESTABLISHED;
 
               /* Notify app that we have connection */
@@ -1259,6 +1267,8 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
 
               /* Shoulder tap the server */
               stream_session_accept_notify (&tc0->connection);
+
+              tcp_timer_reset (tm, tc0, TCP_TIMER_RETRANSMIT_SYN);
               break;
             case TCP_CONNECTION_STATE_ESTABLISHED:
               /* XXX Packets may have been enqueued before state change */
