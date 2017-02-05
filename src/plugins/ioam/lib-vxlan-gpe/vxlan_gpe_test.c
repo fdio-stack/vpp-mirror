@@ -104,11 +104,11 @@ api_vxlan_gpe_ioam_enable (vat_main_t * vam)
 {
   unformat_input_t *input = vam->input;
   vl_api_vxlan_gpe_ioam_enable_t *mp;
-  f64 timeout;
   u32 id = 0;
   int has_trace_option = 0;
   int has_pow_option = 0;
   int has_ppc_option = 0;
+  int ret;
 
   while (unformat_check_input (input) != UNFORMAT_END_OF_INPUT)
     {
@@ -125,17 +125,16 @@ api_vxlan_gpe_ioam_enable (vat_main_t * vam)
       else
 	break;
     }
-  M (VXLAN_GPE_IOAM_ENABLE, vxlan_gpe_ioam_enable);
+  M (VXLAN_GPE_IOAM_ENABLE, mp);
   mp->id = htons (id);
   mp->trace_ppc = has_ppc_option;
   mp->pow_enable = has_pow_option;
   mp->trace_enable = has_trace_option;
 
 
-  S;
-  W;
-
-  return (0);
+  S (mp);
+  W (ret);
+  return ret;
 }
 
 
@@ -143,12 +142,12 @@ static int
 api_vxlan_gpe_ioam_disable (vat_main_t * vam)
 {
   vl_api_vxlan_gpe_ioam_disable_t *mp;
-  f64 timeout;
+  int ret;
 
-  M (VXLAN_GPE_IOAM_DISABLE, vxlan_gpe_ioam_disable);
-  S;
-  W;
-  return 0;
+  M (VXLAN_GPE_IOAM_DISABLE, mp);
+  S (mp);
+  W (ret);
+  return ret;
 }
 
 static int
@@ -163,7 +162,7 @@ api_vxlan_gpe_ioam_vni_enable (vat_main_t * vam)
   u8 remote_set = 0;
   u32 vni;
   u8 vni_set = 0;
-  f64 timeout;
+  int ret;
 
 
   while (unformat_check_input (line_input) != UNFORMAT_END_OF_INPUT)
@@ -223,7 +222,7 @@ api_vxlan_gpe_ioam_vni_enable (vat_main_t * vam)
       return -99;
     }
 
-  M (VXLAN_GPE_IOAM_VNI_ENABLE, vxlan_gpe_ioam_vni_enable);
+  M (VXLAN_GPE_IOAM_VNI_ENABLE, mp);
 
 
   if (ipv6_set)
@@ -240,10 +239,9 @@ api_vxlan_gpe_ioam_vni_enable (vat_main_t * vam)
   mp->vni = ntohl (vni);
   mp->is_ipv6 = ipv6_set;
 
-  S;
-  W;
-
-  return (0);
+  S (mp);
+  W (ret);
+  return ret;
 }
 
 static int
@@ -258,7 +256,7 @@ api_vxlan_gpe_ioam_vni_disable (vat_main_t * vam)
   u8 remote_set = 0;
   u32 vni;
   u8 vni_set = 0;
-  f64 timeout;
+  int ret;
 
 
   while (unformat_check_input (line_input) != UNFORMAT_END_OF_INPUT)
@@ -318,7 +316,7 @@ api_vxlan_gpe_ioam_vni_disable (vat_main_t * vam)
       return -99;
     }
 
-  M (VXLAN_GPE_IOAM_VNI_DISABLE, vxlan_gpe_ioam_vni_disable);
+  M (VXLAN_GPE_IOAM_VNI_DISABLE, mp);
 
 
   if (ipv6_set)
@@ -335,10 +333,9 @@ api_vxlan_gpe_ioam_vni_disable (vat_main_t * vam)
   mp->vni = ntohl (vni);
   mp->is_ipv6 = ipv6_set;
 
-  S;
-  W;
-
-  return 0;
+  S (mp);
+  W (ret);
+  return ret;
 }
 
 static int
@@ -351,7 +348,7 @@ api_vxlan_gpe_ioam_transit_enable (vat_main_t * vam)
   u8 ipv4_set = 0, ipv6_set = 0;
   u8 local_set = 0;
   u32 outer_fib_index = 0;
-  f64 timeout;
+  int ret;
 
 
   while (unformat_check_input (line_input) != UNFORMAT_END_OF_INPUT)
@@ -389,7 +386,7 @@ api_vxlan_gpe_ioam_transit_enable (vat_main_t * vam)
     }
 
 
-  M (VXLAN_GPE_IOAM_TRANSIT_ENABLE, vxlan_gpe_ioam_transit_enable);
+  M (VXLAN_GPE_IOAM_TRANSIT_ENABLE, mp);
 
 
   if (ipv6_set)
@@ -405,10 +402,9 @@ api_vxlan_gpe_ioam_transit_enable (vat_main_t * vam)
   mp->outer_fib_index = htonl (outer_fib_index);
   mp->is_ipv6 = ipv6_set;
 
-  S;
-  W;
-
-  return (0);
+  S (mp);
+  W (ret);
+  return ret;
 }
 
 static int
@@ -421,7 +417,7 @@ api_vxlan_gpe_ioam_transit_disable (vat_main_t * vam)
   u8 ipv4_set = 0, ipv6_set = 0;
   u8 local_set = 0;
   u32 outer_fib_index = 0;
-  f64 timeout;
+  int ret;
 
 
   while (unformat_check_input (line_input) != UNFORMAT_END_OF_INPUT)
@@ -459,7 +455,7 @@ api_vxlan_gpe_ioam_transit_disable (vat_main_t * vam)
     }
 
 
-  M (VXLAN_GPE_IOAM_TRANSIT_DISABLE, vxlan_gpe_ioam_transit_disable);
+  M (VXLAN_GPE_IOAM_TRANSIT_DISABLE, mp);
 
 
   if (ipv6_set)
@@ -474,11 +470,9 @@ api_vxlan_gpe_ioam_transit_disable (vat_main_t * vam)
   mp->outer_fib_index = htonl (outer_fib_index);
   mp->is_ipv6 = ipv6_set;
 
-  S;
-  W;
-
-
-  return (0);
+  S (mp);
+  W (ret);
+  return ret;
 }
 
 /*

@@ -601,8 +601,7 @@ VLIB_CLI_COMMAND (replicate_show_command, static) = {
 typedef struct replicate_trace_t_
 {
     index_t rep_index;
-    index_t dpo_index;
-    dpo_type_t dpo_type;
+    dpo_id_t dpo;
 } replicate_trace_t;
 
 static uword
@@ -656,8 +655,7 @@ replicate_inline (vlib_main_t * vm,
             {
                 replicate_trace_t *t = vlib_add_trace (vm, node, b0, sizeof (*t));
                 t->rep_index = repi0;
-                t->dpo_index = dpo0->dpoi_index;
-                t->dpo_type = dpo0->dpoi_type;
+                t->dpo = *dpo0;
             }
             vlib_validate_buffer_enqueue_x1 (vm, node, next_index,
                                              to_next, n_left_to_next,
@@ -666,6 +664,20 @@ replicate_inline (vlib_main_t * vm,
             /* ship copies to the rest of the buckets */
             for (bucket = 1; bucket < rep0->rep_n_buckets; bucket++)
             {
+                /*
+                 * After the enqueue of the first buffer, and of all subsequent
+                 * buffers in this loop, it is possible that we over-flow the
+                 * frame of the to-next node. When this happens we need to 'put'
+                 * that full frame to the node and get a fresh empty one.
+                 * Note that these are macros with side effects that change
+                 * to_next & n_left_to_next
+                 */
+                if (PREDICT_FALSE(0 == n_left_to_next))
+                {
+                    vlib_put_next_frame (vm, node, next_index, n_left_to_next);
+                    vlib_get_next_frame (vm, node, next_index, to_next, n_left_to_next);
+                }
+
                 /* Make a copy */
                 c0 = vlib_buffer_copy(vm, b0);
                 ci0 = vlib_get_buffer_index(vm, c0);
@@ -678,12 +690,11 @@ replicate_inline (vlib_main_t * vm,
                 next0 = dpo0->dpoi_next_node;
                 vnet_buffer (c0)->ip.adj_index[VLIB_TX] = dpo0->dpoi_index;
 
-                if (PREDICT_FALSE(b0->flags & VLIB_BUFFER_IS_TRACED))
+                if (PREDICT_FALSE(c0->flags & VLIB_BUFFER_IS_TRACED))
                 {
-                    replicate_trace_t *t = vlib_add_trace (vm, node, b0, sizeof (*t));
+                    replicate_trace_t *t = vlib_add_trace (vm, node, c0, sizeof (*t));
                     t->rep_index = repi0;
-                    t->dpo_index = dpo0->dpoi_index;
-                    t->dpo_type = dpo0->dpoi_type;
+                    t->dpo = *dpo0;
                 }
 
                 vlib_validate_buffer_enqueue_x1 (vm, node, next_index,
@@ -705,10 +716,9 @@ format_replicate_trace (u8 * s, va_list * args)
   CLIB_UNUSED (vlib_node_t * node) = va_arg (*args, vlib_node_t *);
   replicate_trace_t *t = va_arg (*args, replicate_trace_t *);
 
-  s = format (s, "replicate: %d via %U:%d",
+  s = format (s, "replicate: %d via %U",
               t->rep_index,
-              format_dpo_type, t->dpo_type,
-              t->dpo_index);
+              format_dpo_id, &t->dpo);
   return s;
 }
 

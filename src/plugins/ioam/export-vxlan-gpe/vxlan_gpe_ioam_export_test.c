@@ -92,9 +92,9 @@ static int
 api_vxlan_gpe_ioam_export_enable_disable (vat_main_t * vam)
 {
   unformat_input_t *i = vam->input;
-  f64 timeout;
   int is_disable = 0;
   vl_api_vxlan_gpe_ioam_export_enable_disable_t *mp;
+  int ret;
 
   /* Parse args required to build the message */
   while (unformat_check_input (i) != UNFORMAT_END_OF_INPUT)
@@ -106,15 +106,15 @@ api_vxlan_gpe_ioam_export_enable_disable (vat_main_t * vam)
     }
 
   /* Construct the API message */
-  M (VXLAN_GPE_IOAM_EXPORT_ENABLE_DISABLE,
-     vxlan_gpe_ioam_export_enable_disable);
+  M (VXLAN_GPE_IOAM_EXPORT_ENABLE_DISABLE, mp);
   mp->is_disable = is_disable;
 
   /* send it... */
-  S;
+  S (mp);
 
   /* Wait for a reply... */
-  W;
+  W (ret);
+  return ret;
 }
 
 /*

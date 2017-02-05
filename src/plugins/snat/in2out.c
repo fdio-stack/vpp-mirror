@@ -163,6 +163,13 @@ snat_not_translate (snat_main_t * sm, snat_runtime_t * rt, u32 sw_if_index0,
   if (PREDICT_FALSE(ip0->dst_address.as_u32 == rt->cached_ip4_address))
     return 1;
 
+  /* If outside FIB index is not resolved yet */
+  if (sm->outside_fib_index == ~0)
+    {
+      sm->outside_fib_index =
+        ip4_fib_table_find_or_create_and_lock (sm->outside_vrf_id);
+    }
+
   key0.addr = ip0->dst_address;
   key0.port = udp0->dst_port;
   key0.protocol = proto0;
@@ -224,7 +231,7 @@ static u32 slow_path (snat_main_t *sm, vlib_buffer_t *b0,
   u32 address_index = ~0;
   u32 outside_fib_index;
   uword * p;
-  snat_static_mapping_key_t worker_by_out_key;
+  snat_worker_key_t worker_by_out_key;
 
   p = hash_get (sm->ip4_main->fib_index_by_table_id, sm->outside_vrf_id);
   if (! p)
@@ -234,6 +241,7 @@ static u32 slow_path (snat_main_t *sm, vlib_buffer_t *b0,
     }
   outside_fib_index = p[0];
 
+  key1.protocol = key0->protocol;
   user_key.addr = ip0->src_address;
   user_key.fib_index = rx_fib_index0;
   kv0.key = user_key.as_u64;
@@ -520,12 +528,19 @@ snat_hairpinning (snat_main_t *sm,
                   u32 proto0)
 {
   snat_session_key_t key0, sm0;
-  snat_static_mapping_key_t k0;
+  snat_worker_key_t k0;
   snat_session_t * s0;
   clib_bihash_kv_8_8_t kv0, value0;
   ip_csum_t sum0;
   u32 new_dst_addr0 = 0, old_dst_addr0, ti = 0, si;
   u16 new_dst_port0, old_dst_port0;
+
+  /* If outside FIB index is not resolved yet */
+  if (sm->outside_fib_index == ~0)
+    {
+      sm->outside_fib_index =
+        ip4_fib_table_find_or_create_and_lock (sm->outside_vrf_id);
+    }
 
   key0.addr = ip0->dst_address;
   key0.port = udp0->dst_port;
@@ -682,13 +697,7 @@ snat_in2out_node_fn_inline (vlib_main_t * vm,
 
           next0 = next1 = SNAT_IN2OUT_NEXT_LOOKUP;
 
-          proto0 = ~0;
-          proto0 = (ip0->protocol == IP_PROTOCOL_UDP) 
-            ? SNAT_PROTOCOL_UDP : proto0;
-          proto0 = (ip0->protocol == IP_PROTOCOL_TCP) 
-            ? SNAT_PROTOCOL_TCP : proto0;
-          proto0 = (ip0->protocol == IP_PROTOCOL_ICMP) 
-            ? SNAT_PROTOCOL_ICMP : proto0;
+          proto0 = ip_proto_to_snat_proto (ip0->protocol);
 
           /* Next configured feature, probably ip4-lookup */
           if (is_slow_path)
@@ -818,13 +827,7 @@ snat_in2out_node_fn_inline (vlib_main_t * vm,
 	  rx_fib_index1 = vec_elt (sm->ip4_main->fib_index_by_sw_if_index, 
                                    sw_if_index1);
 
-          proto1 = ~0;
-          proto1 = (ip1->protocol == IP_PROTOCOL_UDP) 
-            ? SNAT_PROTOCOL_UDP : proto1;
-          proto1 = (ip1->protocol == IP_PROTOCOL_TCP) 
-            ? SNAT_PROTOCOL_TCP : proto1;
-          proto1 = (ip1->protocol == IP_PROTOCOL_ICMP) 
-            ? SNAT_PROTOCOL_ICMP : proto1;
+          proto1 = ip_proto_to_snat_proto (ip1->protocol);
 
           /* Next configured feature, probably ip4-lookup */
           if (is_slow_path)
@@ -989,13 +992,7 @@ snat_in2out_node_fn_inline (vlib_main_t * vm,
 	  rx_fib_index0 = vec_elt (sm->ip4_main->fib_index_by_sw_if_index, 
                                    sw_if_index0);
 
-          proto0 = ~0;
-          proto0 = (ip0->protocol == IP_PROTOCOL_UDP) 
-            ? SNAT_PROTOCOL_UDP : proto0;
-          proto0 = (ip0->protocol == IP_PROTOCOL_TCP) 
-            ? SNAT_PROTOCOL_TCP : proto0;
-          proto0 = (ip0->protocol == IP_PROTOCOL_ICMP) 
-            ? SNAT_PROTOCOL_ICMP : proto0;
+          proto0 = ip_proto_to_snat_proto (ip0->protocol);
 
           /* Next configured feature, probably ip4-lookup */
           if (is_slow_path)
@@ -1497,13 +1494,7 @@ snat_in2out_fast_static_map_fn (vlib_main_t * vm,
           sw_if_index0 = vnet_buffer(b0)->sw_if_index[VLIB_RX];
 	  rx_fib_index0 = ip4_fib_table_get_index_for_sw_if_index(sw_if_index0);
 
-          proto0 = ~0;
-          proto0 = (ip0->protocol == IP_PROTOCOL_UDP)
-            ? SNAT_PROTOCOL_UDP : proto0;
-          proto0 = (ip0->protocol == IP_PROTOCOL_TCP)
-            ? SNAT_PROTOCOL_TCP : proto0;
-          proto0 = (ip0->protocol == IP_PROTOCOL_ICMP)
-            ? SNAT_PROTOCOL_ICMP : proto0;
+          proto0 = ip_proto_to_snat_proto (ip0->protocol);
 
           if (PREDICT_FALSE (proto0 == ~0))
               goto trace0;

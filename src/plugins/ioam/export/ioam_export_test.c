@@ -94,9 +94,9 @@ static int
 api_ioam_export_ip6_enable_disable (vat_main_t * vam)
 {
   unformat_input_t *i = vam->input;
-  f64 timeout;
   int is_disable = 0;
   vl_api_ioam_export_ip6_enable_disable_t *mp;
+  int ret;
 
   /* Parse args required to build the message */
   while (unformat_check_input (i) != UNFORMAT_END_OF_INPUT)
@@ -108,14 +108,15 @@ api_ioam_export_ip6_enable_disable (vat_main_t * vam)
     }
 
   /* Construct the API message */
-  M (IOAM_EXPORT_IP6_ENABLE_DISABLE, ioam_export_ip6_enable_disable);
+  M(IOAM_EXPORT_IP6_ENABLE_DISABLE, mp);
   mp->is_disable = is_disable;
 
   /* send it... */
-  S;
+  S(mp);
 
   /* Wait for a reply... */
-  W;
+  W (ret);
+  return ret;
 }
 
 /*
