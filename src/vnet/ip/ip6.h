@@ -49,6 +49,7 @@
 #include <stdbool.h>
 #include <vppinfra/bihash_24_8.h>
 #include <vppinfra/bihash_template.h>
+#include <vnet/util/radix.h>
 
 /*
  * Default size of the ip6 fib hash table
@@ -74,6 +75,21 @@ typedef struct
   /* flow hash configuration */
   flow_hash_config_t flow_hash_config;
 } ip6_fib_t;
+
+typedef struct ip6_mfib_t
+{
+  /* Table ID (hash key) for this FIB. */
+  u32 table_id;
+
+  /* Index into FIB vector. */
+  u32 index;
+
+  /*
+   *  Pointer to the top of a radix tree.
+   * This cannot be realloc'd, hence it cannot be inlined with this table
+   */
+  struct radix_node_head *rhead;
+} ip6_mfib_t;
 
 struct ip6_main_t;
 
@@ -137,11 +153,17 @@ typedef struct ip6_main_t
   /* Pool of FIBs. */
   struct fib_table_t_ *fibs;
 
+  /** Vector of MFIBs. */
+  struct mfib_table_t_ *mfibs;
+
   /* Network byte orders subnet mask for each prefix length */
   ip6_address_t fib_masks[129];
 
   /* Table index indexed by software interface. */
   u32 *fib_index_by_sw_if_index;
+
+  /** Table index indexed by software interface. */
+  u32 *mfib_index_by_sw_if_index;
 
   /* IP6 enabled count by software interface */
   u8 *ip_enabled_by_sw_if_index;
@@ -149,6 +171,10 @@ typedef struct ip6_main_t
   /* Hash table mapping table id to fib index.
      ID space is not necessarily dense; index space is dense. */
   uword *fib_index_by_table_id;
+
+  /** Hash table mapping table id to multicast fib index.
+     ID space is not necessarily dense; index space is dense. */
+  uword *mfib_index_by_table_id;
 
   /* Hash table mapping interface rewrite adjacency index by sw if index. */
   uword *interface_route_adj_index_by_sw_if_index;
@@ -185,6 +211,7 @@ extern ip6_main_t ip6_main;
 /* Global ip6 input node.  Errors get attached to ip6 input node. */
 extern vlib_node_registration_t ip6_input_node;
 extern vlib_node_registration_t ip6_rewrite_node;
+extern vlib_node_registration_t ip6_rewrite_mcast_node;
 extern vlib_node_registration_t ip6_rewrite_local_node;
 extern vlib_node_registration_t ip6_discover_neighbor_node;
 extern vlib_node_registration_t ip6_glean_node;
@@ -398,6 +425,10 @@ int vnet_ip6_nd_term (vlib_main_t * vm,
 		      ethernet_header_t * eth,
 		      ip6_header_t * ip,
 		      u32 sw_if_index, u16 bd_index, u8 shg);
+
+u8 *format_ip6_forward_next_trace (u8 * s, va_list * args);
+
+u32 ip6_tcp_udp_icmp_validate_checksum (vlib_main_t * vm, vlib_buffer_t * p0);
 
 int vnet_set_ip6_classify_intfc (vlib_main_t * vm, u32 sw_if_index,
 				 u32 table_index);

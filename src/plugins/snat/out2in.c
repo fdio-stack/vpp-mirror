@@ -19,6 +19,7 @@
 #include <vnet/handoff.h>
 
 #include <vnet/ip/ip.h>
+#include <vnet/ip/udp.h>
 #include <vnet/ethernet/ethernet.h>
 #include <vnet/fib/ip4_fib.h>
 #include <snat/snat.h>
@@ -404,13 +405,7 @@ snat_out2in_node_fn (vlib_main_t * vm,
 	  rx_fib_index0 = vec_elt (sm->ip4_main->fib_index_by_sw_if_index, 
                                    sw_if_index0);
 
-          proto0 = ~0;
-          proto0 = (ip0->protocol == IP_PROTOCOL_UDP) 
-            ? SNAT_PROTOCOL_UDP : proto0;
-          proto0 = (ip0->protocol == IP_PROTOCOL_TCP) 
-            ? SNAT_PROTOCOL_TCP : proto0;
-          proto0 = (ip0->protocol == IP_PROTOCOL_ICMP) 
-            ? SNAT_PROTOCOL_ICMP : proto0;
+          proto0 = ip_proto_to_snat_proto (ip0->protocol);
 
           if (PREDICT_FALSE (proto0 == ~0))
               goto trace0;
@@ -437,6 +432,14 @@ snat_out2in_node_fn (vlib_main_t * vm,
               if (snat_static_mapping_match(sm, key0, &sm0, 1))
                 {
                   b0->error = node->errors[SNAT_OUT2IN_ERROR_NO_TRANSLATION];
+                  /* 
+                   * Send DHCP packets to the ipv4 stack, or we won't
+                   * be able to use dhcp client on the outside interface
+                   */
+                  if (proto0 != SNAT_PROTOCOL_UDP 
+                      || (udp0->dst_port 
+                          != clib_host_to_net_u16(UDP_DST_PORT_dhcp_to_client)))
+                    next0 = SNAT_OUT2IN_NEXT_DROP;
                   goto trace0;
                 }
 
@@ -444,7 +447,11 @@ snat_out2in_node_fn (vlib_main_t * vm,
               s0 = create_session_for_static_mapping(sm, b0, sm0, key0, node,
                                                      cpu_index);
               if (!s0)
-                goto trace0;
+                {
+                  b0->error = node->errors[SNAT_OUT2IN_ERROR_NO_TRANSLATION];
+                  next0 = SNAT_OUT2IN_NEXT_DROP;
+                  goto trace0;
+                }
             }
           else
             s0 = pool_elt_at_index (sm->per_thread_data[cpu_index].sessions,
@@ -523,13 +530,7 @@ snat_out2in_node_fn (vlib_main_t * vm,
 	  rx_fib_index1 = vec_elt (sm->ip4_main->fib_index_by_sw_if_index, 
                                    sw_if_index1);
 
-          proto1 = ~0;
-          proto1 = (ip1->protocol == IP_PROTOCOL_UDP) 
-            ? SNAT_PROTOCOL_UDP : proto1;
-          proto1 = (ip1->protocol == IP_PROTOCOL_TCP) 
-            ? SNAT_PROTOCOL_TCP : proto1;
-          proto1 = (ip1->protocol == IP_PROTOCOL_ICMP) 
-            ? SNAT_PROTOCOL_ICMP : proto1;
+          proto1 = ip_proto_to_snat_proto (ip1->protocol);
 
           if (PREDICT_FALSE (proto1 == ~0))
               goto trace1;
@@ -556,6 +557,14 @@ snat_out2in_node_fn (vlib_main_t * vm,
               if (snat_static_mapping_match(sm, key1, &sm1, 1))
                 {
                   b1->error = node->errors[SNAT_OUT2IN_ERROR_NO_TRANSLATION];
+                  /* 
+                   * Send DHCP packets to the ipv4 stack, or we won't
+                   * be able to use dhcp client on the outside interface
+                   */
+                  if (proto1 != SNAT_PROTOCOL_UDP 
+                      || (udp1->dst_port 
+                          != clib_host_to_net_u16(UDP_DST_PORT_dhcp_to_client)))
+                    next1 = SNAT_OUT2IN_NEXT_DROP;
                   goto trace1;
                 }
 
@@ -563,7 +572,11 @@ snat_out2in_node_fn (vlib_main_t * vm,
               s1 = create_session_for_static_mapping(sm, b1, sm1, key1, node,
                                                      cpu_index);
               if (!s1)
-                goto trace1;
+                {
+                  b1->error = node->errors[SNAT_OUT2IN_ERROR_NO_TRANSLATION];
+                  next1 = SNAT_OUT2IN_NEXT_DROP;
+                  goto trace1;
+                }
             }
           else
             s1 = pool_elt_at_index (sm->per_thread_data[cpu_index].sessions,
@@ -676,13 +689,7 @@ snat_out2in_node_fn (vlib_main_t * vm,
 	  rx_fib_index0 = vec_elt (sm->ip4_main->fib_index_by_sw_if_index, 
                                    sw_if_index0);
 
-          proto0 = ~0;
-          proto0 = (ip0->protocol == IP_PROTOCOL_UDP) 
-            ? SNAT_PROTOCOL_UDP : proto0;
-          proto0 = (ip0->protocol == IP_PROTOCOL_TCP) 
-            ? SNAT_PROTOCOL_TCP : proto0;
-          proto0 = (ip0->protocol == IP_PROTOCOL_ICMP) 
-            ? SNAT_PROTOCOL_ICMP : proto0;
+          proto0 = ip_proto_to_snat_proto (ip0->protocol);
 
           if (PREDICT_FALSE (proto0 == ~0))
               goto trace00;
@@ -709,6 +716,15 @@ snat_out2in_node_fn (vlib_main_t * vm,
               if (snat_static_mapping_match(sm, key0, &sm0, 1))
                 {
                   b0->error = node->errors[SNAT_OUT2IN_ERROR_NO_TRANSLATION];
+                  /* 
+                   * Send DHCP packets to the ipv4 stack, or we won't
+                   * be able to use dhcp client on the outside interface
+                   */
+                  if (proto0 != SNAT_PROTOCOL_UDP 
+                      || (udp0->dst_port 
+                          != clib_host_to_net_u16(UDP_DST_PORT_dhcp_to_client)))
+
+                    next0 = SNAT_OUT2IN_NEXT_DROP;
                   goto trace00;
                 }
 
@@ -716,7 +732,11 @@ snat_out2in_node_fn (vlib_main_t * vm,
               s0 = create_session_for_static_mapping(sm, b0, sm0, key0, node,
                                                      cpu_index);
               if (!s0)
-                goto trace00;
+                {
+                  b0->error = node->errors[SNAT_OUT2IN_ERROR_NO_TRANSLATION];
+                    next0 = SNAT_OUT2IN_NEXT_DROP;
+                  goto trace00;
+                }
             }
           else
             s0 = pool_elt_at_index (sm->per_thread_data[cpu_index].sessions,
@@ -863,7 +883,7 @@ snat_out2in_worker_handoff_fn (vlib_main_t * vm,
       u32 rx_fib_index0;
       ip4_header_t * ip0;
       udp_header_t * udp0;
-      snat_static_mapping_key_t key0;
+      snat_worker_key_t key0;
       clib_bihash_kv_8_8_t kv0, value0;
       u8 do_handoff;
 
@@ -1158,13 +1178,7 @@ snat_out2in_fast_node_fn (vlib_main_t * vm,
 
 	  vnet_feature_next (sw_if_index0, &next0, b0);
 
-          proto0 = ~0;
-          proto0 = (ip0->protocol == IP_PROTOCOL_UDP)
-            ? SNAT_PROTOCOL_UDP : proto0;
-          proto0 = (ip0->protocol == IP_PROTOCOL_TCP)
-            ? SNAT_PROTOCOL_TCP : proto0;
-          proto0 = (ip0->protocol == IP_PROTOCOL_ICMP)
-            ? SNAT_PROTOCOL_ICMP : proto0;
+          proto0 = ip_proto_to_snat_proto (ip0->protocol);
 
           if (PREDICT_FALSE (proto0 == ~0))
               goto trace00;

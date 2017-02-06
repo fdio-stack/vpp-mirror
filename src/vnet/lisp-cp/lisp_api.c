@@ -27,6 +27,16 @@
 
 #include <vnet/vnet_msg_enum.h>
 
+#define vl_api_remote_locator_t_endian vl_noop_handler
+#define vl_api_remote_locator_t_print vl_noop_handler
+#define vl_api_local_locator_t_endian vl_noop_handler
+#define vl_api_local_locator_t_print vl_noop_handler
+
+#define vl_api_lisp_add_del_locator_set_t_endian vl_noop_handler
+#define vl_api_lisp_add_del_locator_set_t_print vl_noop_handler
+#define vl_api_lisp_add_del_remote_mapping_t_endian vl_noop_handler
+#define vl_api_lisp_add_del_remote_mapping_t_print vl_noop_handler
+
 #define vl_typedefs		/* define message structures */
 #include <vnet/vnet_all_api_h.h>
 #undef vl_typedefs
@@ -73,37 +83,20 @@ _(LISP_ADD_DEL_MAP_REQUEST_ITR_RLOCS,                                   \
 _(LISP_GET_MAP_REQUEST_ITR_RLOCS, lisp_get_map_request_itr_rlocs)       \
 _(SHOW_LISP_PITR, show_lisp_pitr)                                       \
 _(SHOW_LISP_MAP_REQUEST_MODE, show_lisp_map_request_mode)               \
-
-/** Used for transferring locators via VPP API */
-/* *INDENT-OFF* */
-typedef CLIB_PACKED (struct {
-  u8 is_ip4; /**< is locator an IPv4 address */
-  u8 priority; /**< locator priority */
-  u8 weight; /**< locator weight */
-  u8 addr[16]; /**< IPv4/IPv6 address */
-}) rloc_t;
-/* *INDENT-ON* */
-
-/** Used for transferring locators via VPP API */
-/* *INDENT-OFF* */
-typedef CLIB_PACKED (struct {
-  u32 sw_if_index; /**< locator sw_if_index */
-  u8 priority; /**< locator priority */
-  u8 weight; /**< locator weight */
-}) ls_locator_t;
-/* *INDENT-ON* */
+_(LISP_USE_PETR, lisp_use_petr)                                         \
+_(SHOW_LISP_USE_PETR, show_lisp_use_petr)                               \
 
 static locator_t *
-unformat_lisp_locs (void *rmt_locs, u32 rloc_num)
+unformat_lisp_locs (vl_api_remote_locator_t * rmt_locs, u32 rloc_num)
 {
   u32 i;
   locator_t *locs = 0, loc;
-  rloc_t *r;
+  vl_api_remote_locator_t *r;
 
   for (i = 0; i < rloc_num; i++)
     {
       /* remote locators */
-      r = &((rloc_t *) rmt_locs)[i];
+      r = &rmt_locs[i];
       memset (&loc, 0, sizeof (loc));
       gid_address_ip_set (&loc.address, &r->addr, r->is_ip4 ? IP4 : IP6);
 
@@ -123,7 +116,7 @@ vl_api_lisp_add_del_locator_set_t_handler (vl_api_lisp_add_del_locator_set_t *
   int rv = 0;
   vnet_lisp_add_del_locator_set_args_t _a, *a = &_a;
   locator_t locator;
-  ls_locator_t *ls_loc;
+  vl_api_local_locator_t *ls_loc;
   u32 ls_index = ~0, locator_num;
   u8 *locator_name = NULL;
   int i;
@@ -140,7 +133,7 @@ vl_api_lisp_add_del_locator_set_t_handler (vl_api_lisp_add_del_locator_set_t *
   memset (&locator, 0, sizeof (locator));
   for (i = 0; i < locator_num; i++)
     {
-      ls_loc = &((ls_locator_t *) mp->locators)[i];
+      ls_loc = &mp->locators[i];
       VALIDATE_SW_IF_INDEX (ls_loc);
 
       locator.sw_if_index = htonl (ls_loc->sw_if_index);
@@ -396,6 +389,62 @@ vl_api_lisp_pitr_set_locator_set_t_handler (vl_api_lisp_pitr_set_locator_set_t
   vec_free (ls_name);
 
   REPLY_MACRO (VL_API_LISP_PITR_SET_LOCATOR_SET_REPLY);
+}
+
+static void
+vl_api_lisp_use_petr_t_handler (vl_api_lisp_use_petr_t * mp)
+{
+  vl_api_lisp_use_petr_reply_t *rmp;
+  int rv = 0;
+  ip_address_t addr;
+
+  ip_address_set (&addr, &mp->address, mp->is_ip4 ? IP4 : IP6);
+  rv = vnet_lisp_use_petr (&addr, mp->is_add);
+
+  REPLY_MACRO (VL_API_LISP_USE_PETR_REPLY);
+}
+
+static void
+vl_api_show_lisp_use_petr_t_handler (vl_api_show_lisp_use_petr_t * mp)
+{
+  unix_shared_memory_queue_t *q = NULL;
+  vl_api_show_lisp_use_petr_reply_t *rmp = NULL;
+  lisp_cp_main_t *lcm = vnet_lisp_cp_get_main ();
+  mapping_t *m;
+  locator_set_t *ls = 0;
+  int rv = 0;
+  locator_t *loc = 0;
+  u8 status = 0;
+  gid_address_t addr;
+
+  q = vl_api_client_index_to_input_queue (mp->client_index);
+  if (q == 0)
+    {
+      return;
+    }
+
+  memset (&addr, 0, sizeof (addr));
+  status = lcm->flags & LISP_FLAG_USE_PETR;
+  if (status)
+    {
+      m = pool_elt_at_index (lcm->mapping_pool, lcm->petr_map_index);
+      if (~0 != m->locator_set_index)
+	{
+	  ls =
+	    pool_elt_at_index (lcm->locator_set_pool, m->locator_set_index);
+	  loc = pool_elt_at_index (lcm->locator_pool, ls->locator_indices[0]);
+	  gid_address_copy (&addr, &loc->address);
+	}
+    }
+
+  /* *INDENT-OFF* */
+  REPLY_MACRO2 (VL_API_SHOW_LISP_USE_PETR_REPLY,
+  {
+      rmp->status = status;
+      gid_address_put (rmp->address, &addr);
+      rmp->is_ip4 = (gid_address_ip_version (&addr) == IP4);
+  });
+  /* *INDENT-ON* */
 }
 
 static void
@@ -1043,12 +1092,11 @@ vl_api_lisp_adjacencies_get_t_handler (vl_api_lisp_adjacencies_get_t * mp)
   vl_api_lisp_adjacencies_get_reply_t *rmp = 0;
   lisp_adjacency_t *adjs = 0;
   int rv = 0;
-  vl_api_lisp_adjacency_t a;
   u32 size = ~0;
   u32 vni = clib_net_to_host_u32 (mp->vni);
 
   adjs = vnet_lisp_adjacencies_get_by_vni (vni);
-  size = vec_len (adjs) * sizeof (a);
+  size = vec_len (adjs) * sizeof (vl_api_lisp_adjacency_t);
 
   /* *INDENT-OFF* */
   REPLY_MACRO4 (VL_API_LISP_ADJACENCIES_GET_REPLY, size,

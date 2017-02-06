@@ -835,7 +835,7 @@ u32
 stream_session_peek_bytes (transport_connection_t *tc, u8 *buffer, u32 offset,
                            u32 max_bytes)
 {
-  stream_session_t *s = stream_session_get (tc->c_index, tc->thread_index);
+  stream_session_t *s = stream_session_get (tc->s_index, tc->thread_index);
   return svm_fifo_peek (s->server_tx_fifo, s->pid, offset, max_bytes, buffer);
 }
 

@@ -31,84 +31,92 @@ static vlib_node_registration_t bfd_udp6_input_node;
 
 bfd_udp_main_t bfd_udp_main;
 
-void bfd_add_udp4_transport (vlib_main_t *vm, vlib_buffer_t *b,
-                             bfd_udp_session_t *bus)
+void
+bfd_add_udp4_transport (vlib_main_t * vm, vlib_buffer_t * b,
+			bfd_udp_session_t * bus)
 {
-  udp_header_t *udp;
   const bfd_udp_key_t *key = &bus->key;
 
   b->flags |= VNET_BUFFER_LOCALLY_ORIGINATED;
   vnet_buffer (b)->ip.adj_index[VLIB_RX] = bus->adj_index;
   vnet_buffer (b)->ip.adj_index[VLIB_TX] = bus->adj_index;
-  ip4_header_t *ip4;
-  const size_t headers_size = sizeof (*ip4) + sizeof (*udp);
-  vlib_buffer_advance (b, -headers_size);
-  ip4 = vlib_buffer_get_current (b);
-  udp = (udp_header_t *)(ip4 + 1);
-  memset (ip4, 0, headers_size);
-  ip4->ip_version_and_header_length = 0x45;
-  ip4->ttl = 255;
-  ip4->protocol = IP_PROTOCOL_UDP;
-  ip4->src_address.as_u32 = key->local_addr.ip4.as_u32;
-  ip4->dst_address.as_u32 = key->peer_addr.ip4.as_u32;
+  typedef struct
+  {
+    ip4_header_t ip4;
+    udp_header_t udp;
+  } ip4_udp_headers;
+  ip4_udp_headers *headers = NULL;
+  vlib_buffer_advance (b, -sizeof (*headers));
+  headers = vlib_buffer_get_current (b);
+  memset (headers, 0, sizeof (*headers));
+  headers->ip4.ip_version_and_header_length = 0x45;
+  headers->ip4.ttl = 255;
+  headers->ip4.protocol = IP_PROTOCOL_UDP;
+  headers->ip4.src_address.as_u32 = key->local_addr.ip4.as_u32;
+  headers->ip4.dst_address.as_u32 = key->peer_addr.ip4.as_u32;
 
-  udp->src_port = clib_host_to_net_u16 (50000); /* FIXME */
-  udp->dst_port = clib_host_to_net_u16 (UDP_DST_PORT_bfd4);
+  headers->udp.src_port = clib_host_to_net_u16 (50000);	/* FIXME */
+  headers->udp.dst_port = clib_host_to_net_u16 (UDP_DST_PORT_bfd4);
 
   /* fix ip length, checksum and udp length */
   const u16 ip_length = vlib_buffer_length_in_chain (vm, b);
 
-  ip4->length = clib_host_to_net_u16 (ip_length);
-  ip4->checksum = ip4_header_checksum (ip4);
+  headers->ip4.length = clib_host_to_net_u16 (ip_length);
+  headers->ip4.checksum = ip4_header_checksum (&headers->ip4);
 
-  const u16 udp_length = ip_length - (sizeof (*ip4));
-  udp->length = clib_host_to_net_u16 (udp_length);
+  const u16 udp_length = ip_length - (sizeof (headers->ip4));
+  headers->udp.length = clib_host_to_net_u16 (udp_length);
 }
 
-void bfd_add_udp6_transport (vlib_main_t *vm, vlib_buffer_t *b,
-                             bfd_udp_session_t *bus)
+void
+bfd_add_udp6_transport (vlib_main_t * vm, vlib_buffer_t * b,
+			bfd_udp_session_t * bus)
 {
-  udp_header_t *udp;
   const bfd_udp_key_t *key = &bus->key;
 
   b->flags |= VNET_BUFFER_LOCALLY_ORIGINATED;
   vnet_buffer (b)->ip.adj_index[VLIB_RX] = bus->adj_index;
   vnet_buffer (b)->ip.adj_index[VLIB_TX] = bus->adj_index;
-  ip6_header_t *ip6;
-  const size_t headers_size = sizeof (*ip6) + sizeof (*udp);
-  vlib_buffer_advance (b, -headers_size);
-  ip6 = vlib_buffer_get_current (b);
-  udp = (udp_header_t *)(ip6 + 1);
-  memset (ip6, 0, headers_size);
-  ip6->ip_version_traffic_class_and_flow_label =
-      clib_host_to_net_u32 (0x6 << 28);
-  ip6->hop_limit = 255;
-  ip6->protocol = IP_PROTOCOL_UDP;
-  clib_memcpy (&ip6->src_address, &key->local_addr.ip6,
-               sizeof (ip6->src_address));
-  clib_memcpy (&ip6->dst_address, &key->peer_addr.ip6,
-               sizeof (ip6->dst_address));
+  typedef struct
+  {
+    ip6_header_t ip6;
+    udp_header_t udp;
+  } ip6_udp_headers;
+  ip6_udp_headers *headers = NULL;
+  vlib_buffer_advance (b, -sizeof (*headers));
+  headers = vlib_buffer_get_current (b);
+  memset (headers, 0, sizeof (*headers));
+  headers->ip6.ip_version_traffic_class_and_flow_label =
+    clib_host_to_net_u32 (0x6 << 28);
+  headers->ip6.hop_limit = 255;
+  headers->ip6.protocol = IP_PROTOCOL_UDP;
+  clib_memcpy (&headers->ip6.src_address, &key->local_addr.ip6,
+	       sizeof (headers->ip6.src_address));
+  clib_memcpy (&headers->ip6.dst_address, &key->peer_addr.ip6,
+	       sizeof (headers->ip6.dst_address));
 
-  udp->src_port = clib_host_to_net_u16 (50000); /* FIXME */
-  udp->dst_port = clib_host_to_net_u16 (UDP_DST_PORT_bfd6);
+  headers->udp.src_port = clib_host_to_net_u16 (50000);	/* FIXME */
+  headers->udp.dst_port = clib_host_to_net_u16 (UDP_DST_PORT_bfd6);
 
   /* fix ip payload length and udp length */
-  const u16 udp_length = vlib_buffer_length_in_chain (vm, b) - (sizeof (*ip6));
-  udp->length = clib_host_to_net_u16 (udp_length);
-  ip6->payload_length = udp->length;
+  const u16 udp_length =
+    vlib_buffer_length_in_chain (vm, b) - (sizeof (headers->ip6));
+  headers->udp.length = clib_host_to_net_u16 (udp_length);
+  headers->ip6.payload_length = headers->udp.length;
 
   /* IPv6 UDP checksum is mandatory */
   int bogus = 0;
-  udp->checksum = ip6_tcp_udp_icmp_compute_checksum (vm, b, ip6, &bogus);
+  headers->udp.checksum =
+    ip6_tcp_udp_icmp_compute_checksum (vm, b, &headers->ip6, &bogus);
   ASSERT (bogus == 0);
-  if (udp->checksum == 0)
+  if (headers->udp.checksum == 0)
     {
-      udp->checksum = 0xffff;
+      headers->udp.checksum = 0xffff;
     }
 }
 
-static bfd_session_t *bfd_lookup_session (bfd_udp_main_t *bum,
-                                          const bfd_udp_key_t *key)
+static bfd_session_t *
+bfd_lookup_session (bfd_udp_main_t * bum, const bfd_udp_key_t * key)
 {
   uword *p = mhash_get (&bum->bfd_session_idx_by_bfd_key, key);
   if (p)
@@ -118,14 +126,27 @@ static bfd_session_t *bfd_lookup_session (bfd_udp_main_t *bum,
   return 0;
 }
 
-static vnet_api_error_t
-bfd_udp_add_session_internal (bfd_udp_main_t *bum, u32 sw_if_index,
-                              u32 desired_min_tx_us, u32 required_min_rx_us,
-                              u8 detect_mult, const ip46_address_t *local_addr,
-                              const ip46_address_t *peer_addr, u32 *bs_index)
+static void
+bfd_udp_key_init (bfd_udp_key_t * key, u32 sw_if_index,
+		  const ip46_address_t * local_addr,
+		  const ip46_address_t * peer_addr)
 {
-  vnet_sw_interface_t *sw_if =
-      vnet_get_sw_interface (vnet_get_main (), sw_if_index);
+  memset (key, 0, sizeof (*key));
+  key->sw_if_index = sw_if_index;
+  key->local_addr.as_u64[0] = local_addr->as_u64[0];
+  key->local_addr.as_u64[1] = local_addr->as_u64[1];
+  key->peer_addr.as_u64[0] = peer_addr->as_u64[0];
+  key->peer_addr.as_u64[1] = peer_addr->as_u64[1];
+}
+
+static vnet_api_error_t
+bfd_udp_add_session_internal (bfd_udp_main_t * bum, u32 sw_if_index,
+			      u32 desired_min_tx_us, u32 required_min_rx_us,
+			      u8 detect_mult,
+			      const ip46_address_t * local_addr,
+			      const ip46_address_t * peer_addr,
+			      bfd_session_t ** bs_out)
+{
   /* get a pool entry and if we end up not needing it, give it back */
   bfd_transport_t t = BFD_TRANSPORT_UDP4;
   if (!ip46_address_is_ip4 (local_addr))
@@ -136,70 +157,67 @@ bfd_udp_add_session_internal (bfd_udp_main_t *bum, u32 sw_if_index,
   bfd_udp_session_t *bus = &bs->udp;
   memset (bus, 0, sizeof (*bus));
   bfd_udp_key_t *key = &bus->key;
-  key->sw_if_index = sw_if->sw_if_index;
-  key->local_addr.as_u64[0] = local_addr->as_u64[0];
-  key->local_addr.as_u64[1] = local_addr->as_u64[1];
-  key->peer_addr.as_u64[0] = peer_addr->as_u64[0];
-  key->peer_addr.as_u64[1] = peer_addr->as_u64[1];
+  bfd_udp_key_init (key, sw_if_index, local_addr, peer_addr);
   const bfd_session_t *tmp = bfd_lookup_session (bum, key);
   if (tmp)
     {
-      BFD_ERR ("duplicate bfd-udp session, existing bs_idx=%d", tmp->bs_idx);
+      clib_warning ("duplicate bfd-udp session, existing bs_idx=%d",
+		    tmp->bs_idx);
       bfd_put_session (bum->bfd_main, bs);
       return VNET_API_ERROR_BFD_EEXIST;
     }
-  key->sw_if_index = sw_if->sw_if_index;
   mhash_set (&bum->bfd_session_idx_by_bfd_key, key, bs->bs_idx, NULL);
   BFD_DBG ("session created, bs_idx=%u, sw_if_index=%d, local=%U, peer=%U",
-           bs->bs_idx, key->sw_if_index, format_ip46_address, &key->local_addr,
-           IP46_TYPE_ANY, format_ip46_address, &key->peer_addr, IP46_TYPE_ANY);
+	   bs->bs_idx, key->sw_if_index, format_ip46_address,
+	   &key->local_addr, IP46_TYPE_ANY, format_ip46_address,
+	   &key->peer_addr, IP46_TYPE_ANY);
   if (BFD_TRANSPORT_UDP4 == t)
     {
       bus->adj_index = adj_nbr_add_or_lock (FIB_PROTOCOL_IP4, VNET_LINK_IP4,
-                                            &key->peer_addr, key->sw_if_index);
+					    &key->peer_addr,
+					    key->sw_if_index);
       BFD_DBG ("adj_nbr_add_or_lock(FIB_PROTOCOL_IP4, VNET_LINK_IP4, %U, %d) "
-               "returns %d",
-               format_ip46_address, &key->peer_addr, IP46_TYPE_ANY,
-               key->sw_if_index, bus->adj_index);
+	       "returns %d", format_ip46_address, &key->peer_addr,
+	       IP46_TYPE_ANY, key->sw_if_index, bus->adj_index);
     }
   else
     {
       bus->adj_index = adj_nbr_add_or_lock (FIB_PROTOCOL_IP6, VNET_LINK_IP6,
-                                            &key->peer_addr, key->sw_if_index);
+					    &key->peer_addr,
+					    key->sw_if_index);
       BFD_DBG ("adj_nbr_add_or_lock(FIB_PROTOCOL_IP6, VNET_LINK_IP6, %U, %d) "
-               "returns %d",
-               format_ip46_address, &key->peer_addr, IP46_TYPE_ANY,
-               key->sw_if_index, bus->adj_index);
+	       "returns %d", format_ip46_address, &key->peer_addr,
+	       IP46_TYPE_ANY, key->sw_if_index, bus->adj_index);
     }
   bs->config_desired_min_tx_us = desired_min_tx_us;
   bs->required_min_rx_us = required_min_rx_us;
-  bs->required_min_echo_rx_us = required_min_rx_us; /* FIXME */
+  bs->required_min_echo_rx_us = required_min_rx_us;	/* FIXME */
   bs->local_detect_mult = detect_mult;
-  bfd_session_start (bum->bfd_main, bs);
-  *bs_index = bs->bs_idx;
+  *bs_out = bs;
   return 0;
 }
 
 static vnet_api_error_t
-bfd_udp_validate_api_input (u32 sw_if_index, const ip46_address_t *local_addr,
-                            const ip46_address_t *peer_addr)
+bfd_udp_validate_api_input (u32 sw_if_index,
+			    const ip46_address_t * local_addr,
+			    const ip46_address_t * peer_addr)
 {
   vnet_sw_interface_t *sw_if =
-      vnet_get_sw_interface (vnet_get_main (), sw_if_index);
+    vnet_get_sw_interface (vnet_get_main (), sw_if_index);
   u8 local_ip_valid = 0;
   ip_interface_address_t *ia = NULL;
   if (!sw_if)
     {
-      BFD_ERR ("got NULL sw_if");
+      clib_warning ("got NULL sw_if");
       return VNET_API_ERROR_INVALID_SW_IF_INDEX;
     }
   if (ip46_address_is_ip4 (local_addr))
     {
       if (!ip46_address_is_ip4 (peer_addr))
-        {
-          BFD_ERR ("IP family mismatch");
-          return VNET_API_ERROR_INVALID_ARGUMENT;
-        }
+	{
+	  clib_warning ("IP family mismatch");
+	  return VNET_API_ERROR_INVALID_ARGUMENT;
+	}
       ip4_main_t *im = &ip4_main;
 
       /* *INDENT-OFF* */
@@ -219,10 +237,10 @@ bfd_udp_validate_api_input (u32 sw_if_index, const ip46_address_t *local_addr,
   else
     {
       if (ip46_address_is_ip4 (peer_addr))
-        {
-          BFD_ERR ("IP family mismatch");
-          return VNET_API_ERROR_INVALID_ARGUMENT;
-        }
+	{
+	  clib_warning ("IP family mismatch");
+	  return VNET_API_ERROR_INVALID_ARGUMENT;
+	}
       ip6_main_t *im = &ip6_main;
       /* *INDENT-OFF* */
       foreach_ip_interface_address (
@@ -242,77 +260,284 @@ bfd_udp_validate_api_input (u32 sw_if_index, const ip46_address_t *local_addr,
 
   if (!local_ip_valid)
     {
-      BFD_ERR ("address not found on interface");
+      clib_warning ("address not found on interface");
       return VNET_API_ERROR_ADDRESS_NOT_FOUND_FOR_INTERFACE;
     }
 
   return 0;
 }
 
-vnet_api_error_t bfd_udp_add_session (u32 sw_if_index, u32 desired_min_tx_us,
-                                      u32 required_min_rx_us, u8 detect_mult,
-                                      const ip46_address_t *local_addr,
-                                      const ip46_address_t *peer_addr,
-                                      u32 *bs_index)
+static vnet_api_error_t
+bfd_udp_find_session_by_api_input (u32 sw_if_index,
+				   const ip46_address_t * local_addr,
+				   const ip46_address_t * peer_addr,
+				   bfd_session_t ** bs_out)
 {
   vnet_api_error_t rv =
-      bfd_udp_validate_api_input (sw_if_index, local_addr, peer_addr);
+    bfd_udp_validate_api_input (sw_if_index, local_addr, peer_addr);
+  if (!rv)
+    {
+      bfd_udp_main_t *bum = &bfd_udp_main;
+      bfd_udp_key_t key;
+      bfd_udp_key_init (&key, sw_if_index, local_addr, peer_addr);
+      bfd_session_t *bs = bfd_lookup_session (bum, &key);
+      if (bs)
+	{
+	  *bs_out = bs;
+	}
+      else
+	{
+	  clib_warning
+	    ("BFD session not found (sw_if_index=%u, local=%U, peer=%U",
+	     sw_if_index, format_ip46_address, local_addr, IP46_TYPE_ANY,
+	     format_ip46_address, peer_addr, IP46_TYPE_ANY);
+	  return VNET_API_ERROR_BFD_ENOENT;
+	}
+    }
+  return rv;
+}
+
+static vnet_api_error_t
+bfd_api_verify_common (u32 sw_if_index, u32 desired_min_tx_us,
+		       u32 required_min_rx_us, u8 detect_mult,
+		       const ip46_address_t * local_addr,
+		       const ip46_address_t * peer_addr)
+{
+  vnet_api_error_t rv =
+    bfd_udp_validate_api_input (sw_if_index, local_addr, peer_addr);
   if (rv)
     {
       return rv;
     }
   if (detect_mult < 1)
     {
-      BFD_ERR ("detect_mult < 1");
+      clib_warning ("detect_mult < 1");
       return VNET_API_ERROR_INVALID_ARGUMENT;
     }
   if (desired_min_tx_us < 1)
     {
-      BFD_ERR ("desired_min_tx_us < 1");
+      clib_warning ("desired_min_tx_us < 1");
       return VNET_API_ERROR_INVALID_ARGUMENT;
-    }
-  return bfd_udp_add_session_internal (
-      &bfd_udp_main, sw_if_index, desired_min_tx_us, required_min_rx_us,
-      detect_mult, local_addr, peer_addr, bs_index);
-}
-
-vnet_api_error_t bfd_udp_del_session (u32 sw_if_index,
-                                      const ip46_address_t *local_addr,
-                                      const ip46_address_t *peer_addr)
-{
-  vnet_api_error_t rv =
-      bfd_udp_validate_api_input (sw_if_index, local_addr, peer_addr);
-  if (rv)
-    {
-      return rv;
-    }
-  bfd_udp_main_t *bum = &bfd_udp_main;
-  vnet_sw_interface_t *sw_if =
-      vnet_get_sw_interface (vnet_get_main (), sw_if_index);
-  bfd_udp_key_t key;
-  memset (&key, 0, sizeof (key));
-  key.sw_if_index = sw_if->sw_if_index;
-  key.local_addr.as_u64[0] = local_addr->as_u64[0];
-  key.local_addr.as_u64[1] = local_addr->as_u64[1];
-  key.peer_addr.as_u64[0] = peer_addr->as_u64[0];
-  key.peer_addr.as_u64[1] = peer_addr->as_u64[1];
-  bfd_session_t *tmp = bfd_lookup_session (bum, &key);
-  if (tmp)
-    {
-      BFD_DBG ("free bfd-udp session, bs_idx=%d", tmp->bs_idx);
-      mhash_unset (&bum->bfd_session_idx_by_bfd_key, &key, NULL);
-      adj_unlock (tmp->udp.adj_index);
-      bfd_put_session (bum->bfd_main, tmp);
-    }
-  else
-    {
-      BFD_ERR ("no such session");
-      return VNET_API_ERROR_BFD_NOENT;
     }
   return 0;
 }
 
-typedef enum {
+static void
+bfd_udp_del_session_internal (bfd_session_t * bs)
+{
+  bfd_udp_main_t *bum = &bfd_udp_main;
+  BFD_DBG ("free bfd-udp session, bs_idx=%d", bs->bs_idx);
+  mhash_unset (&bum->bfd_session_idx_by_bfd_key, &bs->udp.key, NULL);
+  adj_unlock (bs->udp.adj_index);
+  bfd_put_session (bum->bfd_main, bs);
+}
+
+vnet_api_error_t
+bfd_udp_add_session (u32 sw_if_index, const ip46_address_t * local_addr,
+		     const ip46_address_t * peer_addr, u32 desired_min_tx_us,
+		     u32 required_min_rx_us, u8 detect_mult,
+		     u8 is_authenticated, u32 conf_key_id, u8 bfd_key_id)
+{
+  vnet_api_error_t rv = bfd_api_verify_common (sw_if_index, desired_min_tx_us,
+					       required_min_rx_us,
+					       detect_mult,
+					       local_addr, peer_addr);
+  bfd_session_t *bs = NULL;
+  if (!rv)
+    {
+      rv =
+	bfd_udp_add_session_internal (&bfd_udp_main, sw_if_index,
+				      desired_min_tx_us, required_min_rx_us,
+				      detect_mult, local_addr, peer_addr,
+				      &bs);
+    }
+  if (!rv && is_authenticated)
+    {
+#if WITH_LIBSSL > 0
+      rv = bfd_auth_activate (bs, conf_key_id, bfd_key_id,
+			      0 /* is not delayed */ );
+#else
+      clib_warning ("SSL missing, cannot add authenticated BFD session");
+      rv = VNET_API_ERROR_BFD_NOTSUPP;
+#endif
+      if (rv)
+	{
+	  bfd_udp_del_session_internal (bs);
+	}
+    }
+  if (!rv)
+    {
+      bfd_session_start (bfd_udp_main.bfd_main, bs);
+    }
+
+  return rv;
+}
+
+vnet_api_error_t
+bfd_udp_del_session (u32 sw_if_index,
+		     const ip46_address_t * local_addr,
+		     const ip46_address_t * peer_addr)
+{
+  bfd_session_t *bs = NULL;
+  vnet_api_error_t rv =
+    bfd_udp_find_session_by_api_input (sw_if_index, local_addr, peer_addr,
+				       &bs);
+  if (rv)
+    {
+      return rv;
+    }
+  bfd_udp_del_session_internal (bs);
+  return 0;
+}
+
+vnet_api_error_t
+bfd_udp_session_set_flags (u32 sw_if_index,
+			   const ip46_address_t * local_addr,
+			   const ip46_address_t * peer_addr, u8 admin_up_down)
+{
+  bfd_session_t *bs = NULL;
+  vnet_api_error_t rv =
+    bfd_udp_find_session_by_api_input (sw_if_index, local_addr, peer_addr,
+				       &bs);
+  if (rv)
+    {
+      return rv;
+    }
+  bfd_session_set_flags (bs, admin_up_down);
+  return 0;
+}
+
+vnet_api_error_t
+bfd_auth_set_key (u32 conf_key_id, u8 auth_type, u8 key_len,
+		  const u8 * key_data)
+{
+#if WITH_LIBSSL > 0
+  bfd_auth_key_t *auth_key = NULL;
+  if (!key_len || key_len > bfd_max_len_for_auth_type (auth_type))
+    {
+      clib_warning ("Invalid authentication key length for auth_type=%d:%s "
+		    "(key_len=%u, must be "
+		    "non-zero, expected max=%u)",
+		    auth_type, bfd_auth_type_str (auth_type), key_len,
+		    (u32) bfd_max_len_for_auth_type (auth_type));
+      return VNET_API_ERROR_INVALID_VALUE;
+    }
+  if (!bfd_auth_type_supported (auth_type))
+    {
+      clib_warning ("Unsupported auth type=%d:%s", auth_type,
+		    bfd_auth_type_str (auth_type));
+      return VNET_API_ERROR_BFD_NOTSUPP;
+    }
+  bfd_main_t *bm = bfd_udp_main.bfd_main;
+  uword *key_idx_p = hash_get (bm->auth_key_by_conf_key_id, conf_key_id);
+  if (key_idx_p)
+    {
+      /* modifying existing key - must not be used */
+      const uword key_idx = *key_idx_p;
+      auth_key = pool_elt_at_index (bm->auth_keys, key_idx);
+      if (auth_key->use_count > 0)
+	{
+	  clib_warning ("Authentication key with conf ID %u in use by %u BFD "
+			"sessions - cannot modify",
+			conf_key_id, auth_key->use_count);
+	  return VNET_API_ERROR_BFD_EINUSE;
+	}
+    }
+  else
+    {
+      /* adding new key */
+      pool_get (bm->auth_keys, auth_key);
+      auth_key->conf_key_id = conf_key_id;
+      hash_set (bm->auth_key_by_conf_key_id, conf_key_id,
+		auth_key - bm->auth_keys);
+    }
+  auth_key->auth_type = auth_type;
+  memset (auth_key->key, 0, sizeof (auth_key->key));
+  clib_memcpy (auth_key->key, key_data, key_len);
+  return 0;
+#else
+  clib_warning ("SSL missing, cannot manipulate authentication keys");
+  return VNET_API_ERROR_BFD_NOTSUPP;
+#endif
+}
+
+vnet_api_error_t
+bfd_auth_del_key (u32 conf_key_id)
+{
+#if WITH_LIBSSL > 0
+  bfd_auth_key_t *auth_key = NULL;
+  bfd_main_t *bm = bfd_udp_main.bfd_main;
+  uword *key_idx_p = hash_get (bm->auth_key_by_conf_key_id, conf_key_id);
+  if (key_idx_p)
+    {
+      /* deleting existing key - must not be used */
+      const uword key_idx = *key_idx_p;
+      auth_key = pool_elt_at_index (bm->auth_keys, key_idx);
+      if (auth_key->use_count > 0)
+	{
+	  clib_warning ("Authentication key with conf ID %u in use by %u BFD "
+			"sessions - cannot delete",
+			conf_key_id, auth_key->use_count);
+	  return VNET_API_ERROR_BFD_EINUSE;
+	}
+      hash_unset (bm->auth_key_by_conf_key_id, conf_key_id);
+      memset (auth_key, 0, sizeof (*auth_key));
+      pool_put (bm->auth_keys, auth_key);
+    }
+  else
+    {
+      /* no such key */
+      clib_warning ("Authentication key with conf ID %u does not exist",
+		    conf_key_id);
+      return VNET_API_ERROR_BFD_ENOENT;
+    }
+  return 0;
+#else
+  clib_warning ("SSL missing, cannot manipulate authentication keys");
+  return VNET_API_ERROR_BFD_NOTSUPP;
+#endif
+}
+
+vnet_api_error_t
+bfd_udp_auth_activate (u32 sw_if_index,
+		       const ip46_address_t * local_addr,
+		       const ip46_address_t * peer_addr,
+		       u32 conf_key_id, u8 key_id, u8 is_delayed)
+{
+#if WITH_LIBSSL > 0
+  bfd_session_t *bs = NULL;
+  vnet_api_error_t rv =
+    bfd_udp_find_session_by_api_input (sw_if_index, local_addr, peer_addr,
+				       &bs);
+  if (rv)
+    {
+      return rv;
+    }
+  return bfd_auth_activate (bs, conf_key_id, key_id, is_delayed);
+#else
+  clib_warning ("SSL missing, cannot activate BFD authentication");
+  return VNET_API_ERROR_BFD_NOTSUPP;
+#endif
+}
+
+vnet_api_error_t
+bfd_udp_auth_deactivate (u32 sw_if_index,
+			 const ip46_address_t * local_addr,
+			 const ip46_address_t * peer_addr, u8 is_delayed)
+{
+  bfd_session_t *bs = NULL;
+  vnet_api_error_t rv =
+    bfd_udp_find_session_by_api_input (sw_if_index, local_addr, peer_addr,
+				       &bs);
+  if (rv)
+    {
+      return rv;
+    }
+  return bfd_auth_deactivate (bs, is_delayed);
+}
+
+typedef enum
+{
   BFD_UDP_INPUT_NEXT_NORMAL,
   BFD_UDP_INPUT_NEXT_REPLY,
   BFD_UDP_INPUT_N_NEXT,
@@ -334,15 +559,17 @@ static char *bfd_udp_error_strings[] = {
 #undef F
 };
 
-typedef enum {
+typedef enum
+{
 #define F(sym, str) BFD_UDP_ERROR_##sym,
   foreach_bfd_udp_error (F)
 #undef F
-      BFD_UDP_N_ERROR,
+    BFD_UDP_N_ERROR,
 } bfd_udp_error_t;
 
-static void bfd_udp4_find_headers (vlib_buffer_t *b, const ip4_header_t **ip4,
-                                   const udp_header_t **udp)
+static void
+bfd_udp4_find_headers (vlib_buffer_t * b, const ip4_header_t ** ip4,
+		       const udp_header_t ** udp)
 {
   /* sanity check first */
   const i32 start = vnet_buffer (b)->ip.start_of_ip_header;
@@ -353,49 +580,49 @@ static void bfd_udp4_find_headers (vlib_buffer_t *b, const ip4_header_t **ip4,
       *udp = NULL;
       return;
     }
-  *ip4 = (ip4_header_t *)(b->data + start);
-  if ((u8 *)*ip4 > (u8 *)vlib_buffer_get_current (b))
+  *ip4 = (ip4_header_t *) (b->data + start);
+  if ((u8 *) * ip4 > (u8 *) vlib_buffer_get_current (b))
     {
       BFD_ERR ("Start of ip header is beyond current data, ignoring");
       *ip4 = NULL;
       *udp = NULL;
       return;
     }
-  *udp = (udp_header_t *)((*ip4) + 1);
+  *udp = (udp_header_t *) ((*ip4) + 1);
 }
 
-static bfd_udp_error_t bfd_udp4_verify_transport (const ip4_header_t *ip4,
-                                                  const udp_header_t *udp,
-                                                  const bfd_session_t *bs)
+static bfd_udp_error_t
+bfd_udp4_verify_transport (const ip4_header_t * ip4,
+			   const udp_header_t * udp, const bfd_session_t * bs)
 {
   const bfd_udp_session_t *bus = &bs->udp;
   const bfd_udp_key_t *key = &bus->key;
   if (ip4->src_address.as_u32 != key->peer_addr.ip4.as_u32)
     {
       BFD_ERR ("IPv4 src addr mismatch, got %U, expected %U",
-               format_ip4_address, ip4->src_address.as_u8, format_ip4_address,
-               key->peer_addr.ip4.as_u8);
+	       format_ip4_address, ip4->src_address.as_u8, format_ip4_address,
+	       key->peer_addr.ip4.as_u8);
       return BFD_UDP_ERROR_BAD;
     }
   if (ip4->dst_address.as_u32 != key->local_addr.ip4.as_u32)
     {
       BFD_ERR ("IPv4 dst addr mismatch, got %U, expected %U",
-               format_ip4_address, ip4->dst_address.as_u8, format_ip4_address,
-               key->local_addr.ip4.as_u8);
+	       format_ip4_address, ip4->dst_address.as_u8, format_ip4_address,
+	       key->local_addr.ip4.as_u8);
       return BFD_UDP_ERROR_BAD;
     }
   const u8 expected_ttl = 255;
   if (ip4->ttl != expected_ttl)
     {
       BFD_ERR ("IPv4 unexpected TTL value %u, expected %u", ip4->ttl,
-               expected_ttl);
+	       expected_ttl);
       return BFD_UDP_ERROR_BAD;
     }
   if (clib_net_to_host_u16 (udp->src_port) < 49152 ||
       clib_net_to_host_u16 (udp->src_port) > 65535)
     {
       BFD_ERR ("Invalid UDP src port %u, out of range <49152,65535>",
-               udp->src_port);
+	       udp->src_port);
     }
   return BFD_UDP_ERROR_NONE;
 }
@@ -406,33 +633,35 @@ typedef struct
   bfd_pkt_t pkt;
 } bfd_rpc_update_t;
 
-static void bfd_rpc_update_session_cb (const bfd_rpc_update_t *a)
+static void
+bfd_rpc_update_session_cb (const bfd_rpc_update_t * a)
 {
   bfd_consume_pkt (bfd_udp_main.bfd_main, &a->pkt, a->bs_idx);
 }
 
-static void bfd_rpc_update_session (u32 bs_idx, const bfd_pkt_t *pkt)
+static void
+bfd_rpc_update_session (u32 bs_idx, const bfd_pkt_t * pkt)
 {
   /* packet length was already verified to be correct by the caller */
   const u32 data_size = sizeof (bfd_rpc_update_t) -
-                        STRUCT_SIZE_OF (bfd_rpc_update_t, pkt) +
-                        pkt->head.length;
+    STRUCT_SIZE_OF (bfd_rpc_update_t, pkt) + pkt->head.length;
   u8 data[data_size];
-  bfd_rpc_update_t *update = (bfd_rpc_update_t *)data;
+  bfd_rpc_update_t *update = (bfd_rpc_update_t *) data;
   update->bs_idx = bs_idx;
   clib_memcpy (&update->pkt, pkt, pkt->head.length);
   vl_api_rpc_call_main_thread (bfd_rpc_update_session_cb, data, data_size);
 }
 
-static bfd_udp_error_t bfd_udp4_scan (vlib_main_t *vm, vlib_node_runtime_t *rt,
-                                      vlib_buffer_t *b, bfd_session_t **bs_out)
+static bfd_udp_error_t
+bfd_udp4_scan (vlib_main_t * vm, vlib_node_runtime_t * rt,
+	       vlib_buffer_t * b, bfd_session_t ** bs_out)
 {
   const bfd_pkt_t *pkt = vlib_buffer_get_current (b);
   if (sizeof (*pkt) > b->current_length)
     {
-      BFD_ERR (
-          "Payload size %d too small to hold bfd packet of minimum size %d",
-          b->current_length, sizeof (*pkt));
+      BFD_ERR
+	("Payload size %d too small to hold bfd packet of minimum size %d",
+	 b->current_length, sizeof (*pkt));
       return BFD_UDP_ERROR_BAD;
     }
   const ip4_header_t *ip4;
@@ -443,6 +672,14 @@ static bfd_udp_error_t bfd_udp4_scan (vlib_main_t *vm, vlib_node_runtime_t *rt,
       BFD_ERR ("Couldn't find ip4 or udp header");
       return BFD_UDP_ERROR_BAD;
     }
+  const u32 udp_payload_length = udp->length - sizeof (*udp);
+  if (pkt->head.length > udp_payload_length)
+    {
+      BFD_ERR
+	("BFD packet length is larger than udp payload length (%u > %u)",
+	 pkt->head.length, udp_payload_length);
+      return BFD_UDP_ERROR_BAD;
+    }
   if (!bfd_verify_pkt_common (pkt))
     {
       return BFD_UDP_ERROR_BAD;
@@ -451,7 +688,7 @@ static bfd_udp_error_t bfd_udp4_scan (vlib_main_t *vm, vlib_node_runtime_t *rt,
   if (pkt->your_disc)
     {
       BFD_DBG ("Looking up BFD session using discriminator %u",
-               pkt->your_disc);
+	       pkt->your_disc);
       bs = bfd_find_session_by_disc (bfd_udp_main.bfd_main, pkt->your_disc);
     }
   else
@@ -462,9 +699,9 @@ static bfd_udp_error_t bfd_udp4_scan (vlib_main_t *vm, vlib_node_runtime_t *rt,
       key.local_addr.ip4.as_u32 = ip4->dst_address.as_u32;
       key.peer_addr.ip4.as_u32 = ip4->src_address.as_u32;
       BFD_DBG ("Looking up BFD session using key (sw_if_index=%u, local=%U, "
-               "peer=%U)",
-               key.sw_if_index, format_ip4_address, key.local_addr.ip4.as_u8,
-               format_ip4_address, key.peer_addr.ip4.as_u8);
+	       "peer=%U)",
+	       key.sw_if_index, format_ip4_address, key.local_addr.ip4.as_u8,
+	       format_ip4_address, key.peer_addr.ip4.as_u8);
       bs = bfd_lookup_session (&bfd_udp_main, &key);
     }
   if (!bs)
@@ -473,8 +710,9 @@ static bfd_udp_error_t bfd_udp4_scan (vlib_main_t *vm, vlib_node_runtime_t *rt,
       return BFD_UDP_ERROR_BAD;
     }
   BFD_DBG ("BFD session found, bs_idx=%u", bs->bs_idx);
-  if (!bfd_verify_pkt_session (pkt, b->current_length, bs))
+  if (!bfd_verify_pkt_auth (pkt, b->current_length, bs))
     {
+      BFD_ERR ("Packet verification failed, dropping packet");
       return BFD_UDP_ERROR_BAD;
     }
   bfd_udp_error_t err;
@@ -487,8 +725,9 @@ static bfd_udp_error_t bfd_udp4_scan (vlib_main_t *vm, vlib_node_runtime_t *rt,
   return BFD_UDP_ERROR_NONE;
 }
 
-static void bfd_udp6_find_headers (vlib_buffer_t *b, const ip6_header_t **ip6,
-                                   const udp_header_t **udp)
+static void
+bfd_udp6_find_headers (vlib_buffer_t * b, const ip6_header_t ** ip6,
+		       const udp_header_t ** udp)
 {
   /* sanity check first */
   const i32 start = vnet_buffer (b)->ip.start_of_ip_header;
@@ -499,62 +738,73 @@ static void bfd_udp6_find_headers (vlib_buffer_t *b, const ip6_header_t **ip6,
       *udp = NULL;
       return;
     }
-  *ip6 = (ip6_header_t *)(b->data + start);
-  if ((u8 *)*ip6 > (u8 *)vlib_buffer_get_current (b))
+  *ip6 = (ip6_header_t *) (b->data + start);
+  if ((u8 *) * ip6 > (u8 *) vlib_buffer_get_current (b))
     {
       BFD_ERR ("Start of ip header is beyond current data, ignoring");
       *ip6 = NULL;
       *udp = NULL;
       return;
     }
-  *udp = (udp_header_t *)((*ip6) + 1);
+  if ((*ip6)->protocol != IP_PROTOCOL_UDP)
+    {
+      BFD_ERR ("Unexpected protocol in IPv6 header '%u', expected '%u' (== "
+	       "IP_PROTOCOL_UDP)", (*ip6)->protocol, IP_PROTOCOL_UDP);
+      *ip6 = NULL;
+      *udp = NULL;
+      return;
+    }
+  *udp = (udp_header_t *) ((*ip6) + 1);
 }
 
-static bfd_udp_error_t bfd_udp6_verify_transport (const ip6_header_t *ip6,
-                                                  const udp_header_t *udp,
-                                                  const bfd_session_t *bs)
+static bfd_udp_error_t
+bfd_udp6_verify_transport (const ip6_header_t * ip6,
+			   const udp_header_t * udp, const bfd_session_t * bs)
 {
   const bfd_udp_session_t *bus = &bs->udp;
   const bfd_udp_key_t *key = &bus->key;
   if (ip6->src_address.as_u64[0] != key->peer_addr.ip6.as_u64[0] &&
       ip6->src_address.as_u64[1] != key->peer_addr.ip6.as_u64[1])
     {
-      BFD_ERR ("IP src addr mismatch, got %U, expected %U", format_ip6_address,
-               ip6, format_ip6_address, &key->peer_addr.ip6);
+      BFD_ERR ("IP src addr mismatch, got %U, expected %U",
+	       format_ip6_address, ip6, format_ip6_address,
+	       &key->peer_addr.ip6);
       return BFD_UDP_ERROR_BAD;
     }
   if (ip6->dst_address.as_u64[0] != key->local_addr.ip6.as_u64[0] &&
       ip6->dst_address.as_u64[1] != key->local_addr.ip6.as_u64[1])
     {
-      BFD_ERR ("IP dst addr mismatch, got %U, expected %U", format_ip6_address,
-               ip6, format_ip6_address, &key->local_addr.ip6);
+      BFD_ERR ("IP dst addr mismatch, got %U, expected %U",
+	       format_ip6_address, ip6, format_ip6_address,
+	       &key->local_addr.ip6);
       return BFD_UDP_ERROR_BAD;
     }
   const u8 expected_hop_limit = 255;
   if (ip6->hop_limit != expected_hop_limit)
     {
       BFD_ERR ("IPv6 unexpected hop-limit value %u, expected %u",
-               ip6->hop_limit, expected_hop_limit);
+	       ip6->hop_limit, expected_hop_limit);
       return BFD_UDP_ERROR_BAD;
     }
   if (clib_net_to_host_u16 (udp->src_port) < 49152 ||
       clib_net_to_host_u16 (udp->src_port) > 65535)
     {
       BFD_ERR ("Invalid UDP src port %u, out of range <49152,65535>",
-               udp->src_port);
+	       udp->src_port);
     }
   return BFD_UDP_ERROR_NONE;
 }
 
-static bfd_udp_error_t bfd_udp6_scan (vlib_main_t *vm, vlib_node_runtime_t *rt,
-                                      vlib_buffer_t *b, bfd_session_t **bs_out)
+static bfd_udp_error_t
+bfd_udp6_scan (vlib_main_t * vm, vlib_node_runtime_t * rt,
+	       vlib_buffer_t * b, bfd_session_t ** bs_out)
 {
   const bfd_pkt_t *pkt = vlib_buffer_get_current (b);
   if (sizeof (*pkt) > b->current_length)
     {
-      BFD_ERR (
-          "Payload size %d too small to hold bfd packet of minimum size %d",
-          b->current_length, sizeof (*pkt));
+      BFD_ERR
+	("Payload size %d too small to hold bfd packet of minimum size %d",
+	 b->current_length, sizeof (*pkt));
       return BFD_UDP_ERROR_BAD;
     }
   const ip6_header_t *ip6;
@@ -565,6 +815,14 @@ static bfd_udp_error_t bfd_udp6_scan (vlib_main_t *vm, vlib_node_runtime_t *rt,
       BFD_ERR ("Couldn't find ip6 or udp header");
       return BFD_UDP_ERROR_BAD;
     }
+  const u32 udp_payload_length = udp->length - sizeof (*udp);
+  if (pkt->head.length > udp_payload_length)
+    {
+      BFD_ERR
+	("BFD packet length is larger than udp payload length (%u > %u)",
+	 pkt->head.length, udp_payload_length);
+      return BFD_UDP_ERROR_BAD;
+    }
   if (!bfd_verify_pkt_common (pkt))
     {
       return BFD_UDP_ERROR_BAD;
@@ -573,7 +831,7 @@ static bfd_udp_error_t bfd_udp6_scan (vlib_main_t *vm, vlib_node_runtime_t *rt,
   if (pkt->your_disc)
     {
       BFD_DBG ("Looking up BFD session using discriminator %u",
-               pkt->your_disc);
+	       pkt->your_disc);
       bs = bfd_find_session_by_disc (bfd_udp_main.bfd_main, pkt->your_disc);
     }
   else
@@ -586,9 +844,9 @@ static bfd_udp_error_t bfd_udp6_scan (vlib_main_t *vm, vlib_node_runtime_t *rt,
       key.peer_addr.ip6.as_u64[0] = ip6->src_address.as_u64[0];
       key.peer_addr.ip6.as_u64[1] = ip6->src_address.as_u64[1];
       BFD_DBG ("Looking up BFD session using key (sw_if_index=%u, local=%U, "
-               "peer=%U)",
-               key.sw_if_index, format_ip6_address, &key.local_addr,
-               format_ip6_address, &key.peer_addr);
+	       "peer=%U)",
+	       key.sw_if_index, format_ip6_address, &key.local_addr,
+	       format_ip6_address, &key.peer_addr);
       bs = bfd_lookup_session (&bfd_udp_main, &key);
     }
   if (!bs)
@@ -597,8 +855,9 @@ static bfd_udp_error_t bfd_udp6_scan (vlib_main_t *vm, vlib_node_runtime_t *rt,
       return BFD_UDP_ERROR_BAD;
     }
   BFD_DBG ("BFD session found, bs_idx=%u", bs->bs_idx);
-  if (!bfd_verify_pkt_session (pkt, b->current_length, bs))
+  if (!bfd_verify_pkt_auth (pkt, b->current_length, bs))
     {
+      BFD_ERR ("Packet verification failed, dropping packet");
       return BFD_UDP_ERROR_BAD;
     }
   bfd_udp_error_t err;
@@ -615,14 +874,15 @@ static bfd_udp_error_t bfd_udp6_scan (vlib_main_t *vm, vlib_node_runtime_t *rt,
  * Process a frame of bfd packets
  * Expect 1 packet / frame
  */
-static uword bfd_udp_input (vlib_main_t *vm, vlib_node_runtime_t *rt,
-                            vlib_frame_t *f, int is_ipv6)
+static uword
+bfd_udp_input (vlib_main_t * vm, vlib_node_runtime_t * rt,
+	       vlib_frame_t * f, int is_ipv6)
 {
   u32 n_left_from, *from;
   bfd_input_trace_t *t0;
 
-  from = vlib_frame_vector_args (f); /* array of buffer indices */
-  n_left_from = f->n_vectors;        /* number of buffer indices */
+  from = vlib_frame_vector_args (f);	/* array of buffer indices */
+  n_left_from = f->n_vectors;	/* number of buffer indices */
 
   while (n_left_from > 0)
     {
@@ -637,49 +897,51 @@ static uword bfd_udp_input (vlib_main_t *vm, vlib_node_runtime_t *rt,
 
       /* If this pkt is traced, snapshot the data */
       if (b0->flags & VLIB_BUFFER_IS_TRACED)
-        {
-          int len;
-          t0 = vlib_add_trace (vm, rt, b0, sizeof (*t0));
-          len = (b0->current_length < sizeof (t0->data)) ? b0->current_length
-                                                         : sizeof (t0->data);
-          t0->len = len;
-          clib_memcpy (t0->data, vlib_buffer_get_current (b0), len);
-        }
+	{
+	  int len;
+	  t0 = vlib_add_trace (vm, rt, b0, sizeof (*t0));
+	  len = (b0->current_length < sizeof (t0->data)) ? b0->current_length
+	    : sizeof (t0->data);
+	  t0->len = len;
+	  clib_memcpy (t0->data, vlib_buffer_get_current (b0), len);
+	}
 
       /* scan this bfd pkt. error0 is the counter index to bmp */
       if (is_ipv6)
-        {
-          error0 = bfd_udp6_scan (vm, rt, b0, &bs);
-        }
+	{
+	  error0 = bfd_udp6_scan (vm, rt, b0, &bs);
+	}
       else
-        {
-          error0 = bfd_udp4_scan (vm, rt, b0, &bs);
-        }
+	{
+	  error0 = bfd_udp4_scan (vm, rt, b0, &bs);
+	}
       b0->error = rt->errors[error0];
 
       next0 = BFD_UDP_INPUT_NEXT_NORMAL;
       if (BFD_UDP_ERROR_NONE == error0)
-        {
-          /* if everything went fine, check for poll bit, if present, re-use
-             the buffer and based on (now updated) session parameters, send the
-             final packet back */
-          const bfd_pkt_t *pkt = vlib_buffer_get_current (b0);
-          if (bfd_pkt_get_poll (pkt))
-            {
-              bfd_send_final (vm, b0, bs);
-              if (is_ipv6)
-                {
-                  vlib_node_increment_counter (vm, bfd_udp6_input_node.index,
-                                               b0->error, 1);
-                }
-              else
-                {
-                  vlib_node_increment_counter (vm, bfd_udp4_input_node.index,
-                                               b0->error, 1);
-                }
-              next0 = BFD_UDP_INPUT_NEXT_REPLY;
-            }
-        }
+	{
+	  /*
+	   *  if everything went fine, check for poll bit, if present, re-use
+	   *  the buffer and based on (now updated) session parameters, send
+	   *  the final packet back
+	   */
+	  const bfd_pkt_t *pkt = vlib_buffer_get_current (b0);
+	  if (bfd_pkt_get_poll (pkt))
+	    {
+	      bfd_init_final_control_frame (vm, b0, bs);
+	      if (is_ipv6)
+		{
+		  vlib_node_increment_counter (vm, bfd_udp6_input_node.index,
+					       b0->error, 1);
+		}
+	      else
+		{
+		  vlib_node_increment_counter (vm, bfd_udp4_input_node.index,
+					       b0->error, 1);
+		}
+	      next0 = BFD_UDP_INPUT_NEXT_REPLY;
+	    }
+	}
       vlib_set_next_frame_buffer (vm, rt, next0, bi0);
 
       from += 1;
@@ -689,8 +951,8 @@ static uword bfd_udp_input (vlib_main_t *vm, vlib_node_runtime_t *rt,
   return f->n_vectors;
 }
 
-static uword bfd_udp4_input (vlib_main_t *vm, vlib_node_runtime_t *rt,
-                             vlib_frame_t *f)
+static uword
+bfd_udp4_input (vlib_main_t * vm, vlib_node_runtime_t * rt, vlib_frame_t * f)
 {
   return bfd_udp_input (vm, rt, f, 0);
 }
@@ -719,8 +981,8 @@ VLIB_REGISTER_NODE (bfd_udp4_input_node, static) = {
 };
 /* *INDENT-ON* */
 
-static uword bfd_udp6_input (vlib_main_t *vm, vlib_node_runtime_t *rt,
-                             vlib_frame_t *f)
+static uword
+bfd_udp6_input (vlib_main_t * vm, vlib_node_runtime_t * rt, vlib_frame_t * f)
 {
   return bfd_udp_input (vm, rt, f, 1);
 }
@@ -746,8 +1008,8 @@ VLIB_REGISTER_NODE (bfd_udp6_input_node, static) = {
 };
 /* *INDENT-ON* */
 
-static clib_error_t *bfd_sw_interface_up_down (vnet_main_t *vnm,
-                                               u32 sw_if_index, u32 flags)
+static clib_error_t *
+bfd_sw_interface_up_down (vnet_main_t * vnm, u32 sw_if_index, u32 flags)
 {
   // vnet_hw_interface_t *hi = vnet_get_sup_hw_interface (vnm, sw_if_index);
   if (!(flags & VNET_SW_INTERFACE_FLAG_ADMIN_UP))
@@ -759,8 +1021,8 @@ static clib_error_t *bfd_sw_interface_up_down (vnet_main_t *vnm,
 
 VNET_SW_INTERFACE_ADMIN_UP_DOWN_FUNCTION (bfd_sw_interface_up_down);
 
-static clib_error_t *bfd_hw_interface_up_down (vnet_main_t *vnm,
-                                               u32 hw_if_index, u32 flags)
+static clib_error_t *
+bfd_hw_interface_up_down (vnet_main_t * vnm, u32 hw_if_index, u32 flags)
 {
   if (flags & VNET_HW_INTERFACE_FLAG_LINK_UP)
     {
@@ -774,10 +1036,11 @@ VNET_HW_INTERFACE_LINK_UP_DOWN_FUNCTION (bfd_hw_interface_up_down);
 /*
  * setup function
  */
-static clib_error_t *bfd_udp_init (vlib_main_t *vm)
+static clib_error_t *
+bfd_udp_init (vlib_main_t * vm)
 {
   mhash_init (&bfd_udp_main.bfd_session_idx_by_bfd_key, sizeof (uword),
-              sizeof (bfd_udp_key_t));
+	      sizeof (bfd_udp_key_t));
   bfd_udp_main.bfd_main = &bfd_main;
   udp_register_dst_port (vm, UDP_DST_PORT_bfd4, bfd_udp4_input_node.index, 1);
   udp_register_dst_port (vm, UDP_DST_PORT_bfd6, bfd_udp6_input_node.index, 0);
@@ -785,3 +1048,11 @@ static clib_error_t *bfd_udp_init (vlib_main_t *vm)
 }
 
 VLIB_INIT_FUNCTION (bfd_udp_init);
+
+/*
+ * fd.io coding-style-patch-verification: ON
+ *
+ * Local Variables:
+ * eval: (c-set-style "gnu")
+ * End:
+ */

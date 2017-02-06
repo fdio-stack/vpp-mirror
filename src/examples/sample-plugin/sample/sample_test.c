@@ -23,6 +23,8 @@
 #include <vlibmemory/api.h>
 #include <vlibsocket/api.h>
 #include <vppinfra/error.h>
+
+#define __plugin_msg_base sample_test_main.msg_id_base
 #include <vlibapi/vat_helper_macros.h>
 
 uword unformat_sw_if_index (unformat_input_t * input, va_list * args);
@@ -96,6 +98,7 @@ static int api_sample_macswap_enable_disable (vat_main_t * vam)
     int enable_disable = 1;
     u32 sw_if_index = ~0;
     vl_api_sample_macswap_enable_disable_t * mp;
+    int ret;
 
     /* Parse args required to build the message */
     while (unformat_check_input (i) != UNFORMAT_END_OF_INPUT) {
@@ -115,15 +118,16 @@ static int api_sample_macswap_enable_disable (vat_main_t * vam)
     }
     
     /* Construct the API message */
-    M(SAMPLE_MACSWAP_ENABLE_DISABLE, sample_macswap_enable_disable);
+    M(SAMPLE_MACSWAP_ENABLE_DISABLE, mp);
     mp->sw_if_index = ntohl (sw_if_index);
     mp->enable_disable = enable_disable;
 
     /* send it... */
-    S;
+    S(mp);
 
     /* Wait for a reply... */
-    W;
+    W (ret);
+    return ret;
 }
 
 /* 

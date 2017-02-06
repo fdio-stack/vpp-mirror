@@ -44,7 +44,7 @@ vpp_configure_args_vpp = --with-dpdk
 vlib_configure_args_vpp = --with-pre-data=128
 
 # DPDK configuration parameters
-# vpp_uses_dpdk_cryptodev = yes
+# vpp_uses_dpdk_cryptodev_sw = yes
 # vpp_uses_dpdk_mlx5_pmd = yes
 # vpp_uses_external_dpdk = yes
 # vpp_dpdk_inc_dir = /usr/include/dpdk
@@ -70,3 +70,9 @@ vpp_gcov_TAG_CFLAGS = -g -O0 -DCLIB_DEBUG -march=$(MARCH) \
 	-fPIC -Werror -fprofile-arcs -ftest-coverage
 vpp_gcov_TAG_LDFLAGS = -g -O0 -DCLIB_DEBUG -march=$(MARCH) \
 	-fPIC -Werror -coverage
+
+vpp_coverity_TAG_CFLAGS = -g -O2 -march=$(MARCH) -mtune=$(MTUNE) \
+	-fPIC -Werror -D__COVERITY__
+vpp_coverity_TAG_LDFLAGS = -g -O2 -march=$(MARCH) -mtune=$(MTUNE) \
+	-fPIC -Werror -D__COVERITY__ 
+

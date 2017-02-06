@@ -125,6 +125,10 @@ dpdk_port_setup (dpdk_main_t * dm, dpdk_device_t * xd)
     {
       int rv;
       rv = rte_eth_dev_start (xd->device_index);
+      if (!rv && xd->default_mac_address)
+	rv = rte_eth_dev_default_mac_addr_set (xd->device_index,
+					       (struct ether_addr *)
+					       xd->default_mac_address);
       if (rv < 0)
 	clib_warning ("rte_eth_dev_start %d returned %d",
 		      xd->device_index, rv);
@@ -199,6 +203,10 @@ dpdk_flag_change (vnet_main_t * vnm, vnet_hw_interface_t * hi, u32 flags)
 	  if (xd->flags & DPDK_DEVICE_FLAG_ADMIN_UP)
 	    {
 	      int rv = rte_eth_dev_start (xd->device_index);
+	      if (!rv && xd->default_mac_address)
+		rv = rte_eth_dev_default_mac_addr_set (xd->device_index,
+						       (struct ether_addr *)
+						       xd->default_mac_address);
 	      if (rv < 0)
 		clib_warning ("rte_eth_dev_start %d returned %d",
 			      xd->device_index, rv);
@@ -1046,6 +1054,9 @@ dpdk_config (vlib_main_t * vm, unformat_input_t * input)
       else if (unformat (input, "no-multi-seg"))
 	conf->no_multi_seg = 1;
 
+      else if (unformat (input, "enable-cryptodev"))
+	conf->cryptodev = 1;
+
       else if (unformat (input, "dev default %U", unformat_vlib_cli_sub_input,
 			 &sub_input))
 	{
@@ -1154,7 +1165,7 @@ dpdk_config (vlib_main_t * vm, unformat_input_t * input)
     }
 
   if (!conf->uio_driver_name)
-    conf->uio_driver_name = format (0, "igb_uio%c", 0);
+    conf->uio_driver_name = format (0, "uio_pci_generic%c", 0);
 
   /*
    * Use 1G huge pages if available.

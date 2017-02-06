@@ -13,6 +13,13 @@
  * limitations under the License.
  */
 
+typeonly manual_print manual_endian define local_locator
+{
+  u32 sw_if_index;
+  u8 priority;
+  u8 weight;
+};
+
 /** \brief add or delete locator_set
     @param client_index - opaque cookie to identify the sender
     @param context - sender context, to match reply w/ request
@@ -20,22 +27,15 @@
     @param locator_set_name - locator name
     @param locator_num - number of locators
     @param locators - LISP locator records
-        Structure of one locator record is as follows:
-
-        define locator_t {
-          u32 sw_if_index;
-          u8 priority;
-          u8 weight;
-        }
 */
-define lisp_add_del_locator_set
+manual_endian manual_print define lisp_add_del_locator_set
 {
   u32 client_index;
   u32 context;
   u8 is_add;
   u8 locator_set_name[64];
   u32 locator_num;
-  u8 locators[0];
+  vl_api_local_locator_t locators[locator_num];
 };
 
 /** \brief Reply for locator_set add/del
@@ -220,6 +220,57 @@ define lisp_pitr_set_locator_set_reply
   i32 retval;
 };
 
+/** \brief configure or disable use of PETR
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param is_ip4 - Address is IPv4 if set and IPv6 otherwise
+    @param address - PETR IP address
+    @param is_add - add locator set if non-zero, else disable pitr
+*/
+define lisp_use_petr
+{
+  u32 client_index;
+  u32 context;
+  u8 is_ip4;
+  u8 address[16];
+  u8 is_add;
+};
+
+/** \brief Reply for lisp_pitr_set_locator_set
+    @param context - returned sender context, to match reply w/ request
+    @param retval - return code
+*/
+define lisp_use_petr_reply
+{
+  u32 context;
+  i32 retval;
+};
+
+/** \brief Request for LISP PETR status
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+*/
+define show_lisp_use_petr
+{
+  u32 client_index;
+  u32 context;
+};
+
+/** \brief LISP PETR status, enable or disable
+    @param context - sender context, to match reply w/ request
+    @param status - LISP PETR enable if non-zero, else disable
+    @param is_ip4 - Address is IPv4 if non-zero, else IPv6
+    @param address - PETR IP address
+*/
+define show_lisp_use_petr_reply
+{
+  u32 context;
+  i32 retval;
+  u8 status;
+  u8 is_ip4;
+  u8 address[16];
+};
+
 /** \brief Get state of LISP RLOC probing
     @param client_index - opaque cookie to identify the sender
     @param context - sender context, to match reply w/ request
@@ -354,6 +405,14 @@ define show_lisp_map_request_mode_reply
   u8 mode;
 };
 
+typeonly manual_endian manual_print define remote_locator
+{
+  u8 is_ip4;
+  u8 priority;
+  u8 weight;
+  u8 addr[16];
+};
+
 /** \brief add or delete remote static mapping
     @param client_index - opaque cookie to identify the sender
     @param context - sender context, to match reply w/ request
@@ -370,16 +429,8 @@ define show_lisp_map_request_mode_reply
     @param seid - src EID, valid only if is_src_dst is enabled
     @param rloc_num - number of remote locators
     @param rlocs - remote locator records
-        Structure of remote locator:
-
-        define rloc_t {
-          u8 is_ip4;
-          u8 priority;
-          u8 weight;
-          u8 addr[16];
-        }
 */
-define lisp_add_del_remote_mapping
+manual_print manual_endian define lisp_add_del_remote_mapping
 {
   u32 client_index;
   u32 context;
@@ -394,7 +445,7 @@ define lisp_add_del_remote_mapping
   u8 seid[16];
   u8 seid_len;
   u32 rloc_num;
-  u8 rlocs[0];
+  vl_api_remote_locator_t rlocs[rloc_num];
 };
 
 /** \brief Reply for lisp_add_del_remote_mapping

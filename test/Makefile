@@ -23,6 +23,7 @@ $(PIP_INSTALL_DONE):
 
 $(PIP_PATCH_DONE): $(PIP_INSTALL_DONE)
 	@echo --- patching ---
+	@sleep 1 # Ensure python recompiles patched *.py files -> *.pyc
 	for f in $(CURDIR)/patches/scapy-2.3.3/*.patch ; do \
 		echo Applying patch: $$(basename $$f) ; \
 		patch -p1 -d $(SCAPY_SOURCE) < $$f ; \
@@ -53,9 +54,9 @@ wipe: reset
 	@rm -rf $(PYTHON_VENV_PATH)
 	@rm -f $(PAPI_INSTALL_FLAGS)
 
-doc: verify-python-path
+doc: verify-python-path $(PIP_PATCH_DONE)
 	@virtualenv $(PYTHON_VENV_PATH) -p python2.7
-	@bash -c "source $(PYTHON_VENV_PATH)/bin/activate && pip install $(PYTHON_DEPENDS) sphinx"
+	@bash -c "source $(PYTHON_VENV_PATH)/bin/activate && pip install sphinx sphinx-rtd-theme"
 	@bash -c "source $(PYTHON_VENV_PATH)/bin/activate && make -C doc WS_ROOT=$(WS_ROOT) BR=$(BR) NO_VPP_PAPI=1 html"
 
 .PHONY: wipe-doc
@@ -80,7 +81,7 @@ wipe-cov: wipe
 .PHONY: checkstyle
 checkstyle: verify-python-path
 	@virtualenv $(PYTHON_VENV_PATH) -p python2.7
-	@bash -c "source $(PYTHON_VENV_PATH)/bin/activate && pip install $(PYTHON_DEPENDS) pep8"
+	@bash -c "source $(PYTHON_VENV_PATH)/bin/activate && pip install pep8"
 	@bash -c "source $(PYTHON_VENV_PATH)/bin/activate &&\
 		pep8 --show-source -v $(WS_ROOT)/test/*.py ||\
 		(echo \"*******************************************************************\" &&\

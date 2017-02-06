@@ -19,6 +19,8 @@
 #include <vlibsocket/api.h>
 #include <vppinfra/error.h>
 #include <lb/lb.h>
+
+#define __plugin_msg_base lb_test_main.msg_id_base
 #include <vlibapi/vat_helper_macros.h>
 
 //TODO: Move that to vat/plugin_api.c
@@ -131,8 +133,8 @@ foreach_standard_reply_retval_handler;
 static int api_lb_conf (vat_main_t * vam)
 {
   unformat_input_t *i = vam->input;
-  f64 timeout;
   vl_api_lb_conf_t mps, *mp;
+  int ret;
 
   if (!unformat(i, "%U %U %u %u",
                unformat_ip4_address, &mps.ip4_src_address,
@@ -143,17 +145,17 @@ static int api_lb_conf (vat_main_t * vam)
     return -99;
   }
 
-  M(LB_CONF, lb_conf); S; W;
-
-  /* NOTREACHED */
-  return 0;
+  M(LB_CONF, mp);
+  S(mp);
+  W (ret);
+  return ret;
 }
 
 static int api_lb_add_del_vip (vat_main_t * vam)
 {
   unformat_input_t * i = vam->input;
-  f64 timeout;
   vl_api_lb_add_del_vip_t mps, *mp;
+  int ret;
   mps.is_del = 0;
   mps.is_gre4 = 0;
 
@@ -181,16 +183,17 @@ static int api_lb_add_del_vip (vat_main_t * vam)
     mps.is_del = 1;
   }
 
-  M(LB_ADD_DEL_VIP, lb_add_del_vip); S; W;
-  /* NOTREACHED */
-  return 0;
+  M(LB_ADD_DEL_VIP, mp);
+  S(mp);
+  W (ret);
+  return ret;
 }
 
 static int api_lb_add_del_as (vat_main_t * vam)
 {
   unformat_input_t * i = vam->input;
-  f64 timeout;
   vl_api_lb_add_del_as_t mps, *mp;
+  int ret;
   mps.is_del = 0;
 
   if (!unformat(i, "%U %U",
@@ -204,9 +207,10 @@ static int api_lb_add_del_as (vat_main_t * vam)
     mps.is_del = 1;
   }
 
-  M(LB_ADD_DEL_AS, lb_add_del_as); S; W;
-  /* NOTREACHED */
-  return 0;
+  M(LB_ADD_DEL_AS, mp);
+  S(mp);
+  W (ret);
+  return ret;
 }
 
 /*

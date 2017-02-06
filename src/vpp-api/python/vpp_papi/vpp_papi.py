@@ -62,6 +62,7 @@ class VPP():
         self.results = {}
         self.timeout = 5
         self.apifiles = []
+        self.event_callback = None
 
         if not apifiles:
             # Pick up API definitions from default directory
@@ -502,7 +503,7 @@ class VPP():
         msgname = type(r).__name__
 
 	if self.event_callback:
-	    self.event_callback(msgname, msg)
+	    self.event_callback(msgname, r)
 
     def _control_ping(self, context):
         """Send a ping command."""

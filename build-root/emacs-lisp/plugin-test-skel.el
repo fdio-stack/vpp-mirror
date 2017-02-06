@@ -109,7 +109,7 @@ _(" PLUGIN-NAME "_ENABLE_DISABLE_REPLY, " plugin-name "_enable_disable_reply)
 
 /* M: construct, but don't yet send a message */
 
-#define M(T,t)                                                  \\
+#define M(T, mp)                                                \\
 do {                                                            \\
     vam->result_ready = 0;                                      \\
     mp = vl_msg_api_alloc(sizeof(*mp));                         \\
@@ -118,7 +118,7 @@ do {                                                            \\
     mp->client_index = vam->my_client_index;                    \\
 } while(0);
 
-#define M2(T,t,n)                                               \\
+#define M2(T, mp, n)                                            \\
 do {                                                            \\
     vam->result_ready = 0;                                      \\
     mp = vl_msg_api_alloc(sizeof(*mp)+(n));                     \\
@@ -128,12 +128,12 @@ do {                                                            \\
 } while(0);
 
 /* S: send a message */
-#define S (vl_msg_api_send_shmem (vam->vl_input_queue, (u8 *)&mp))
+#define S(mp) (vl_msg_api_send_shmem (vam->vl_input_queue, (u8 *)&mp))
 
 /* W: wait for results, with timeout */
 #define W                                       \\
 do {                                            \\
-    timeout = vat_time_now (vam) + 1.0;         \\
+    f64 timeout = vat_time_now (vam) + 1.0;     \\
                                                 \\
     while (vat_time_now (vam) < timeout) {      \\
         if (vam->result_ready == 1) {           \\
@@ -147,10 +147,10 @@ static int api_" plugin-name "_enable_disable (vat_main_t * vam)
 {
     " plugin-name "_test_main_t * sm = &" plugin-name "_test_main;
     unformat_input_t * i = vam->input;
-    f64 timeout;
     int enable_disable = 1;
     u32 sw_if_index = ~0;
     vl_api_" plugin-name "_enable_disable_t * mp;
+    int ret;
 
     /* Parse args required to build the message */
     while (unformat_check_input (i) != UNFORMAT_END_OF_INPUT) {
@@ -170,15 +170,16 @@ static int api_" plugin-name "_enable_disable (vat_main_t * vam)
     }
     
     /* Construct the API message */
-    M(" PLUGIN-NAME "_ENABLE_DISABLE, " plugin-name "_enable_disable);
+    M(" PLUGIN-NAME "_ENABLE_DISABLE, mp);
     mp->sw_if_index = ntohl (sw_if_index);
     mp->enable_disable = enable_disable;
 
     /* send it... */
-    S;
+    S(mp);
 
     /* Wait for a reply... */
-    W;
+    W (ret);
+    return ret;
 }
 
 /* 

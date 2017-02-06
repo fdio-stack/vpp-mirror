@@ -62,7 +62,8 @@ nobase_include_HEADERS +=			\
   vnet/rewrite.h				\
   vnet/vnet.h					\
   vnet/vnet_all_api_h.h				\
-  vnet/vnet_msg_enum.h
+  vnet/vnet_msg_enum.h				\
+  vnet/util/radix.h
 
 API_FILES += vnet/interface.api
 
@@ -73,12 +74,16 @@ API_FILES += vnet/interface.api
 libvnet_la_SOURCES +=				\
   vnet/policer/node_funcs.c			\
   vnet/policer/policer.c			\
-  vnet/policer/xlate.c
+  vnet/policer/xlate.c				\
+  vnet/policer/policer_api.c
 
 nobase_include_HEADERS +=			\
   vnet/policer/police.h				\
   vnet/policer/policer.h			\
-  vnet/policer/xlate.h
+  vnet/policer/xlate.h				\
+  vnet/policer/policer.api.h
+
+API_FILES += vnet/policer/policer.api
 
 ########################################
 # Cop - junk filter
@@ -88,10 +93,14 @@ libvnet_la_SOURCES +=				\
   vnet/cop/cop.c				\
   vnet/cop/node1.c				\
   vnet/cop/ip4_whitelist.c			\
-  vnet/cop/ip6_whitelist.c
+  vnet/cop/ip6_whitelist.c			\
+  vnet/cop/cop_api.c
 
 nobase_include_HEADERS +=			\
-  vnet/cop/cop.h
+  vnet/cop/cop.h					\
+  vnet/cop/cop.api.h
+
+API_FILES += vnet/cop/cop.api
 
 ########################################
 # Layer 2 protocols go here
@@ -270,13 +279,17 @@ libvnet_la_SOURCES +=				\
   vnet/classify/policer_classify.c		\
   vnet/classify/flow_classify.c                 \
   vnet/classify/flow_classify_node.c            \
-  vnet/classify/vnet_classify.h
+  vnet/classify/vnet_classify.h			\
+  vnet/classify/classify_api.c
 
 nobase_include_HEADERS +=			\
   vnet/classify/vnet_classify.h	                \
   vnet/classify/input_acl.h                     \
   vnet/classify/policer_classify.h              \
-  vnet/classify/flow_classify.h
+  vnet/classify/flow_classify.h					\
+  vnet/classify/classify.api.h
+
+API_FILES += vnet/classify/classify.api
 
 ########################################
 # Layer 3 protocols go here
@@ -393,7 +406,7 @@ libvnet_la_SOURCES +=				\
 
 API_FILES += vnet/ipsec/ipsec.api
 
-if WITH_DPDK_CRYPTO
+if WITH_DPDK
 libvnet_la_SOURCES +=				\
  vnet/devices/dpdk/ipsec/esp_encrypt.c		\
  vnet/devices/dpdk/ipsec/esp_decrypt.c		\
@@ -412,7 +425,7 @@ nobase_include_HEADERS +=			\
  vnet/ipsec/ikev2.h				\
  vnet/ipsec/ikev2_priv.h			\
  vnet/ipsec/ipsec.api.h
-if WITH_DPDK_CRYPTO
+if WITH_DPDK
 nobase_include_HEADERS +=			\
  vnet/devices/dpdk/ipsec/ipsec.h		\
  vnet/devices/dpdk/ipsec/esp.h
@@ -581,6 +594,7 @@ libvnet_la_SOURCES +=				\
  vnet/lisp-cp/gid_dictionary.c			\
  vnet/lisp-cp/lisp_msg_serdes.c			\
  vnet/lisp-cp/packets.c				\
+ vnet/lisp-cp/lisp_cli.c			\
  vnet/lisp-cp/lisp_api.c
 
 nobase_include_HEADERS +=			\
@@ -668,10 +682,14 @@ endif
 ########################################
 libvnet_la_SOURCES +=				\
  vnet/dhcp/client.c				\
- vnet/dhcp/client.h
+ vnet/dhcp/client.h				\
+ vnet/dhcp/dhcp_api.c
 
 nobase_include_HEADERS +=			\
- vnet/dhcp/client.h
+ vnet/dhcp/client.h					\
+ vnet/dhcp/dhcp.api.h
+
+API_FILES += vnet/dhcp/dhcp.api
 
 ########################################
 # DHCP proxy
@@ -692,7 +710,6 @@ nobase_include_HEADERS +=			\
 if WITH_LIBSSL
 libvnet_la_SOURCES +=				\
  vnet/sr/sr.c					\
- vnet/sr/sr_replicate.c				\
  vnet/sr/sr_api.c
 endif
 
@@ -719,12 +736,16 @@ nobase_include_HEADERS +=			\
 # IPFIX / netflow v10
 ########################################
 libvnet_la_SOURCES +=				\
- vnet/flow/flow_report.c
+ vnet/flow/flow_report.c			\
+ vnet/flow/flow_api.c
 
 nobase_include_HEADERS +=			\
  vnet/flow/flow_report.h			\
  vnet/flow/ipfix_info_elements.h		\
- vnet/flow/ipfix_packet.h
+ vnet/flow/ipfix_packet.h			\
+ vnet/flow/flow.api.h
+
+API_FILES += vnet/flow/flow.api
 
 ########################################
 # IPFIX classify code
@@ -973,16 +994,15 @@ nobase_include_HEADERS +=			\
 
 libvnet_la_SOURCES +=				\
   vnet/adj/adj_nbr.c				\
-  vnet/adj/adj_rewrite.c			\
   vnet/adj/adj_glean.c   			\
   vnet/adj/adj_midchain.c   			\
+  vnet/adj/adj_mcast.c   			\
   vnet/adj/adj_l2.c      			\
   vnet/adj/adj.c
 
 nobase_include_HEADERS +=			\
   vnet/adj/adj.h				\
   vnet/adj/adj_types.h				\
-  vnet/adj/adj_rewrite.h			\
   vnet/adj/adj_glean.h  			\
   vnet/adj/adj_nbr.h
 
@@ -998,8 +1018,9 @@ libvnet_la_SOURCES +=				\
   vnet/dpo/receive_dpo.c			\
   vnet/dpo/load_balance.c			\
   vnet/dpo/load_balance_map.c			\
-  vnet/dpo/lookup_dpo.c				\
-  vnet/dpo/classify_dpo.c			\
+  vnet/dpo/lookup_dpo.c   			\
+  vnet/dpo/classify_dpo.c   			\
+  vnet/dpo/replicate_dpo.c   			\
   vnet/dpo/mpls_label_dpo.c
 
 nobase_include_HEADERS +=			\
@@ -1011,6 +1032,33 @@ nobase_include_HEADERS +=			\
   vnet/dpo/receive_dpo.h			\
   vnet/dpo/ip_null_dpo.h			\
   vnet/dpo/dpo.h
+
+########################################
+# Multicast FIB
+########################################
+
+libvnet_la_SOURCES +=				\
+  vnet/mfib/mfib_test.c                         \
+  vnet/mfib/mfib_forward.c                      \
+  vnet/mfib/ip4_mfib.c                          \
+  vnet/mfib/ip6_mfib.c                          \
+  vnet/mfib/mfib_types.c                        \
+  vnet/mfib/mfib_signal.c                       \
+  vnet/mfib/mfib_itf.c                          \
+  vnet/mfib/mfib_entry.c                        \
+  vnet/mfib/mfib_table.c
+
+nobase_include_HEADERS +=			\
+  vnet/mfib/ip4_mfib.h                          \
+  vnet/mfib/mfib_types.h                        \
+  vnet/mfib/mfib_table.h
+
+########################################
+# Utilities
+########################################
+
+libvnet_la_SOURCES +=                    \
+  vnet/util/radix.c
 
 ########################################
 # Plugin client library

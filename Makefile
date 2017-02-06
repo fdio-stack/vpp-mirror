@@ -30,9 +30,9 @@ OS_ID        = $(shell grep '^ID=' /etc/os-release | cut -f2- -d= | sed -e 's/\"
 OS_VERSION_ID= $(shell grep '^VERSION_ID=' /etc/os-release | cut -f2- -d= | sed -e 's/\"//g')
 endif
 
-ifeq ($(OS_ID),ubuntu)
+ifeq ($(filter ubuntu debian,$(OS_ID)),$(OS_ID))
 PKG=deb
-else ifeq ($(OS_ID),centos)
+else ifeq ($(filter rhel centos,$(OS_ID)),$(OS_ID))
 PKG=rpm
 endif
 
@@ -75,6 +75,7 @@ help:
 	@echo " wipe-release        - wipe all products of release build "
 	@echo " build               - build debug binaries"
 	@echo " build-release       - build release binaries"
+	@echo " build-coverity      - build coverity artifacts"
 	@echo " rebuild             - wipe and build debug binares"
 	@echo " rebuild-release     - wipe and build release binares"
 	@echo " run                 - run debug binary"
@@ -161,8 +162,8 @@ ifeq ($(OS_ID),ubuntu)
 ifeq ($(OS_VERSION_ID),14.04)
 	@sudo -E apt-get $(CONFIRM) $(FORCE) install software-properties-common
 	@sudo -E add-apt-repository ppa:openjdk-r/ppa $(CONFIRM)
-	@sudo -E apt-get update
 endif
+	@sudo -E apt-get update
 	@sudo -E apt-get $(CONFIRM) $(FORCE) install $(DEB_DEPENDS)
 else ifneq ("$(wildcard /etc/redhat-release)","")
 	@sudo -E yum groupinstall $(CONFIRM) $(RPM_DEPENDS_GROUPS)
@@ -286,6 +287,9 @@ run-release:
 
 debug:
 	$(call run, $(BR)/install-$(PLATFORM)_debug-native,$(GDB) $(GDB_ARGS) --args)
+
+build-coverity: 
+	$(call make,$(PLATFORM)_coverity,install-packages)
 
 debug-release:
 	$(call run, $(BR)/install-$(PLATFORM)-native,$(GDB) $(GDB_ARGS) --args)

@@ -19,6 +19,8 @@
 #include <vlibmemory/api.h>
 #include <vlibsocket/api.h>
 #include <vppinfra/error.h>
+
+#define __plugin_msg_base flowperpkt_test_main.msg_id_base
 #include <vlibapi/vat_helper_macros.h>
 
 /**
@@ -93,11 +95,11 @@ static int
 api_flowperpkt_tx_interface_add_del (vat_main_t * vam)
 {
   unformat_input_t *i = vam->input;
-  f64 timeout;
   int enable_disable = 1;
   u8 which = 0;			/* ipv4 by default */
   u32 sw_if_index = ~0;
   vl_api_flowperpkt_tx_interface_add_del_t *mp;
+  int ret;
 
   /* Parse args required to build the message */
   while (unformat_check_input (i) != UNFORMAT_END_OF_INPUT)
@@ -121,16 +123,17 @@ api_flowperpkt_tx_interface_add_del (vat_main_t * vam)
     }
 
   /* Construct the API message */
-  M (FLOWPERPKT_TX_INTERFACE_ADD_DEL, flowperpkt_tx_interface_add_del);
+  M (FLOWPERPKT_TX_INTERFACE_ADD_DEL, mp);
   mp->sw_if_index = ntohl (sw_if_index);
   mp->is_add = enable_disable;
   mp->which = which;
 
   /* send it... */
-  S;
+  S (mp);
 
   /* Wait for a reply... */
-  W;
+  W (ret);
+  return ret;
 }
 
 /*
