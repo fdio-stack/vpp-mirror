@@ -787,6 +787,9 @@ tcp_timer_retransmit_handler_i (u32 index, u8 is_syn)
       tc = tcp_connection_get (index, thread_index);
     }
 
+  /* Invalidate our copy of the timer handle, it just expired... */
+  tc->timers[is_syn] = ~0;
+
   /* Increment RTO backoff (also equal to number of retries) */
   tc->rto_boff += 1;
 
