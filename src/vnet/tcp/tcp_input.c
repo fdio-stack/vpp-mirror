@@ -653,7 +653,7 @@ delack_timers_init (tcp_main_t *tm, u32 thread_index)
 {
   tcp_connection_t *tc;
   u32 i, *conns;
-  tcp_timer_wheel_t *tw;
+  tw_timer_wheel_16t_2w_512sl_t *tw;
 
   tw = &tm->timer_wheels[thread_index];
   conns = tm->delack_connections[thread_index];
@@ -662,9 +662,10 @@ delack_timers_init (tcp_main_t *tm, u32 thread_index)
       tc = pool_elt_at_index (tm->connections[thread_index], conns[i]);
       ASSERT(0 != tc);
 
-      tc->timers[TCP_TIMER_DELACK] = tcp_timer_start (tw, conns[i],
-                                                      TCP_TIMER_DELACK,
-                                                      TCP_DELACK_TIME);
+      tc->timers[TCP_TIMER_DELACK] 
+        = tw_timer_start_16t_2w_512sl (tw, conns[i],
+                                       TCP_TIMER_DELACK,
+                                       TCP_DELACK_TIME);
     }
   vec_reset_length (tm->delack_connections[thread_index]);
 }
@@ -1852,7 +1853,7 @@ void
 tcp_update_time (f64 now, u32 thread_index)
 {
   tcp_main_t *tm = vnet_get_tcp_main ();
-  tcp_timer_expire_timers (&tm->timer_wheels[thread_index], now);
+  tw_timer_expire_timers_16t_2w_512sl (&tm->timer_wheels[thread_index], now);
 }
 
 static void

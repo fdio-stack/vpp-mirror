@@ -222,9 +222,6 @@ typedef struct _tcp_main
   /* Per-worker thread tcp connection pools */
   tcp_connection_t **connections;
 
-  /* Per-worker thread timer vectors, parallel to connection pools */
-  tcp_timer_t **timers;
-
   /* Pool of listeners. */
   tcp_connection_t *listener_pool;
 
@@ -237,7 +234,7 @@ typedef struct _tcp_main
   u32 **tx_buffers;
 
   /* Per worker-thread timer wheel for connections timers */
-  tcp_timer_wheel_t *timer_wheels;
+  tw_timer_wheel_16t_2w_512sl_t *timer_wheels;
 
   /* Convenience per worker-thread vector of connections to DELACK */
   u32 **delack_connections;
@@ -365,8 +362,9 @@ tcp_push_header_uri (transport_connection_t *tconn, vlib_buffer_t *b);
 always_inline void
 tcp_timer_set (tcp_main_t *tm, tcp_connection_t *tc, u8 timer_id, u32 interval)
 {
-  tc->timers[timer_id] = tcp_timer_start (&tm->timer_wheels[tc->c_thread_index],
-                                          tc->c_c_index, timer_id, interval);
+  tc->timers[timer_id] 
+    = tw_timer_start_16t_2w_512sl (&tm->timer_wheels[tc->c_thread_index],
+                                   tc->c_c_index, timer_id, interval);
 }
 
 always_inline void
@@ -375,7 +373,8 @@ tcp_timer_reset (tcp_main_t *tm, tcp_connection_t *tc, u8 timer_id)
   if (tc->timers[timer_id] == TCP_TIMER_HANDLE_INVALID)
     return;
 
-  tcp_timer_stop (&tm->timer_wheels[tc->c_thread_index], tc->timers[timer_id]);
+  tw_timer_stop_16t_2w_512sl (&tm->timer_wheels[tc->c_thread_index], 
+                               tc->timers[timer_id]);
   tc->timers[timer_id] = TCP_TIMER_HANDLE_INVALID;
 }
 
@@ -384,10 +383,11 @@ tcp_timer_update (tcp_main_t *tm, tcp_connection_t *tc, u8 timer_id,
                   u32 interval)
 {
   if (tc->timers[timer_id] != TCP_TIMER_HANDLE_INVALID)
-    tcp_timer_stop (&tm->timer_wheels[tc->c_thread_index],
-                    tc->timers[timer_id]);
-  tc->timers[timer_id] = tcp_timer_start (&tm->timer_wheels[tc->c_thread_index],
-                                          tc->c_c_index, timer_id, interval);
+    tw_timer_stop_16t_2w_512sl (&tm->timer_wheels[tc->c_thread_index],
+                                 tc->timers[timer_id]);
+  tc->timers[timer_id] 
+    = tw_timer_start_16t_2w_512sl (&tm->timer_wheels[tc->c_thread_index],
+                                    tc->c_c_index, timer_id, interval);
 }
 
 void

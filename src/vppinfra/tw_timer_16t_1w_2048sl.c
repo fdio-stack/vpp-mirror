@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Cisco and/or its affiliates.
+ * Copyright (c) 2017 Cisco and/or its affiliates.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at:
@@ -12,13 +12,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef __included_tcp_timer_h__
-#define __included_tcp_timer_h__
 
-#include <vppinfra/tw_timer_16t_2w_512sl.h>
-#include <vppinfra/tw_timer_16t_1w_2048sl.h>
-
-#endif /* __included_tcp_timer_h__ */
+#include <vppinfra/error.h>
+#include "tw_timer_16t_1w_2048sl.h"
+#include "tw_timer_template.c"
 
 /*
  * fd.io coding-style-patch-verification: ON
