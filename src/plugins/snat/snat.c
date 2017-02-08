@@ -346,15 +346,6 @@ int snat_add_static_mapping(ip4_address_t l_addr, ip4_address_t e_addr,
   snat_interface_t *interface;
   int i;
 
-  /* If outside FIB index is not resolved yet */
-  if (sm->outside_fib_index == ~0)
-    {
-      p = hash_get (sm->ip4_main->fib_index_by_table_id, sm->outside_vrf_id);
-      if (!p)
-        return VNET_API_ERROR_NO_SUCH_FIB;
-      sm->outside_fib_index = p[0];
-    }
-
   /* If the external address is a specific interface address */
   if (sw_if_index != ~0)
     {
@@ -402,17 +393,7 @@ int snat_add_static_mapping(ip4_address_t l_addr, ip4_address_t e_addr,
       /* If not specified use inside VRF id from SNAT plugin startup config */
       else
         {
-          if (sm->inside_fib_index == ~0)
-            {
-              p = hash_get (sm->ip4_main->fib_index_by_table_id, sm->inside_vrf_id);
-              if (!p)
-                return VNET_API_ERROR_NO_SUCH_FIB;
-              fib_index = p[0];
-              sm->inside_fib_index = fib_index;
-            }
-          else
-            fib_index = sm->inside_fib_index;
-
+          fib_index = sm->inside_fib_index;
           vrf_id = sm->inside_vrf_id;
         }
 
@@ -1876,6 +1857,7 @@ add_static_mapping_command_fn (vlib_main_t * vm,
   vnet_main_t * vnm = vnet_get_main();
   int rv;
   snat_protocol_t proto;
+  u8 proto_set = 0;
 
   /* Get a line of input. */
   if (!unformat_user (input, unformat_line_input, line_input))
@@ -1905,7 +1887,7 @@ add_static_mapping_command_fn (vlib_main_t * vm,
       else if (unformat (line_input, "vrf %u", &vrf_id))
         ;
       else if (unformat (line_input, "%U", unformat_snat_protocol, &proto))
-        ;
+        proto_set = 1;
       else if (unformat (line_input, "del"))
         is_add = 0;
       else
@@ -1913,6 +1895,9 @@ add_static_mapping_command_fn (vlib_main_t * vm,
           format_unformat_error, line_input);
     }
   unformat_free (line_input);
+
+  if (!addr_only && !proto_set)
+    return clib_error_return (0, "missing protocol");
 
   rv = snat_add_static_mapping(l_addr, e_addr, (u16) l_port, (u16) e_port,
                                vrf_id, addr_only, sw_if_index, proto, is_add);
@@ -1945,8 +1930,8 @@ add_static_mapping_command_fn (vlib_main_t * vm,
  * Static mapping allows hosts on the external network to initiate connection
  * to to the local network host.
  * To create static mapping between local host address 10.0.0.3 port 6303 and
- * external address 4.4.4.4 port 3606 use:
- *  vpp# snat add static mapping local 10.0.0.3 6303 external 4.4.4.4 3606
+ * external address 4.4.4.4 port 3606 for TCP protocol use:
+ *  vpp# snat add static mapping local tcp 10.0.0.3 6303 external 4.4.4.4 3606
  * If not runnig "static mapping only" S-NAT plugin mode use before:
  *  vpp# snat add address 4.4.4.4
  * To create static mapping between local and external address use:
@@ -1957,7 +1942,7 @@ VLIB_CLI_COMMAND (add_static_mapping_command, static) = {
   .path = "snat add static mapping",
   .function = add_static_mapping_command_fn,
   .short_help =
-    "snat add static mapping local <addr> [<port>] external <addr> [<port>] [vrf <table-id>] [del]",
+    "snat add static mapping local tcp|udp|icmp <addr> [<port>] external <addr> [<port>] [vrf <table-id>] [del]",
 };
 
 static clib_error_t *
@@ -2127,9 +2112,11 @@ snat_config (vlib_main_t * vm, unformat_input_t * input)
   sm->user_memory_size = user_memory_size;
   sm->max_translations_per_user = max_translations_per_user;
   sm->outside_vrf_id = outside_vrf_id;
-  sm->outside_fib_index = ~0;
+  sm->outside_fib_index = fib_table_find_or_create_and_lock (FIB_PROTOCOL_IP4,
+                                                             outside_vrf_id);
   sm->inside_vrf_id = inside_vrf_id;
-  sm->inside_fib_index = ~0;
+  sm->inside_fib_index = fib_table_find_or_create_and_lock (FIB_PROTOCOL_IP4,
+                                                            inside_vrf_id);
   sm->static_mapping_only = static_mapping_only;
   sm->static_mapping_connection_tracking = static_mapping_connection_tracking;
 
