@@ -259,7 +259,7 @@ tcp_make_syn_options (tcp_options_t *opts, u32 initial_wnd)
   len += TCP_OPTION_LEN_SACK_PERMITTED;
 
   /* Align to needed boundary */
-  len += TCP_OPTS_ALIGN - len % TCP_OPTS_ALIGN;
+  len += (TCP_OPTS_ALIGN - len % TCP_OPTS_ALIGN) % TCP_OPTS_ALIGN;
   return len;
 }
 
@@ -294,7 +294,7 @@ tcp_make_synack_options (tcp_connection_t *tc, tcp_options_t *opts)
     }
 
   /* Align to needed boundary */
-  len += TCP_OPTS_ALIGN - len % TCP_OPTS_ALIGN;
+  len += (TCP_OPTS_ALIGN - len % TCP_OPTS_ALIGN) % TCP_OPTS_ALIGN;
   return len;
 }
 
@@ -314,17 +314,17 @@ tcp_make_established_options (tcp_connection_t *tc, tcp_options_t *opts)
     }
   if (tcp_opts_sack_permitted (&tc->opt))
     {
-      if (vec_len(tc->sacks))
+      if (vec_len(tc->snd_sacks))
         {
           opts->flags |= TCP_OPTS_FLAG_SACK;
-          opts->sacks = tc->sacks;
-          opts->n_sack_blocks = vec_len(tc->sacks);
-          len += 2 + 8 * opts->n_sack_blocks;
+          opts->sacks = tc->snd_sacks;
+          opts->n_sack_blocks = vec_len(tc->snd_sacks);
+          len += 2 + TCP_OPTION_LEN_SACK_BLOCK * opts->n_sack_blocks;
         }
     }
 
   /* Align to needed boundary */
-  len += TCP_OPTS_ALIGN - len % TCP_OPTS_ALIGN;
+  len += (TCP_OPTS_ALIGN - len % TCP_OPTS_ALIGN) % TCP_OPTS_ALIGN;
   return len;
 }
 
@@ -380,6 +380,9 @@ tcp_reuse_buffer (vlib_main_t *vm, vlib_buffer_t *b)
     }
   while ((it->flags & VLIB_BUFFER_NEXT_PRESENT)
       && (it = vlib_get_buffer (vm, it->next_buffer)));
+
+  /* Leave enough space for headers */
+  vlib_buffer_make_headroom (b, MAX_HDRS_LEN);
 }
 
 /**
@@ -396,9 +399,6 @@ tcp_make_ack (tcp_connection_t *tc, vlib_buffer_t *b)
   u16 wnd;
 
   tcp_reuse_buffer (vm, b);
-
-  /* leave enough space for headers */
-  vlib_buffer_make_headroom (b, MAX_HDRS_LEN);
 
   wnd = tcp_window_to_advertise (tc, TCP_CONNECTION_STATE_ESTABLISHED);
 
@@ -434,15 +434,13 @@ tcp_make_synack (tcp_connection_t *tc, vlib_buffer_t *b)
 
   tcp_reuse_buffer (vm, b);
 
-  /* Leave enough space for headers */
-  vlib_buffer_make_headroom (b, MAX_HDRS_LEN);
-
   /* Set random initial sequence */
   time_now = tcp_time_now();
 
   tc->iss = random_u32 (&time_now);
   tc->snd_una = tc->iss;
   tc->snd_nxt = tc->iss + 1;
+  tc->snd_una_max = tc->snd_nxt;
 
   initial_wnd = tcp_initial_window_to_advertise (tc);
 
@@ -772,6 +770,48 @@ tcp_timer_delack_handler (u32 index)
   tcp_enqueue_to_output (vm, b, bi, tc->c_is_ip4);
 }
 
+void
+tcp_prepare_retransmit_segment (tcp_connection_t *tc, vlib_buffer_t *b)
+{
+  tcp_main_t *tm = vnet_get_tcp_main ();
+  vlib_main_t *vm = tm->vlib_main;
+  u32 max_bytes, n_bytes, offset = 0;
+  sack_scoreboard_hole_t *hole;
+  u32 hole_size;
+
+  tcp_reuse_buffer (vm, b);
+
+  ASSERT (tc->state == TCP_CONNECTION_STATE_ESTABLISHED);
+
+  /* Figure out what and how many bytes we can send */
+  max_bytes = tcp_snd_mss (tc);
+  if (max_bytes > tc->snd_wnd)
+    max_bytes = tc->snd_wnd;
+
+  if (tcp_opts_sack_permitted(&tc->opt)
+      && (hole = scoreboard_first_hole (&tc->sack_sb)))
+    {
+      offset = hole->start - tc->snd_una;
+      hole_size = hole->end - hole->start;
+      if (hole_size < max_bytes)
+        max_bytes = hole_size;
+    }
+
+  if (max_bytes != 0)
+    {
+      n_bytes = stream_session_peek_bytes (&tc->connection,
+                                           vlib_buffer_get_current (b),
+                                           offset, max_bytes);
+      ASSERT (n_bytes != 0);
+    }
+  else
+    {
+      clib_warning("bad, no window to retransmit");
+    }
+
+  tcp_push_hdr_i (tc, b, tc->state);
+}
+
 static void
 tcp_timer_retransmit_handler_i (u32 index, u8 is_syn)
 {
@@ -780,7 +820,7 @@ tcp_timer_retransmit_handler_i (u32 index, u8 is_syn)
   u32 thread_index = os_get_cpu_number ();
   tcp_connection_t *tc;
   vlib_buffer_t *b;
-  u32 bi, max_bytes, n_bytes;
+  u32 bi;
 
   if (is_syn)
     {
@@ -800,29 +840,16 @@ tcp_timer_retransmit_handler_i (u32 index, u8 is_syn)
   /* Get buffer */
   tcp_get_free_buffer_index (tm, &bi);
   b = vlib_get_buffer (vm, bi);
-  vlib_buffer_make_headroom (b, MAX_HDRS_LEN);
 
   if (tc->state == TCP_CONNECTION_STATE_ESTABLISHED)
     {
       /* Exponential backoff */
       tc->rto = clib_min (tc->rto << 1, TCP_RTO_MAX);
 
-      /* Figure out how many bytes we can send */
-      max_bytes = tcp_snd_mss (tc);
-      if (max_bytes > tc->snd_wnd)
-        max_bytes = tc->snd_wnd;
+      tcp_prepare_retransmit_segment (tc, b);
 
-      if (max_bytes != 0)
-        {
-          n_bytes = stream_session_peek_bytes (&tc->connection,
-                                               vlib_buffer_get_current (b),
-                                               0 /* no offset */, max_bytes);
-          ASSERT (n_bytes != 0);
-        }
-      else
-        {
-          clib_warning("bad, no window");
-        }
+      /* No fancy fast recovery for now! */
+      scoreboard_clear (&tc->sack_sb);
     }
   else
     {
@@ -834,9 +861,11 @@ tcp_timer_retransmit_handler_i (u32 index, u8 is_syn)
        * start growing RTO exponentially */
       if (tc->rto_boff > TCP_RTO_SYN_RETRIES)
         tc->rto = clib_min (tc->rto << 1, TCP_RTO_MAX);
+
+      vlib_buffer_make_headroom (b, MAX_HDRS_LEN);
+      tcp_push_hdr_i (tc, b, tc->state);
     }
 
-  tcp_push_hdr_i (tc, b, tc->state);
   if (is_syn && tc->state == TCP_CONNECTION_STATE_SYN_SENT)
     {
       /* This goes straight to ipx_lookup */

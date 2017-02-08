@@ -704,7 +704,7 @@ int svm_fifo_dequeue_drop (svm_fifo_t *f, int pid, u32 max_bytes)
   cursize = f->cursize;
   nitems = f->nitems;
 
-  /* Number of bytes we're going to copy */
+  /* Number of bytes we're going to drop */
   total_drop_bytes = (cursize < max_bytes) ? cursize : max_bytes;
 
   /* Number of bytes in first copy segment */
@@ -714,7 +714,7 @@ int svm_fifo_dequeue_drop (svm_fifo_t *f, int pid, u32 max_bytes)
   f->head += first_drop_bytes;
   f->head = (f->head == nitems) ? 0 : f->head;
 
-  /* Number of bytes in second copy segment, if any */
+  /* Number of bytes in second drop segment, if any */
   second_drop_bytes = total_drop_bytes - first_drop_bytes;
   if (second_drop_bytes)
     {

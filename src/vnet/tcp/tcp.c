@@ -245,6 +245,14 @@ tcp_timers_init (tcp_connection_t *tc)
   tc->rto = TCP_RTO_INIT;
 }
 
+void
+tcp_connection_init_vars (tcp_connection_t *tc)
+{
+  tcp_timers_init (tc);
+
+  tc->sack_sb.head = TCP_INVALID_SACK_HOLE_INDEX;
+}
+
 int
 tcp_connection_open (ip46_address_t *rmt_addr, u16 rmt_port, u8 is_ip4)
 {
@@ -308,7 +316,7 @@ tcp_connection_open (ip46_address_t *rmt_addr, u16 rmt_port, u8 is_ip4)
   tc->c_c_index = tc - tm->half_open_connections;
   tc->c_is_ip4 = is_ip4;
 
-  tcp_timers_init (tc);
+  tcp_connection_init_vars (tc);
 
   tcp_send_syn (tc);
 

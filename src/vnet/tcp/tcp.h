@@ -23,7 +23,7 @@
 #include <vnet/uri/transport.h>
 #include <vnet/uri/uri.h>
 
-#define TCP_TICK 10e-3                  /**< TCP tick time period (s) */
+#define TCP_TICK 10e-3                  /**< TCP tick period (s) */
 #define THZ 1/TCP_TICK                  /**< TCP tick frequency */
 #define TCP_TSTAMP_RESOLUTION TCP_TICK  /**< Time stamp resolution */
 #define TCP_PAWS_IDLE 24 * 24 * 60 * 60 * THZ /**< 24 days */
@@ -136,6 +136,21 @@ enum
 };
 
 #define TCP_MAX_SACK_BLOCKS 5   /**< Max number of SACK blocks stored */
+#define TCP_INVALID_SACK_HOLE_INDEX ((u32)~0)
+
+typedef struct _sack_scoreboard_hole
+{
+  u32 next;             /**< Index for next entry in linked list */
+  u32 prev;             /**< Index for previous entry in linked list */
+  u32 start;            /**< Start sequence number */
+  u32 end;              /**< End sequence number */
+} sack_scoreboard_hole_t;
+
+typedef struct _sack_scoreboard
+{
+  sack_scoreboard_hole_t *holes;        /**< Pool of holes */
+  u32 head;                             /**< Index to first entry */
+} sack_scoreboard_t;
 
 typedef struct _tcp_connection
 {
@@ -170,10 +185,13 @@ typedef struct _tcp_connection
   u32 tsval_recent;     /**< Last timestamp received */
   u32 tsval_recent_age; /**< When last updated tstamp_recent*/
 
-  sack_block_t *sacks;  /**< Vector of blocks to SACK. XXX Fixed size? */
+  sack_block_t *snd_sacks;      /**< Vector of SACKs to send. XXX Fixed size? */
+  sack_scoreboard_t sack_sb;    /**< SACK "scoreboard" that tracks holes */
 
+  u8 rcv_dupacks;       /**< Number of DUPACKs received */
   u8 snt_dupacks;       /**< Number of DUPACKs sent in a burst */
 
+  /* RTT and RTO */
   u32 rto;              /**< Retransmission timeout */
   u32 rto_boff;         /**< Index for RTO backoff */
   u32 srtt;             /**< Smoothed RTT */
@@ -359,6 +377,9 @@ tcp_time_now (void)
 u32
 tcp_push_header_uri (transport_connection_t *tconn, vlib_buffer_t *b);
 
+void
+tcp_prepare_retransmit_segment (tcp_connection_t *tc, vlib_buffer_t *b);
+
 always_inline void
 tcp_timer_set (tcp_main_t *tm, tcp_connection_t *tc, u8 timer_id, u32 interval)
 {
@@ -391,12 +412,41 @@ tcp_timer_update (tcp_main_t *tm, tcp_connection_t *tc, u8 timer_id,
 }
 
 void
-tcp_timers_init (tcp_connection_t *tc);
+tcp_connection_init_vars (tcp_connection_t *tc);
 
 always_inline u8
 tcp_timer_is_active (tcp_connection_t *tc, tcp_timers_e timer)
 {
   return tc->timers[timer] != TCP_TIMER_HANDLE_INVALID;
+}
+
+void
+scoreboard_remove_hole (sack_scoreboard_t *sb, sack_scoreboard_hole_t *hole);
+
+always_inline sack_scoreboard_hole_t *
+scoreboard_next_hole (sack_scoreboard_t *sb, sack_scoreboard_hole_t *hole)
+{
+  if (hole->next != TCP_INVALID_SACK_HOLE_INDEX)
+    return pool_elt_at_index (sb->holes, hole->next);
+  return 0;
+}
+
+always_inline sack_scoreboard_hole_t *
+scoreboard_first_hole (sack_scoreboard_t *sb)
+{
+  if (sb->head != TCP_INVALID_SACK_HOLE_INDEX)
+    return pool_elt_at_index (sb->holes, sb->head);
+  return 0;
+}
+
+always_inline void
+scoreboard_clear (sack_scoreboard_t *sb)
+{
+  sack_scoreboard_hole_t *hole = scoreboard_first_hole (sb);
+  while ((hole = scoreboard_first_hole(sb)))
+    {
+      scoreboard_remove_hole (sb, hole);
+    }
 }
 
 #endif /* _vnet_tcp_h_ */
