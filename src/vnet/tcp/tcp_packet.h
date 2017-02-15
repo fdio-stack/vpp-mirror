@@ -114,7 +114,6 @@ typedef enum tcp_option_type
 
 #define foreach_tcp_options_flag                                        \
   _ (MSS)               /**< MSS advertised in SYN */                   \
-  _ (TSTAMP_SEEN)       /**< Seen timestamp in last packet */           \
   _ (TSTAMP)            /**< Timestamp capability advertised in SYN */  \
   _ (WSCALE)            /**< Wnd scale capability advertised in SYN */  \
   _ (SACK_PERMITTED)    /**< SACK capability advertised in SYN */       \
@@ -156,12 +155,10 @@ typedef struct
 
 /* Flag tests that return 0 or !0 */
 #define tcp_opts_mss(_to) ((_to)->flags & TCP_OPTS_FLAG_MSS)
-#define tcp_opts_tstamp_seen(_to) ((_to)->flags & TCP_OPTS_FLAG_TSTAMP_SEEN)
 #define tcp_opts_tstamp(_to) ((_to)->flags & TCP_OPTS_FLAG_TSTAMP)
 #define tcp_opts_wscale(_to) ((_to)->flags & TCP_OPTS_FLAG_WSCALE)
 #define tcp_opts_sack(_to) ((_to)->flags & TCP_OPTS_FLAG_SACK)
 #define tcp_opts_sack_permitted(_to) ((_to)->flags & TCP_OPTS_FLAG_SACK_PERMITTED)
-
 
 /* TCP option lengths */
 #define TCP_OPTION_LEN_EOL              1

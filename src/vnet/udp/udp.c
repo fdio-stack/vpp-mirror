@@ -194,6 +194,13 @@ udp_send_mss_uri (transport_connection_t *t)
   return 400;
 }
 
+u32
+udp_send_space_uri (transport_connection_t *t)
+{
+  /* No constraint on TX window */
+  return ~0;
+}
+
 const static transport_proto_vft_t udp4_proto = {
   .bind = vnet_bind_ip4_udp_uri,
   .unbind = vnet_unbind_ip4_udp_uri,
@@ -202,6 +209,7 @@ const static transport_proto_vft_t udp4_proto = {
   .get_listener = uri_udp_session_get_listener,
   .delete = uri_udp_session_delete,
   .send_mss = udp_send_mss_uri,
+  .send_space = udp_send_space_uri,
   .format_connection = format_ip4_udp_stream_session
 };
 

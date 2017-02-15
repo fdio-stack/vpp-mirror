@@ -80,11 +80,11 @@ static u32 session_type_to_next[] =
 always_inline int
 session_fifo_rx_i (vlib_main_t *vm, vlib_node_runtime_t *node,
                  session_manager_main_t *smm, fifo_event_t *e0,
-                 stream_session_t *s0, u32 my_thread_index, int *n_tx_packets,
+                 stream_session_t *s0, u32 thread_index, int *n_tx_packets,
                  u8 peek_data)
 {
   u32 n_trace = vlib_get_trace_count (vm, node);
-  u32 len_to_snd0, len_to_deq0, max_dequeue0, n_bufs;
+  u32 left_to_snd0, max_len_to_snd0, len_to_deq0, n_bufs, snd_space0;
   u32 n_frame_bytes, n_frames_per_evt;
   transport_connection_t *tc0;
   transport_proto_vft_t *transport_vft;
@@ -99,17 +99,20 @@ session_fifo_rx_i (vlib_main_t *vm, vlib_node_runtime_t *node,
 
   transport_vft = uri_get_transport (s0->session_type);
   tc0 = transport_vft->get_connection (s0->connection_index,
-                                       my_thread_index);
+                                       thread_index);
 
-  /* Make sure there's something to dequeue */
-  max_dequeue0 = svm_fifo_max_dequeue (s0->server_tx_fifo);
-  if (max_dequeue0 == 0)
+  /* Make sure we have space to send and there's something to dequeue */
+  snd_space0 = transport_vft->send_space (tc0);
+  snd_mss0 = transport_vft->send_mss (tc0);
+
+  if (snd_space0 == 0 || svm_fifo_max_dequeue (s0->server_tx_fifo) == 0
+      || snd_mss0 == 0)
     return 0;
 
-  len_to_snd0 = e0->enqueue_length;
+  ASSERT (e0->enqueue_length > 0);
 
-  /* Get the maximum segment size for this transport */
-  snd_mss0 = transport_vft->send_mss (tc0);
+  /* Ensure we're not writing more than transport window allows */
+  max_len_to_snd0 = clib_min (e0->enqueue_length, snd_space0);
 
   if (peek_data)
     {
@@ -121,19 +124,19 @@ session_fifo_rx_i (vlib_main_t *vm, vlib_node_runtime_t *node,
    * bytes (Nagle) */
 
   n_frame_bytes = snd_mss0 * VLIB_FRAME_SIZE;
-  n_frames_per_evt = ceil((double)len_to_snd0 / n_frame_bytes);
+  n_frames_per_evt = ceil((double)max_len_to_snd0 / n_frame_bytes);
 
-  n_bufs = vec_len (smm->tx_buffers[my_thread_index]);
-
+  n_bufs = vec_len (smm->tx_buffers[thread_index]);
+  left_to_snd0 = max_len_to_snd0;
   for (i = 0; i < n_frames_per_evt; i++)
     {
       /* Make sure we have at least one full frame of buffers ready */
       if (PREDICT_FALSE(n_bufs < VLIB_FRAME_SIZE))
         {
-          vec_validate(smm->tx_buffers[my_thread_index],
+          vec_validate(smm->tx_buffers[thread_index],
                        n_bufs + VLIB_FRAME_SIZE - 1);
           n_bufs += vlib_buffer_alloc (
-              vm, &smm->tx_buffers[my_thread_index][n_bufs],
+              vm, &smm->tx_buffers[thread_index][n_bufs],
               VLIB_FRAME_SIZE);
 
           /* buffer shortage
@@ -141,22 +144,20 @@ session_fifo_rx_i (vlib_main_t *vm, vlib_node_runtime_t *node,
           if (PREDICT_FALSE(n_bufs < 0.9 * VLIB_FRAME_SIZE))
             {
               /* Keep track of how much we've dequeued and exit */
-              e0->enqueue_length = len_to_snd0;
+              e0->enqueue_length -= max_len_to_snd0 - left_to_snd0;
               return -1;
             }
 
-          _vec_len (smm->tx_buffers[my_thread_index]) = n_bufs;
+          _vec_len (smm->tx_buffers[thread_index]) = n_bufs;
         }
 
-      /* TODO check tx window is not full */
-
       vlib_get_next_frame(vm, node, next_index, to_next, n_left_to_next);
-      while (len_to_snd0 && n_left_to_next)
+      while (left_to_snd0 && n_left_to_next)
         {
           /* Get free buffer */
           n_bufs --;
-          bi0 = smm->tx_buffers[my_thread_index][n_bufs];
-          _vec_len (smm->tx_buffers[my_thread_index]) = n_bufs;
+          bi0 = smm->tx_buffers[thread_index][n_bufs];
+          _vec_len (smm->tx_buffers[thread_index]) = n_bufs;
 
           b0 = vlib_get_buffer (vm, bi0);
           b0->error = 0;
@@ -198,7 +199,7 @@ session_fifo_rx_i (vlib_main_t *vm, vlib_node_runtime_t *node,
               ed->data[1] = e0->enqueue_length;
             }
 
-          len_to_deq0 = (len_to_snd0 < snd_mss0) ? len_to_snd0 : snd_mss0;
+          len_to_deq0 = (left_to_snd0 < snd_mss0) ? left_to_snd0 : snd_mss0;
 
           /* Make room for headers */
           data0 = vlib_buffer_make_headroom (b0, MAX_HDRS_LEN);
@@ -230,7 +231,7 @@ session_fifo_rx_i (vlib_main_t *vm, vlib_node_runtime_t *node,
           /* Ask transport to push header */
           transport_vft->push_header (tc0, b0);
 
-          len_to_snd0 -= len_to_deq0;
+          left_to_snd0 -= len_to_deq0;
           *n_tx_packets = *n_tx_packets + 1;
 
           vlib_validate_buffer_enqueue_x1 (vm, node, next_index,
@@ -240,17 +241,23 @@ session_fifo_rx_i (vlib_main_t *vm, vlib_node_runtime_t *node,
       vlib_put_next_frame (vm, node, next_index, n_left_to_next);
     }
 
+  /* If we couldn't dequeue all bytes store progress */
+  if (max_len_to_snd0 < e0->enqueue_length)
+    {
+      e0->enqueue_length -= max_len_to_snd0;
+      vec_add1 (smm->evts_partially_read[thread_index], *e0);
+    }
   return 0;
 
  dequeue_fail:
   /* Can't read from fifo. Store event rx progress, save as partially read,
    * return buff to free list and return  */
-  e0->enqueue_length = len_to_snd0;
-  vec_add1 (smm->evts_partially_read[my_thread_index], *e0);
+  e0->enqueue_length -= max_len_to_snd0 - left_to_snd0;
+  vec_add1 (smm->evts_partially_read[thread_index], *e0);
 
   to_next -= 1;
   n_left_to_next += 1;
-  _vec_len (smm->tx_buffers[my_thread_index]) += 1;
+  _vec_len (smm->tx_buffers[thread_index]) += 1;
 
   clib_warning ("dequeue fail");
   return 0;
@@ -303,13 +310,16 @@ session_queue_node_fn (vlib_main_t * vm, vlib_node_runtime_t * node,
 
   my_fifo_events = smm->fifo_events[my_thread_index];
 
-  ASSERT (vec_len(my_fifo_events) < 100);
+  /* If we didn't manage to process previous events try going
+   * over them again without dequeuing new ones.
+   * XXX: Block senders to sessions that can't keep up */
+  if (vec_len(my_fifo_events) >= 100)
+    goto skip_dequeue;
 
   /* See you in the next life, don't be late */
   if (pthread_mutex_trylock (&q->mutex))
     return 0;
   
-  //vec_reset_length (my_fifo_events);
   for (i = 0; i < n_to_dequeue; i++)
     {
       vec_add2 (my_fifo_events, e, 1);
@@ -322,6 +332,8 @@ session_queue_node_fn (vlib_main_t * vm, vlib_node_runtime_t * node,
   pthread_mutex_unlock (&q->mutex);
 
   smm->fifo_events[my_thread_index] = my_fifo_events;
+
+ skip_dequeue:
 
   for (i = 0; i < n_to_dequeue; i++)
     {

@@ -357,6 +357,13 @@ stream_session_get (u64 si, u32 thread_index)
   return pool_elt_at_index(session_manager_main.sessions[thread_index], si);
 }
 
+always_inline u32
+stream_session_max_enqueue (transport_connection_t *tc)
+{
+  stream_session_t *s = stream_session_get (tc->s_index, tc->thread_index);
+  return svm_fifo_max_enqueue (s->server_rx_fifo);
+}
+
 int
 stream_session_enqueue_data (transport_connection_t *tc, u8 *data, u16 len,
                              u8 queue_event);

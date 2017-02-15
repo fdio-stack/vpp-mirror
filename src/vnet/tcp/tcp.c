@@ -245,12 +245,17 @@ tcp_timers_init (tcp_connection_t *tc)
   tc->rto = TCP_RTO_INIT;
 }
 
+/** Initialize tcp connection variables
+ *
+ * Should be called after having received a msg from the peer, i.e., a SYN or
+ * a SYNACK, such that connection options have already been exchanged. */
 void
 tcp_connection_init_vars (tcp_connection_t *tc)
 {
   tcp_timers_init (tc);
-
+  tcp_set_snd_mss (tc);
   tc->sack_sb.head = TCP_INVALID_SACK_HOLE_INDEX;
+  tcp_cc_init (tc);
 }
 
 int
@@ -316,7 +321,8 @@ tcp_connection_open (ip46_address_t *rmt_addr, u16 rmt_port, u8 is_ip4)
   tc->c_c_index = tc - tm->half_open_connections;
   tc->c_is_ip4 = is_ip4;
 
-  tcp_connection_init_vars (tc);
+  /* The other connection vars will be initialized after SYN ACK */
+  tcp_timers_init (tc);
 
   tcp_send_syn (tc);
 
@@ -389,7 +395,14 @@ u16
 tcp_send_mss_uri (transport_connection_t *trans_conn)
 {
   tcp_connection_t *tc = (tcp_connection_t *)trans_conn;
-  return tcp_snd_mss (tc);
+  return tc->snd_mss;
+}
+
+u32
+tcp_send_space_uri (transport_connection_t *trans_conn)
+{
+  tcp_connection_t *tc = (tcp_connection_t *)trans_conn;
+  return tcp_available_snd_space (tc);
 }
 
 u32
@@ -409,6 +422,7 @@ const static transport_proto_vft_t tcp4_proto = {
   .delete = tcp_connection_delete_uri,
   .open = tcp_connection_open_ip4,
   .send_mss = tcp_send_mss_uri,
+  .send_space = tcp_send_space_uri,
   .rx_fifo_offset = tcp_rx_fifo_offset_uri,
   .format_connection = format_tcp_stream_session_ip4
 };
@@ -423,6 +437,7 @@ const static transport_proto_vft_t tcp6_proto = {
   .open = tcp_connection_open_ip6,
   .delete = tcp_connection_delete_uri,
   .send_mss = tcp_send_mss_uri,
+  .send_space = tcp_send_space_uri,
   .rx_fifo_offset = tcp_rx_fifo_offset_uri,
   .format_connection = format_tcp_stream_session_ip6
 };
@@ -431,16 +446,24 @@ void
 tcp_timer_keep_handler (u32 conn_index)
 {
   tcp_main_t *tm = vnet_get_tcp_main ();
-  tcp_connection_t * tc;
   u32 thread_index = tm->vlib_main->cpu_index;
+  tcp_connection_t * tc;
 
   tc = tcp_connection_get (conn_index, thread_index);
+  tcp_connection_close (tm, tc);
+}
 
-  /* If SYN-SENT cleanup connection */
-  if (tc->state == TCP_CONNECTION_STATE_SYN_SENT)
-    {
-      tcp_connection_close (tm, tc);
-    }
+void
+tcp_timer_keep_syn_handler (u32 conn_index)
+{
+  tcp_main_t *tm = vnet_get_tcp_main ();
+  tcp_connection_t * tc;
+
+  tc = tcp_half_open_connection_get (conn_index);
+
+  ASSERT(tc->state == TCP_CONNECTION_STATE_SYN_SENT);
+
+  tcp_connection_close (tm, tc);
 }
 
 /* *INDENT-OFF* */
@@ -451,7 +474,8 @@ static timer_expiration_handler *timer_expiration_handlers[TCP_N_TIMERS] =
     0,
     tcp_timer_keep_handler,
     0,
-    tcp_timer_retransmit_syn_handler
+    tcp_timer_retransmit_syn_handler,
+    tcp_timer_keep_syn_handler
 };
 /* *INDENT-ON* */
 
