@@ -95,11 +95,13 @@ _(BFD_EEXIST, -101, "Duplicate BFD object")                             \
 _(BFD_ENOENT, -102, "No such BFD object")                               \
 _(BFD_EINUSE, -103, "BFD object in use")                                \
 _(BFD_NOTSUPP, -104, "BFD feature not supported")                       \
-_(ADDRESS_IN_USE, -105, "Address in use")				\
-_(ADDRESS_NOT_IN_USE, -106, "Address not in use")			\
-_(QUEUE_FULL, -107, "Queue full")                                       \
-_(UNKNOWN_URI_TYPE, -108, "Unknown URI type")				\
-_(URI_FIFO_CREATE_FAILED, -109, "URI FIFO segment create failed")
+_(BFD_EAGAIN, -105, "BFD object cannot be manipulated at this time")    \
+_(LISP_RLOC_LOCAL, -106, "RLOC address is local")                       \
+_(ADDRESS_IN_USE, -107, "Address in use")				\
+_(ADDRESS_NOT_IN_USE, -108, "Address not in use")			\
+_(QUEUE_FULL, -109, "Queue full")                                       \
+_(UNKNOWN_URI_TYPE, -110, "Unknown URI type")				\
+_(URI_FIFO_CREATE_FAILED, -111, "URI FIFO segment create failed")
 
 typedef enum
 {

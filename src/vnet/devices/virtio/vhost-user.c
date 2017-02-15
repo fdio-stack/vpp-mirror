@@ -237,7 +237,8 @@ map_guest_mem (vhost_user_intf_t * vui, uword addr, u32 * hint)
   r = _mm_blend_epi16 (r, _mm_and_si128 (rl, rh), 0x88);
 
   r = _mm_shuffle_epi8 (r, _mm_set_epi64x (0, 0x0e060c040a020800));
-  i = __builtin_ctzll (_mm_movemask_epi8 (r));
+  i = __builtin_ctzll (_mm_movemask_epi8 (r) |
+		       (1 << VHOST_MEMORY_MAX_NREGIONS));
 
   if (i < vui->nregions)
     {
@@ -2792,6 +2793,7 @@ vhost_user_dump_ifs (vnet_main_t * vnm, vlib_main_t * vm,
       vuid->virtio_net_hdr_sz = vui->virtio_net_hdr_sz;
       vuid->features = vui->features;
       vuid->num_regions = vui->nregions;
+      vuid->is_server = vui->unix_server_index != ~0;
       vuid->sock_errno = vui->sock_errno;
       strncpy ((char *) vuid->sock_filename, (char *) vui->sock_filename,
 	       ARRAY_LEN (vuid->sock_filename) - 1);

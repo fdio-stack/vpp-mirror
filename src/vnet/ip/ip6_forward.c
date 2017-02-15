@@ -42,12 +42,16 @@
 #include <vnet/ethernet/ethernet.h>	/* for ethernet_header_t */
 #include <vnet/srp/srp.h>	/* for srp_hw_interface_class */
 #include <vppinfra/cache.h>
+#include <vnet/fib/fib_urpf_list.h>	/* for FIB uRPF check */
 #include <vnet/fib/ip6_fib.h>
 #include <vnet/mfib/ip6_mfib.h>
 #include <vnet/dpo/load_balance.h>
 #include <vnet/dpo/classify_dpo.h>
 
 #include <vppinfra/bihash_template.c>
+
+/* Flag used by IOAM code. Classifier sets it pop-hop-by-hop checks it */
+#define OI_DECAP   0x80000000
 
 /**
  * @file
@@ -1313,6 +1317,25 @@ ip6_locate_header (vlib_buffer_t * p0,
   return (next_proto);
 }
 
+/**
+ * @brief returns number of links on which src is reachable.
+ */
+always_inline int
+ip6_urpf_loose_check (ip6_main_t * im, vlib_buffer_t * b, ip6_header_t * i)
+{
+  const load_balance_t *lb0;
+  index_t lbi;
+
+  lbi = ip6_fib_table_fwding_lookup_with_if_index (im,
+						   vnet_buffer
+						   (b)->sw_if_index[VLIB_RX],
+						   &i->src_address);
+
+  lb0 = load_balance_get (lbi);
+
+  return (fib_urpf_check_size (lb0->lb_urpf));
+}
+
 static uword
 ip6_local (vlib_main_t * vm, vlib_node_runtime_t * node, vlib_frame_t * frame)
 {
@@ -1463,16 +1486,14 @@ ip6_local (vlib_main_t * vm, vlib_node_runtime_t * node, vlib_frame_t * frame)
 	      type0 != IP_BUILTIN_PROTOCOL_ICMP &&
 	      !ip6_address_is_link_local_unicast (&ip0->src_address))
 	    {
-	      u32 src_adj_index0 = ip6_src_lookup_for_packet (im, p0, ip0);
-	      error0 = (ADJ_INDEX_INVALID == src_adj_index0
+	      error0 = (!ip6_urpf_loose_check (im, p0, ip0)
 			? IP6_ERROR_SRC_LOOKUP_MISS : error0);
 	    }
 	  if (error1 == IP6_ERROR_UNKNOWN_PROTOCOL &&
 	      type1 != IP_BUILTIN_PROTOCOL_ICMP &&
 	      !ip6_address_is_link_local_unicast (&ip1->src_address))
 	    {
-	      u32 src_adj_index1 = ip6_src_lookup_for_packet (im, p1, ip1);
-	      error1 = (ADJ_INDEX_INVALID == src_adj_index1
+	      error1 = (!ip6_urpf_loose_check (im, p1, ip1)
 			? IP6_ERROR_SRC_LOOKUP_MISS : error1);
 	    }
 
@@ -1570,8 +1591,7 @@ ip6_local (vlib_main_t * vm, vlib_node_runtime_t * node, vlib_frame_t * frame)
 	      type0 != IP_BUILTIN_PROTOCOL_ICMP &&
 	      !ip6_address_is_link_local_unicast (&ip0->src_address))
 	    {
-	      u32 src_adj_index0 = ip6_src_lookup_for_packet (im, p0, ip0);
-	      error0 = (ADJ_INDEX_INVALID == src_adj_index0
+	      error0 = (!ip6_urpf_loose_check (im, p0, ip0)
 			? IP6_ERROR_SRC_LOOKUP_MISS : error0);
 	    }
 

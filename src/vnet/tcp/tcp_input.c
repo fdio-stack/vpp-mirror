@@ -474,7 +474,7 @@ tcp_rcv_sacks (tcp_connection_t *tc, u32 ack)
   sack_scoreboard_t *sb = &tc->sack_sb;
   sack_block_t *blk, tmp;
   sack_scoreboard_hole_t *hole;
-  u32 blk_index;
+  u32 blk_index = ~0;
   int i, j;
 
   if (!tcp_opts_sack (tc) && sb->head == TCP_INVALID_SACK_HOLE_INDEX)
