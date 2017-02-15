@@ -245,12 +245,17 @@ tcp_timers_init (tcp_connection_t *tc)
   tc->rto = TCP_RTO_INIT;
 }
 
+/** Initialize tcp connection variables
+ *
+ * Should be called after having received a msg from the peer, i.e., a SYN or
+ * a SYNACK, such that connection options have already been exchanged. */
 void
 tcp_connection_init_vars (tcp_connection_t *tc)
 {
   tcp_timers_init (tc);
-
+  tcp_set_snd_mss (tc);
   tc->sack_sb.head = TCP_INVALID_SACK_HOLE_INDEX;
+  tcp_cc_init (tc);
 }
 
 int
@@ -316,7 +321,8 @@ tcp_connection_open (ip46_address_t *rmt_addr, u16 rmt_port, u8 is_ip4)
   tc->c_c_index = tc - tm->half_open_connections;
   tc->c_is_ip4 = is_ip4;
 
-  tcp_connection_init_vars (tc);
+  /* The other connection vars will be initialized after SYN ACK */
+  tcp_timers_init (tc);
 
   tcp_send_syn (tc);
 
@@ -389,7 +395,7 @@ u16
 tcp_send_mss_uri (transport_connection_t *trans_conn)
 {
   tcp_connection_t *tc = (tcp_connection_t *)trans_conn;
-  return tcp_snd_mss (tc);
+  return tc->snd_mss;
 }
 
 u32

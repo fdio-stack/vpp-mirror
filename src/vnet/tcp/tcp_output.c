@@ -60,8 +60,8 @@ format_tcp_tx_trace (u8 * s, va_list * args)
   return s;
 }
 
-u16
-tcp_snd_mss (tcp_connection_t *tc)
+void
+tcp_set_snd_mss (tcp_connection_t *tc)
 {
   u16 snd_mss;
 
@@ -71,7 +71,7 @@ tcp_snd_mss (tcp_connection_t *tc)
   /* TODO cache mss and consider PMTU discovery */
   snd_mss = tc->opt.mss < snd_mss ? tc->opt.mss : snd_mss;
 
-  return snd_mss;
+  tc->snd_mss = snd_mss;
 }
 
 static u8
@@ -91,20 +91,16 @@ tcp_window_compute_scale (u32 available_space)
 u32
 tcp_initial_window_to_advertise (tcp_connection_t *tc)
 {
-  stream_session_t *s;
   u32 available_space;
 
   /* Initial wnd for SYN. Fifos are not allocated yet.
    * Use some predefined value */
   if (tc->state != TCP_CONNECTION_STATE_SYN_RCVD)
     {
-      return 16 << 10;
+      return TCP_DEFAULT_RX_FIFO_SIZE;
     }
 
-  s = stream_session_get (tc->c_s_index, tc->c_thread_index);
-
-  /* XXX Assuming here that we got max fifo size */
-  available_space = svm_fifo_max_enqueue (s->server_rx_fifo);
+  available_space = stream_session_max_enqueue (&tc->connection);
   tc->rcv_wscale = tcp_window_compute_scale (available_space);
   tc->rcv_wnd = clib_min (available_space, TCP_WND_MAX << tc->rcv_wscale);
 
@@ -117,15 +113,12 @@ tcp_initial_window_to_advertise (tcp_connection_t *tc)
 u32
 tcp_window_to_advertise (tcp_connection_t *tc, tcp_state_t state)
 {
-  stream_session_t *s;
   u32 available_space, wnd, scaled_space;
 
   if (state != TCP_CONNECTION_STATE_ESTABLISHED)
     return tcp_initial_window_to_advertise (tc);
 
-  s = stream_session_get (tc->c_s_index, tc->c_thread_index);
-
-  available_space = svm_fifo_max_enqueue (s->server_rx_fifo);
+  available_space = stream_session_max_enqueue (&tc->connection);
   scaled_space = available_space >> tc->rcv_wscale;
 
   /* Need to update scale */
@@ -449,7 +442,8 @@ tcp_make_synack (tcp_connection_t *tc, vlib_buffer_t *b)
   tcp_hdr_opts_len = tcp_opts_len + sizeof (tcp_header_t);
 
   th = pkt_push_tcp (b, tc->c_lcl_port, tc->c_rmt_port, tc->iss,
-                     tc->rcv_nxt, tcp_hdr_opts_len, TCP_FLAG_SYN | TCP_FLAG_ACK,
+                     tc->rcv_nxt, tcp_hdr_opts_len,
+                     TCP_FLAG_SYN | TCP_FLAG_ACK,
                      initial_wnd);
 
   tcp_options_write ((u8 *)(th + 1), snd_opts);
@@ -458,8 +452,7 @@ tcp_make_synack (tcp_connection_t *tc, vlib_buffer_t *b)
   vnet_buffer (b)->tcp.flags = TCP_BUF_FLAG_ACK;
 
   /* Init retransmit timer */
-  tcp_timer_set (tm, tc, TCP_TIMER_RETRANSMIT_SYN,
-                 tc->rto * TCP_TO_TIMER_TICK);
+  tcp_timer_set (tm, tc, TCP_TIMER_RETRANSMIT, tc->rto * TCP_TO_TIMER_TICK);
 }
 
 always_inline void
@@ -784,9 +777,7 @@ tcp_prepare_retransmit_segment (tcp_connection_t *tc, vlib_buffer_t *b)
   ASSERT (tc->state == TCP_CONNECTION_STATE_ESTABLISHED);
 
   /* Figure out what and how many bytes we can send */
-  max_bytes = tcp_snd_mss (tc);
-  if (max_bytes > tc->snd_wnd)
-    max_bytes = tc->snd_wnd;
+  max_bytes = clib_min (tc->snd_mss, tc->snd_wnd);
 
   if (tcp_opts_sack_permitted(&tc->opt)
       && (hole = scoreboard_first_hole (&tc->sack_sb)))
@@ -843,6 +834,8 @@ tcp_timer_retransmit_handler_i (u32 index, u8 is_syn)
 
   if (tc->state == TCP_CONNECTION_STATE_ESTABLISHED)
     {
+      tcp_fastrecovery_off (tc);
+
       /* Exponential backoff */
       tc->rto = clib_min (tc->rto << 1, TCP_RTO_MAX);
 
@@ -866,21 +859,25 @@ tcp_timer_retransmit_handler_i (u32 index, u8 is_syn)
       tcp_push_hdr_i (tc, b, tc->state);
     }
 
-  if (is_syn && tc->state == TCP_CONNECTION_STATE_SYN_SENT)
+  if (!is_syn)
     {
+      tcp_enqueue_to_output (vm, b, bi, tc->c_is_ip4);
+
+      /* Re-enable retransmit timer */
+      tcp_timer_set (tm, tc, TCP_TIMER_RETRANSMIT,
+                     tc->rto * TCP_TO_TIMER_TICK);
+    }
+  else
+    {
+      ASSERT (tc->state == TCP_CONNECTION_STATE_SYN_SENT);
+
       /* This goes straight to ipx_lookup */
       tcp_push_ip_hdr (tm, tc, b);
       tcp_enqueue_to_ip_lookup (vm, b, bi, tc->c_is_ip4);
 
       /* Re-enable retransmit timer */
-      tcp_timer_set (tm, tc, TCP_TIMER_RETRANSMIT_SYN, tc->rto * TCP_TO_TIMER_TICK);
-    }
-  else
-    {
-      tcp_enqueue_to_output (vm, b, bi, tc->c_is_ip4);
-
-      /* Re-enable retransmit timer */
-      tcp_timer_set (tm, tc, TCP_TIMER_RETRANSMIT, tc->rto * TCP_TO_TIMER_TICK);
+      tcp_timer_set (tm, tc, TCP_TIMER_RETRANSMIT_SYN,
+                     tc->rto * TCP_TO_TIMER_TICK);
     }
 }
 
@@ -896,6 +893,15 @@ tcp_timer_retransmit_syn_handler (u32 index)
   tcp_timer_retransmit_handler_i (index, 1);
 }
 
+void
+tcp_fast_retransmit (tcp_connection_t *tc, u32 ack)
+{
+  /* Resend first segment TODO leverage sacks */
+  tc->snd_nxt = ack;
+
+  tcp_prepare_retransmit_segment (tc, b);
+  *next = tcp_next_output(tc->c_is_ip4);
+}
 
 always_inline u32
 tcp_session_has_ooo_data (tcp_connection_t *tc)
