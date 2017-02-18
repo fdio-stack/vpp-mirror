@@ -5,8 +5,14 @@ ifndef VPP_PYTHON_PREFIX
 	$(error VPP_PYTHON_PREFIX is not set)
 endif
 
+UNITTEST_EXTRA_OPTS=""
+
+ifeq ($(FAILFAST),1)
+UNITTEST_EXTRA_OPTS="-f"
+endif
+
 PYTHON_VENV_PATH=$(VPP_PYTHON_PREFIX)/virtualenv
-PYTHON_DEPENDS=scapy==2.3.3 pexpect
+PYTHON_DEPENDS=scapy==2.3.3 pexpect subprocess32
 SCAPY_SOURCE=$(PYTHON_VENV_PATH)/lib/python2.7/site-packages/
 BUILD_COV_DIR = $(BR)/test-cov
 
@@ -35,7 +41,7 @@ $(PAPI_INSTALL_DONE): $(PIP_PATCH_DONE)
 	@touch $@
 
 define retest-func
-	@bash -c "source $(PYTHON_VENV_PATH)/bin/activate && python run_tests.py discover -p test_$(TEST)\"*.py\""
+	@bash -c "source $(PYTHON_VENV_PATH)/bin/activate && python run_tests.py discover $(UNITTEST_EXTRA_OPTS) -p test_\"*.py\""
 endef
 
 test: reset verify-python-path $(PAPI_INSTALL_DONE)
@@ -103,6 +109,7 @@ help:
 	@echo ""
 	@echo "Arguments controlling test runs:"
 	@echo " V=[0|1|2]            - set test verbosity level"
+	@echo " FAILFAST=[0|1]       - fail fast if 1, complete all tests if 0"
 	@echo " DEBUG=<type>         - set VPP debugging kind"
 	@echo "    DEBUG=core        - detect coredump and load it in gdb on crash"
 	@echo "    DEBUG=gdb         - allow easy debugging by printing VPP PID "
@@ -111,7 +118,15 @@ help:
 	@echo "    DEBUG=gdbserver   - run gdb inside a gdb server, otherwise "
 	@echo "                        same as above"
 	@echo " STEP=[yes|no]        - ease debugging by stepping through a testcase "
-	@echo " TEST=<name>          - only run specific test"
+	@echo " TEST=<filter>        - filter the set of tests:"
+	@echo "    by file-name      - only run tests from specified file, e.g. TEST=test_bfd selects all tests from test_bfd.py"
+	@echo "    by file-suffix    - same as file-name, but 'test_' is omitted e.g. TEST=bfd selects all tests from test_bfd.py"
+	@echo "    by wildcard       - wildcard filter is <file>.<class>.<test function>, each can be replaced by '*'"
+	@echo "                        e.g. TEST='test_bfd.*.*' is equivalent to above example of filter by file-name"
+	@echo "                             TEST='bfd.*.*' is equivalent to above example of filter by file-suffix"
+	@echo "                             TEST='bfd.BFDAPITestCase.*' selects all tests from test_bfd.py which are part of BFDAPITestCase class"
+	@echo "                             TEST='bfd.BFDAPITestCase.test_add_bfd' selects a single test named test_add_bfd from test_bfd.py/BFDAPITestCase"
+	@echo "                             TEST='*.*.test_add_bfd' selects all test functions named test_add_bfd from all files/classes"
 	@echo ""
 	@echo "Creating test documentation"
 	@echo " test-doc            - generate documentation for test framework"

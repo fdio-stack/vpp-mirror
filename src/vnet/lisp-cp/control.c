@@ -993,6 +993,20 @@ mapping_delete_timer (lisp_cp_main_t * lcm, u32 mi)
   timing_wheel_delete (&lcm->wheel, mi);
 }
 
+static int
+is_local_ip (lisp_cp_main_t * lcm, ip_address_t * addr)
+{
+  fib_node_index_t fei;
+  fib_prefix_t prefix;
+  fib_entry_flag_t flags;
+
+  ip_address_to_fib_prefix (addr, &prefix);
+
+  fei = fib_table_lookup (0, &prefix);
+  flags = fib_entry_get_flags (fei);
+  return (FIB_ENTRY_FLAG_LOCAL & flags);
+}
+
 /**
  * Adds/removes/updates mapping. Does not program forwarding.
  *
@@ -1016,6 +1030,7 @@ vnet_lisp_add_del_mapping (gid_address_t * eid, locator_t * rlocs, u8 action,
   lisp_cp_main_t *lcm = vnet_lisp_cp_get_main ();
   u32 mi, ls_index = 0, dst_map_index;
   mapping_t *old_map;
+  locator_t *loc;
 
   if (vnet_lisp_enable_disable_status () == 0)
     {
@@ -1036,6 +1051,18 @@ vnet_lisp_add_del_mapping (gid_address_t * eid, locator_t * rlocs, u8 action,
 
   if (is_add)
     {
+      /* check if none of the locators match localy configured address */
+      vec_foreach (loc, rlocs)
+      {
+	ip_prefix_t *p = &gid_address_ippref (&loc->address);
+	if (is_local_ip (lcm, &ip_prefix_addr (p)))
+	  {
+	    clib_warning ("RLOC %U matches a local address!",
+			  format_gid_address, &loc->address);
+	    return VNET_API_ERROR_LISP_RLOC_LOCAL;
+	  }
+      }
+
       /* overwrite: if mapping already exists, decide if locators should be
        * updated and be done */
       if (old_map && gid_address_cmp (&old_map->eid, eid) == 0)
@@ -2286,7 +2313,7 @@ send_rloc_probe (lisp_cp_main_t * lcm, gid_address_t * deid,
 
   vnet_buffer (b)->sw_if_index[VLIB_TX] = 0;
 
-  next_index = (ip_addr_version (&lcm->active_map_resolver) == IP4) ?
+  next_index = (ip_addr_version (rloc) == IP4) ?
     ip4_lookup_node.index : ip6_lookup_node.index;
 
   f = vlib_get_frame_to_node (lcm->vlib_main, next_index);
@@ -2673,6 +2700,11 @@ get_src_and_dst_eids_from_buffer (lisp_cp_main_t * lcm, vlib_buffer_t * b,
       gid_address_vni (dst) = vni;
       gid_address_vni (src) = vni;
     }
+  else if (LISP_AFI_LCAF == type)
+    {
+      /* Eventually extend this to support NSH and other */
+      ASSERT (0);
+    }
 }
 
 static uword
@@ -2791,6 +2823,14 @@ lisp_cp_lookup_l2 (vlib_main_t * vm,
   return (lisp_cp_lookup_inline (vm, node, from_frame, LISP_AFI_MAC));
 }
 
+static uword
+lisp_cp_lookup_nsh (vlib_main_t * vm,
+		    vlib_node_runtime_t * node, vlib_frame_t * from_frame)
+{
+  /* TODO decide if NSH should be propagated as LCAF or not */
+  return (lisp_cp_lookup_inline (vm, node, from_frame, LISP_AFI_LCAF));
+}
+
 /* *INDENT-OFF* */
 VLIB_REGISTER_NODE (lisp_cp_lookup_ip4_node) = {
   .function = lisp_cp_lookup_ip4,
@@ -2833,6 +2873,25 @@ VLIB_REGISTER_NODE (lisp_cp_lookup_ip6_node) = {
 VLIB_REGISTER_NODE (lisp_cp_lookup_l2_node) = {
   .function = lisp_cp_lookup_l2,
   .name = "lisp-cp-lookup-l2",
+  .vector_size = sizeof (u32),
+  .format_trace = format_lisp_cp_lookup_trace,
+  .type = VLIB_NODE_TYPE_INTERNAL,
+
+  .n_errors = LISP_CP_LOOKUP_N_ERROR,
+  .error_strings = lisp_cp_lookup_error_strings,
+
+  .n_next_nodes = LISP_CP_LOOKUP_N_NEXT,
+
+  .next_nodes = {
+      [LISP_CP_LOOKUP_NEXT_DROP] = "error-drop",
+  },
+};
+/* *INDENT-ON* */
+
+/* *INDENT-OFF* */
+VLIB_REGISTER_NODE (lisp_cp_lookup_nsh_node) = {
+  .function = lisp_cp_lookup_nsh,
+  .name = "lisp-cp-lookup-nsh",
   .vector_size = sizeof (u32),
   .format_trace = format_lisp_cp_lookup_trace,
   .type = VLIB_NODE_TYPE_INTERNAL,

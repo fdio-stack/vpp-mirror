@@ -31,16 +31,16 @@ typedef int (*cmp_fct) (void *, void *);
 
 size_to_write_fct size_to_write_fcts[GID_ADDR_TYPES] =
   { ip_prefix_size_to_write, lcaf_size_to_write, mac_size_to_write,
-  sd_size_to_write
+  sd_size_to_write, nsh_size_to_write
 };
 serdes_fct write_fcts[GID_ADDR_TYPES] =
-  { ip_prefix_write, lcaf_write, mac_write, sd_write };
+  { ip_prefix_write, lcaf_write, mac_write, sd_write, nsh_write };
 cast_fct cast_fcts[GID_ADDR_TYPES] =
-  { ip_prefix_cast, lcaf_cast, mac_cast, sd_cast };
+  { ip_prefix_cast, lcaf_cast, mac_cast, sd_cast, nsh_cast };
 addr_len_fct addr_len_fcts[GID_ADDR_TYPES] =
-  { ip_prefix_length, lcaf_length, mac_length, sd_length };
+  { ip_prefix_length, lcaf_length, mac_length, sd_length, nsh_length };
 copy_fct copy_fcts[GID_ADDR_TYPES] =
-  { ip_prefix_copy, lcaf_copy, mac_copy, sd_copy };
+  { ip_prefix_copy, lcaf_copy, mac_copy, sd_copy, nsh_copy };
 
 #define foreach_lcaf_type \
   _(1, no_addr)      \
@@ -202,6 +202,20 @@ format_mac_address (u8 * s, va_list * args)
 		 a[0], a[1], a[2], a[3], a[4], a[5]);
 }
 
+uword
+unformat_nsh_address (unformat_input_t * input, va_list * args)
+{
+  nsh_t *a = va_arg (*args, nsh_t *);
+  return unformat (input, "SPI:%d SI:%d", &a->spi, &a->si);
+}
+
+u8 *
+format_nsh_address (u8 * s, va_list * args)
+{
+  nsh_t *a = va_arg (*args, nsh_t *);
+  return format (s, "SPI:%d SI:%d", a->spi, a->si);
+}
+
 u8 *
 format_fid_address (u8 * s, va_list * args)
 {
@@ -211,9 +225,10 @@ format_fid_address (u8 * s, va_list * args)
     {
     case FID_ADDR_IP_PREF:
       return format (s, "%U", format_ip_prefix, &fid_addr_ippref (a));
-
     case FID_ADDR_MAC:
       return format (s, "%U", format_mac_address, &fid_addr_mac (a));
+    case FID_ADDR_NSH:
+      return format (s, "%U", format_nsh_address, &fid_addr_nsh (a));
 
     default:
       clib_warning ("Can't format fid address type %d!", fid_addr_type (a));
@@ -239,6 +254,8 @@ format_gid_address (u8 * s, va_list * args)
     case GID_ADDR_MAC:
       return format (s, "[%d] %U", gid_address_vni (a), format_mac_address,
 		     &gid_address_mac (a));
+    case GID_ADDR_NSH:
+      return format (s, "%U", format_nsh_address, &gid_address_nsh (a));
     default:
       clib_warning ("Can't format gid type %d", type);
       return 0;
@@ -252,6 +269,7 @@ unformat_fid_address (unformat_input_t * i, va_list * args)
   fid_address_t *a = va_arg (*args, fid_address_t *);
   ip_prefix_t ippref;
   u8 mac[6] = { 0 };
+  nsh_t nsh;
 
   if (unformat (i, "%U", unformat_ip_prefix, &ippref))
     {
@@ -262,6 +280,11 @@ unformat_fid_address (unformat_input_t * i, va_list * args)
     {
       fid_addr_type (a) = FID_ADDR_MAC;
       mac_copy (fid_addr_mac (a), mac);
+    }
+  else if (unformat (i, "%U", unformat_nsh_address, &nsh))
+    {
+      fid_addr_type (a) = FID_ADDR_NSH;
+      nsh_copy (&fid_addr_nsh (a), mac);
     }
   else
     return 0;
@@ -301,6 +324,7 @@ unformat_gid_address (unformat_input_t * input, va_list * args)
   u8 mac[6] = { 0 };
   ip_prefix_t ippref;
   fid_address_t sim1, sim2;
+  nsh_t nsh;
 
   memset (&ippref, 0, sizeof (ippref));
   memset (&sim1, 0, sizeof (sim1));
@@ -322,6 +346,11 @@ unformat_gid_address (unformat_input_t * input, va_list * args)
     {
       mac_copy (gid_address_mac (a), mac);
       gid_address_type (a) = GID_ADDR_MAC;
+    }
+  else if (unformat (input, "%U", unformat_nsh_address, &nsh))
+    {
+      nsh_copy (&gid_address_nsh (a), &nsh);
+      gid_address_type (a) = GID_ADDR_NSH;
     }
   else
     return 0;
@@ -588,6 +617,10 @@ fid_addr_parse (u8 * p, fid_address_t * a)
 
     case FID_ADDR_IP_PREF:
       return ip_address_parse (p, afi, ip_addr);
+
+    case FID_ADDR_NSH:
+      ASSERT (0);
+      break;
     }
   return ~0;
 }
@@ -923,6 +956,12 @@ sd_copy (void *dst, void *src)
   clib_memcpy (dst, src, sizeof (source_dest_t));
 }
 
+void
+nsh_copy (void *dst, void *src)
+{
+  clib_memcpy (dst, src, sizeof (nsh_t));
+}
+
 int
 ip_prefix_cmp (ip_prefix_t * p1, ip_prefix_t * p2)
 {
@@ -992,6 +1031,12 @@ sd_length (void *a)
   return 0;
 }
 
+u8
+nsh_length (void *a)
+{
+  return 0;
+}
+
 void *
 lcaf_cast (gid_address_t * a)
 {
@@ -1008,6 +1053,12 @@ void *
 sd_cast (gid_address_t * a)
 {
   return &gid_address_sd (a);
+}
+
+void *
+nsh_cast (gid_address_t * a)
+{
+  return &gid_address_nsh (a);
 }
 
 u8
@@ -1083,6 +1134,8 @@ fid_address_length (fid_address_t * a)
       return ip_prefix_length (&fid_addr_ippref (a));
     case FID_ADDR_MAC:
       return 0;
+    case FID_ADDR_NSH:
+      return 0;
     }
   return 0;
 }
@@ -1124,6 +1177,13 @@ sd_write (u8 * p, void *a)
   size += len;
 
   return size;
+}
+
+u16
+nsh_write (u8 * p, void *a)
+{
+  clib_warning ("not done");
+  return 0;
 }
 
 u16
@@ -1244,6 +1304,12 @@ u16
 mac_size_to_write (void *a)
 {
   return sizeof (u16) + 6;
+}
+
+u16
+nsh_size_to_write (void *a)
+{
+  return sizeof (u16) + 4;
 }
 
 u8

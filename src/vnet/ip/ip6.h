@@ -332,6 +332,11 @@ clib_error_t *ip6_add_del_interface_address (vlib_main_t * vm,
 					     u32 address_length, u32 is_del);
 void ip6_sw_interface_enable_disable (u32 sw_if_index, u32 is_enable);
 
+/**
+ * @brie get first IPv6 interface address
+ */
+ip6_address_t *ip6_interface_first_address (ip6_main_t * im, u32 sw_if_index);
+
 int ip6_address_compare (ip6_address_t * a1, ip6_address_t * a2);
 
 clib_error_t *ip6_probe_neighbor (vlib_main_t * vm, ip6_address_t * dst,
@@ -491,9 +496,6 @@ int ip6_hbh_register_option (u8 option,
 					 ip6_hop_by_hop_option_t * opt));
 int ip6_hbh_unregister_option (u8 option);
 void ip6_hbh_set_next_override (uword next);
-
-/* Flag used by IOAM code. Classifier sets it pop-hop-by-hop checks it */
-#define OI_DECAP   0x80000000
 
 #endif /* included_ip_ip6_h */
 

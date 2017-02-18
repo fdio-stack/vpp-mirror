@@ -87,6 +87,12 @@ class VppPapiProvider(object):
 
     def wait_for_event(self, timeout, name=None):
         """ Wait for and return next event. """
+        if name:
+            self.test_class.logger.debug("Expecting event within %ss",
+                                         timeout)
+        else:
+            self.test_class.logger.debug("Expecting event '%s' within %ss",
+                                         name, timeout)
         if self._events:
             self.test_class.logger.debug("Not waiting, event already queued")
         limit = time.time() + timeout
@@ -101,8 +107,6 @@ class VppPapiProvider(object):
                                              (name, e))
                 return e
             time.sleep(0)  # yield
-        if name is not None:
-            raise Exception("Event %s did not occur within timeout" % name)
         raise Exception("Event did not occur within timeout")
 
     def __call__(self, name, event):
@@ -1022,6 +1026,19 @@ class VppPapiProvider(object):
                                 'bfd_key_id': bfd_key_id,
                                 'conf_key_id': conf_key_id,
                             })
+
+    def bfd_udp_mod(self, sw_if_index, desired_min_tx, required_min_rx,
+                    detect_mult, local_addr, peer_addr, is_ipv6=0):
+        return self.api(self.papi.bfd_udp_mod,
+                        {
+                            'sw_if_index': sw_if_index,
+                            'desired_min_tx': desired_min_tx,
+                            'required_min_rx': required_min_rx,
+                            'local_addr': local_addr,
+                            'peer_addr': peer_addr,
+                            'is_ipv6': is_ipv6,
+                            'detect_mult': detect_mult,
+                        })
 
     def bfd_udp_auth_activate(self, sw_if_index, local_addr, peer_addr,
                               is_ipv6=0, bfd_key_id=None, conf_key_id=None,

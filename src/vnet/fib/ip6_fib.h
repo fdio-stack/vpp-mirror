@@ -67,7 +67,7 @@ extern void ip6_fib_table_walk(u32 fib_index,
                                void *ctx);
 
 /**
- * @biref return the DPO that the LB stacks on.
+ * @brief return the DPO that the LB stacks on.
  */
 always_inline u32
 ip6_src_lookup_for_packet (ip6_main_t * im,
