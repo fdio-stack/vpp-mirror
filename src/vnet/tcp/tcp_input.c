@@ -16,7 +16,7 @@
 #include <vppinfra/sparse_vec.h>
 #include <vnet/tcp/tcp_packet.h>
 #include <vnet/tcp/tcp.h>
-#include <vnet/uri/uri_db.h>
+#include <vnet/session/session.h>
 #include <math.h>
 
 static char *

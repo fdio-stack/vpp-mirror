@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Cisco and/or its affiliates.
+ * Copyright (c) 2017 Cisco and/or its affiliates.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at:
@@ -12,11 +12,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef __included_udp_session_h__
-#define __included_udp_session_h__
+#ifndef __included_udp_h__
+#define __included_udp_h__
 
 #include <vnet/ip/ip.h>
-#include "transport.h"
+#include <vnet/session/transport.h>
 
 /* 16 octets */
 typedef CLIB_PACKED (struct
@@ -47,6 +47,27 @@ typedef struct
   u32 mtu;
 } udp_session_t;
 
+typedef struct _udp_uri_main
+{
+  /* Per-worker thread udp connection pools */
+  udp_session_t **udp_sessions;
+  udp_session_t *udp_listeners;
+
+  /* convenience */
+  vlib_main_t * vlib_main;
+  vnet_main_t * vnet_main;
+  ip4_main_t * ip4_main;
+  ip6_main_t * ip6_main;
+} udp_uri_main_t;
+
+extern udp_uri_main_t udp_uri_main;
+
+always_inline udp_uri_main_t *
+vnet_get_udp_main ()
+{
+  return &udp_uri_main;
+}
+
 /*
  * fd.io coding-style-patch-verification: ON
  *
@@ -55,5 +76,5 @@ typedef struct
  * End:
  */
 
-#endif /* __included_udp_session_h__ */
+#endif /* __included_udp_h__ */
 

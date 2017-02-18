@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Cisco and/or its affiliates.
+ * Copyright (c) 2017 Cisco and/or its affiliates.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at:
@@ -12,8 +12,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef __included_uri_db_h__
-#define __included_uri_db_h__
+#ifndef __included_session_h__
+#define __included_session_h__
 
 #include <vppinfra/bihash_16_8.h>
 #include <vppinfra/bihash_48_8.h>
@@ -21,8 +21,8 @@
 #include <vlibmemory/api.h>
 #include <vppinfra/sparse_vec.h>
 #include <svm/svm_fifo_segment.h>
-#include <vnet/uri/udp_session.h>
-#include <vnet/uri/transport.h>
+#include <vnet/session/transport.h>
+#include <vnet/uri/uri.h>
 
 /** @file
     URI-related database
@@ -397,6 +397,36 @@ uri_register_transport (u8 type, const transport_proto_vft_t *vft);
 transport_proto_vft_t *
 uri_get_transport (u8 type);
 
+/* TODO decide how much since we have pre-data as well */
+#define MAX_HDRS_LEN    100             /* Max number of bytes for headers */
+
+int
+session_manager_add_first_segment (session_manager_main_t *smm,
+                                   session_manager_t *sm, u32 segment_size,
+                                   u8 **segment_name);
+int
+stream_server_listen (session_manager_main_t *smm, application_t *server,
+                      ip46_address_t *ip, u16 port);
+void
+stream_session_open (session_manager_main_t *smm, u8 sst, ip46_address_t *addr,
+                     u16 port_host_byte_order, u32 api_client_index);
+void
+connect_manager_init (session_manager_main_t *smm, u8 session_type);
+void
+stream_server_listen_stop (session_manager_main_t *smm, application_t *ss);
+stream_session_t *
+stream_session_lookup_listener (ip46_address_t * lcl, u16 lcl_port, u8 proto);
+int
+application_connect_to_local_server (application_t *ss,
+                                     ip46_address_t *ip46_address, void *mp,
+                                     u8 is_ip4);
+
+application_t *
+application_new (session_manager_main_t *smm, application_type_t type,
+                 stream_session_type_t sst);
+void
+application_del (session_manager_main_t *smm, application_t *app);
+
 /*
  * fd.io coding-style-patch-verification: ON
  *
@@ -405,4 +435,4 @@ uri_get_transport (u8 type);
  * End:
  */
 
-#endif /* __included_uri_db_h__ */
+#endif /* __included_session_h__ */

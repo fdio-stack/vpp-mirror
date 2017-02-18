@@ -477,17 +477,28 @@ endif
 ########################################
 # Layer 4 protocol: tcp
 ########################################
-libvnet_la_SOURCES +=							\
- vnet/tcp/tcp_format.c							\
- vnet/tcp/tcp_syn_filter4.c						\
- vnet/tcp/tcp_output.c							\
- vnet/tcp/tcp_input.c							\
+libvnet_la_SOURCES +=				\
+ vnet/tcp/tcp_format.c				\
+ vnet/tcp/tcp_syn_filter4.c			\
+ vnet/tcp/tcp_output.c				\
+ vnet/tcp/tcp_input.c				\
  vnet/tcp/tcp.c
 
-nobase_include_HEADERS +=						\
- vnet/tcp/tcp_packet.h							\
- vnet/tcp/tcp_timer.h							\
+nobase_include_HEADERS +=			\
+ vnet/tcp/tcp_packet.h				\
+ vnet/tcp/tcp_timer.h				\
  vnet/tcp/tcp.h
+
+########################################
+# Layer 4 protocol: udp
+########################################
+libvnet_la_SOURCES +=				\
+  vnet/udp/udp.c				\
+  vnet/udp/udp_input.c				\
+  vnet/udp/builtin_server.c
+
+nobase_include_HEADERS +=			\
+  vnet/udp/udp.h
 
 ########################################
 # Tunnel protocol: gre
@@ -853,26 +864,30 @@ nobase_include_HEADERS +=			\
   vnet/devices/ssvm/ssvm_eth.h
 
 ########################################
+# session managmeent
+########################################
+
+libvnet_la_SOURCES +=				\
+  vnet/session/session.c			\
+  vnet/session/node.c				\
+  vnet/session/transport.c			\
+  vnet/session/hashes.c
+
+nobase_include_HEADERS +=			\
+  vnet/session/session.h			\
+  vnet/session/transport.h
+
+########################################
 # URI connection managmeent
 ########################################
 
 libvnet_la_SOURCES +=				\
   vnet/uri/uri.c				\
-  vnet/uri/uri_hashes.c				\
-  vnet/uri/uri_queue.c				\
-  vnet/uri/uri_udp4_node.c			\
-  vnet/uri/uri_udp_builtin_server.c		\
-  vnet/uri/uri_udp.c				\
-  vnet/uri/transport.c				\
   vnet/uri/uri_cli.c				\
   vnet/uri/uri_api.c
 
 nobase_include_HEADERS +=			\
-  vnet/uri/uri.h				\
-  vnet/uri/uri_db.h				\
-  vnet/uri/transport.h				\
-  vnet/uri/udp_session.h			\
-  vnet/uri/uri.api.h
+  vnet/uri/uri.h
 
 API_FILES += vnet/uri/uri.api
 

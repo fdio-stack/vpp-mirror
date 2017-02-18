@@ -20,7 +20,7 @@
 #include <vnet/ip/ip.h>
 #include <vnet/tcp/tcp_packet.h>
 #include <vnet/tcp/tcp_timer.h>
-#include <vnet/uri/transport.h>
+#include <vnet/session/transport.h>
 #include <vnet/uri/uri.h>
 
 #define TCP_TICK 10e-3                  /**< TCP tick period (s) */

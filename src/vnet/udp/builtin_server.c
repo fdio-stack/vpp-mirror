@@ -17,8 +17,10 @@
     udp builtin server
 */
 
-#include "uri.h"
+#include <vnet/udp/udp.h>
 #include <vnet/ip/udp.h>
+#include <vnet/session/session.h>
+#include <vnet/uri/uri.h>
 
 static int builtin_session_create_callback 
 (application_t * ss, stream_session_t * s,

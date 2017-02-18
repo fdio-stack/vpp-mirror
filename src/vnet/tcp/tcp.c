@@ -14,7 +14,7 @@
  */
 
 #include <vnet/tcp/tcp.h>
-#include <vnet/uri/uri_db.h>
+#include <vnet/session/session.h>
 #include <vnet/fib/fib.h>
 #include <math.h>
 
@@ -479,7 +479,7 @@ tcp_initialize_timer_wheels (tcp_main_t *tm)
   vec_foreach (tw, tm->timer_wheels)
   {
     tw_timer_wheel_init_16t_2w_512sl (tw, tcp_expired_timers_dispatch, 
-                                       100e-3 /* timer period 100ms */);
+                                       100e-3 /* timer period 100ms */, ~0);
     tw->last_run_time = vlib_time_now (tm->vlib_main);
   }
 }

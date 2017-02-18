@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Cisco and/or its affiliates.
+ * Copyright (c) 2017 Cisco and/or its affiliates.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at:
@@ -273,7 +273,7 @@ session_fifo_rx_dequeue (vlib_main_t *vm, vlib_node_runtime_t *node,
 }
 
 static uword
-uri_queue_node_fn (vlib_main_t * vm, vlib_node_runtime_t * node,
+session_queue_node_fn (vlib_main_t * vm, vlib_node_runtime_t * node,
                    vlib_frame_t * frame)
 {
   session_manager_main_t *smm = &session_manager_main;
@@ -387,8 +387,8 @@ uri_queue_node_fn (vlib_main_t * vm, vlib_node_runtime_t * node,
 }
 
 VLIB_REGISTER_NODE (uri_queue_node) = {
-  .function = uri_queue_node_fn,
-  .name = "uri-queue",
+  .function = session_queue_node_fn,
+  .name = "session-queue",
   .format_trace = format_uri_queue_trace,
   .type = VLIB_NODE_TYPE_INPUT,
   

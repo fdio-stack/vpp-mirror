@@ -13,7 +13,7 @@
  * limitations under the License.
  */
 
-#include <vnet/uri/transport.h>
+#include <vnet/session/transport.h>
 
 u32
 transport_endpoint_lookup (transport_endpoint_table_t *ht, ip46_address_t *ip,

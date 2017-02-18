@@ -18,7 +18,7 @@
 #include <vlib/vlib.h>
 #include <vnet/vnet.h>
 #include <svm/svm_fifo_segment.h>
-#include <vnet/uri/uri_db.h>
+#include <vnet/session/session.h>
 
 #define foreach_uri_input_error                                         \
 _(NO_SESSION, "No session drops")                                       \
@@ -95,9 +95,6 @@ typedef enum
   URI_OPTIONS_TX_FIFO_SIZE,
   URI_OPTIONS_N_OPTIONS
 } uri_options_index_t;
-
-/* TODO decide how much since we have pre-data as well */
-#define MAX_HDRS_LEN    100             /* Max number of bytes for headers */
 
 /** Server can handle delegated connect requests from local clients */
 #define URI_OPTIONS_FLAGS_USE_FIFO	(1<<0)
