@@ -914,6 +914,19 @@ static void vl_api_sw_interface_details_t_handler_json
 			    ntohl (mp->vtr_push_dot1q));
   vat_json_object_add_uint (node, "vtr_tag1", ntohl (mp->vtr_tag1));
   vat_json_object_add_uint (node, "vtr_tag2", ntohl (mp->vtr_tag2));
+  if (mp->sub_dot1ah)
+    {
+      vat_json_object_add_string_copy (node, "pbb_vtr_dmac",
+				       format (0, "%U",
+					       format_ethernet_address,
+					       &mp->b_dmac));
+      vat_json_object_add_string_copy (node, "pbb_vtr_smac",
+				       format (0, "%U",
+					       format_ethernet_address,
+					       &mp->b_smac));
+      vat_json_object_add_uint (node, "pbb_vtr_b_vlanid", mp->b_vlanid);
+      vat_json_object_add_uint (node, "pbb_vtr_i_sid", mp->i_sid);
+    }
 }
 
 static void vl_api_sw_interface_set_flags_t_handler
@@ -1598,8 +1611,8 @@ static void vl_api_l2tpv3_create_tunnel_reply_t_handler_json
 }
 
 
-static void vl_api_lisp_add_del_locator_set_reply_t_handler
-  (vl_api_lisp_add_del_locator_set_reply_t * mp)
+static void vl_api_one_add_del_locator_set_reply_t_handler
+  (vl_api_one_add_del_locator_set_reply_t * mp)
 {
   vat_main_t *vam = &vat_main;
   i32 retval = ntohl (mp->retval);
@@ -1614,8 +1627,8 @@ static void vl_api_lisp_add_del_locator_set_reply_t_handler
     }
 }
 
-static void vl_api_lisp_add_del_locator_set_reply_t_handler_json
-  (vl_api_lisp_add_del_locator_set_reply_t * mp)
+static void vl_api_one_add_del_locator_set_reply_t_handler_json
+  (vl_api_one_add_del_locator_set_reply_t * mp)
 {
   vat_main_t *vam = &vat_main;
   vat_json_node_t node;
@@ -2343,7 +2356,7 @@ static void vl_api_get_node_graph_reply_t_handler_json
 }
 
 static void
-vl_api_lisp_locator_details_t_handler (vl_api_lisp_locator_details_t * mp)
+vl_api_one_locator_details_t_handler (vl_api_one_locator_details_t * mp)
 {
   vat_main_t *vam = &vat_main;
   u8 *s = 0;
@@ -2366,8 +2379,7 @@ vl_api_lisp_locator_details_t_handler (vl_api_lisp_locator_details_t * mp)
 }
 
 static void
-vl_api_lisp_locator_details_t_handler_json (vl_api_lisp_locator_details_t *
-					    mp)
+vl_api_one_locator_details_t_handler_json (vl_api_one_locator_details_t * mp)
 {
   vat_main_t *vam = &vat_main;
   vat_json_node_t *node = NULL;
@@ -2405,8 +2417,8 @@ vl_api_lisp_locator_details_t_handler_json (vl_api_lisp_locator_details_t *
 }
 
 static void
-vl_api_lisp_locator_set_details_t_handler (vl_api_lisp_locator_set_details_t *
-					   mp)
+vl_api_one_locator_set_details_t_handler (vl_api_one_locator_set_details_t *
+					  mp)
 {
   vat_main_t *vam = &vat_main;
   u8 *ls_name = 0;
@@ -2419,8 +2431,8 @@ vl_api_lisp_locator_set_details_t_handler (vl_api_lisp_locator_set_details_t *
 }
 
 static void
-  vl_api_lisp_locator_set_details_t_handler_json
-  (vl_api_lisp_locator_set_details_t * mp)
+  vl_api_one_locator_set_details_t_handler_json
+  (vl_api_one_locator_set_details_t * mp)
 {
   vat_main_t *vam = &vat_main;
   vat_json_node_t *node = 0;
@@ -2481,7 +2493,7 @@ format_lisp_eid_vat (u8 * s, va_list * args)
 }
 
 static void
-vl_api_lisp_eid_table_details_t_handler (vl_api_lisp_eid_table_details_t * mp)
+vl_api_one_eid_table_details_t_handler (vl_api_one_eid_table_details_t * mp)
 {
   vat_main_t *vam = &vat_main;
   u8 *s = 0, *eid = 0;
@@ -2510,8 +2522,8 @@ vl_api_lisp_eid_table_details_t_handler (vl_api_lisp_eid_table_details_t * mp)
 }
 
 static void
-vl_api_lisp_eid_table_details_t_handler_json (vl_api_lisp_eid_table_details_t
-					      * mp)
+vl_api_one_eid_table_details_t_handler_json (vl_api_one_eid_table_details_t
+					     * mp)
 {
   vat_main_t *vam = &vat_main;
   vat_json_node_t *node = 0;
@@ -2553,8 +2565,8 @@ vl_api_lisp_eid_table_details_t_handler_json (vl_api_lisp_eid_table_details_t
 }
 
 static void
-  vl_api_lisp_eid_table_map_details_t_handler
-  (vl_api_lisp_eid_table_map_details_t * mp)
+  vl_api_one_eid_table_map_details_t_handler
+  (vl_api_one_eid_table_map_details_t * mp)
 {
   vat_main_t *vam = &vat_main;
 
@@ -2566,8 +2578,8 @@ static void
 }
 
 static void
-  vl_api_lisp_eid_table_map_details_t_handler_json
-  (vl_api_lisp_eid_table_map_details_t * mp)
+  vl_api_one_eid_table_map_details_t_handler_json
+  (vl_api_one_eid_table_map_details_t * mp)
 {
   vat_main_t *vam = &vat_main;
   vat_json_node_t *node = NULL;
@@ -2585,8 +2597,8 @@ static void
 }
 
 static void
-  vl_api_lisp_eid_table_vni_details_t_handler
-  (vl_api_lisp_eid_table_vni_details_t * mp)
+  vl_api_one_eid_table_vni_details_t_handler
+  (vl_api_one_eid_table_vni_details_t * mp)
 {
   vat_main_t *vam = &vat_main;
 
@@ -2596,8 +2608,8 @@ static void
 }
 
 static void
-  vl_api_lisp_eid_table_vni_details_t_handler_json
-  (vl_api_lisp_eid_table_vni_details_t * mp)
+  vl_api_one_eid_table_vni_details_t_handler_json
+  (vl_api_one_eid_table_vni_details_t * mp)
 {
   vat_main_t *vam = &vat_main;
   vat_json_node_t *node = NULL;
@@ -2613,8 +2625,8 @@ static void
 }
 
 static void
-  vl_api_show_lisp_map_register_state_reply_t_handler
-  (vl_api_show_lisp_map_register_state_reply_t * mp)
+  vl_api_show_one_map_register_state_reply_t_handler
+  (vl_api_show_one_map_register_state_reply_t * mp)
 {
   vat_main_t *vam = &vat_main;
   int retval = clib_net_to_host_u32 (mp->retval);
@@ -2626,8 +2638,8 @@ static void
 }
 
 static void
-  vl_api_show_lisp_map_register_state_reply_t_handler_json
-  (vl_api_show_lisp_map_register_state_reply_t * mp)
+  vl_api_show_one_map_register_state_reply_t_handler_json
+  (vl_api_show_one_map_register_state_reply_t * mp)
 {
   vat_main_t *vam = &vat_main;
   vat_json_node_t _node, *node = &_node;
@@ -2647,8 +2659,8 @@ static void
 }
 
 static void
-  vl_api_show_lisp_rloc_probe_state_reply_t_handler
-  (vl_api_show_lisp_rloc_probe_state_reply_t * mp)
+  vl_api_show_one_rloc_probe_state_reply_t_handler
+  (vl_api_show_one_rloc_probe_state_reply_t * mp)
 {
   vat_main_t *vam = &vat_main;
   int retval = clib_net_to_host_u32 (mp->retval);
@@ -2663,8 +2675,8 @@ end:
 }
 
 static void
-  vl_api_show_lisp_rloc_probe_state_reply_t_handler_json
-  (vl_api_show_lisp_rloc_probe_state_reply_t * mp)
+  vl_api_show_one_rloc_probe_state_reply_t_handler_json
+  (vl_api_show_one_rloc_probe_state_reply_t * mp)
 {
   vat_main_t *vam = &vat_main;
   vat_json_node_t _node, *node = &_node;
@@ -2683,28 +2695,28 @@ static void
 }
 
 static void
-api_lisp_gpe_fwd_entry_net_to_host (vl_api_lisp_gpe_fwd_entry_t * e)
+api_gpe_fwd_entry_net_to_host (vl_api_gpe_fwd_entry_t * e)
 {
   e->dp_table = clib_net_to_host_u32 (e->dp_table);
   e->fwd_entry_index = clib_net_to_host_u32 (e->fwd_entry_index);
 }
 
 static void
-  lisp_gpe_fwd_entries_get_reply_t_net_to_host
-  (vl_api_lisp_gpe_fwd_entries_get_reply_t * mp)
+  gpe_fwd_entries_get_reply_t_net_to_host
+  (vl_api_gpe_fwd_entries_get_reply_t * mp)
 {
   u32 i;
 
   mp->count = clib_net_to_host_u32 (mp->count);
   for (i = 0; i < mp->count; i++)
     {
-      api_lisp_gpe_fwd_entry_net_to_host (&mp->entries[i]);
+      api_gpe_fwd_entry_net_to_host (&mp->entries[i]);
     }
 }
 
 static void
-  vl_api_lisp_gpe_fwd_entry_path_details_t_handler
-  (vl_api_lisp_gpe_fwd_entry_path_details_t * mp)
+  vl_api_gpe_fwd_entry_path_details_t_handler
+  (vl_api_gpe_fwd_entry_path_details_t * mp)
 {
   vat_main_t *vam = &vat_main;
   u8 *(*format_ip_address_fcn) (u8 *, va_list *) = 0;
@@ -2720,7 +2732,7 @@ static void
 }
 
 static void
-lisp_fill_locator_node (vat_json_node_t * n, vl_api_lisp_gpe_locator_t * loc)
+lisp_fill_locator_node (vat_json_node_t * n, vl_api_gpe_locator_t * loc)
 {
   struct in6_addr ip6;
   struct in_addr ip4;
@@ -2739,8 +2751,8 @@ lisp_fill_locator_node (vat_json_node_t * n, vl_api_lisp_gpe_locator_t * loc)
 }
 
 static void
-  vl_api_lisp_gpe_fwd_entry_path_details_t_handler_json
-  (vl_api_lisp_gpe_fwd_entry_path_details_t * mp)
+  vl_api_gpe_fwd_entry_path_details_t_handler_json
+  (vl_api_gpe_fwd_entry_path_details_t * mp)
 {
   vat_main_t *vam = &vat_main;
   vat_json_node_t *node = NULL;
@@ -2764,18 +2776,18 @@ static void
 }
 
 static void
-  vl_api_lisp_gpe_fwd_entries_get_reply_t_handler
-  (vl_api_lisp_gpe_fwd_entries_get_reply_t * mp)
+  vl_api_gpe_fwd_entries_get_reply_t_handler
+  (vl_api_gpe_fwd_entries_get_reply_t * mp)
 {
   vat_main_t *vam = &vat_main;
   u32 i;
   int retval = clib_net_to_host_u32 (mp->retval);
-  vl_api_lisp_gpe_fwd_entry_t *e;
+  vl_api_gpe_fwd_entry_t *e;
 
   if (retval)
     goto end;
 
-  lisp_gpe_fwd_entries_get_reply_t_net_to_host (mp);
+  gpe_fwd_entries_get_reply_t_net_to_host (mp);
 
   for (i = 0; i < mp->count; i++)
     {
@@ -2791,20 +2803,20 @@ end:
 }
 
 static void
-  vl_api_lisp_gpe_fwd_entries_get_reply_t_handler_json
-  (vl_api_lisp_gpe_fwd_entries_get_reply_t * mp)
+  vl_api_gpe_fwd_entries_get_reply_t_handler_json
+  (vl_api_gpe_fwd_entries_get_reply_t * mp)
 {
   u8 *s = 0;
   vat_main_t *vam = &vat_main;
   vat_json_node_t *e = 0, root;
   u32 i;
   int retval = clib_net_to_host_u32 (mp->retval);
-  vl_api_lisp_gpe_fwd_entry_t *fwd;
+  vl_api_gpe_fwd_entry_t *fwd;
 
   if (retval)
     goto end;
 
-  lisp_gpe_fwd_entries_get_reply_t_net_to_host (mp);
+  gpe_fwd_entries_get_reply_t_net_to_host (mp);
   vat_json_init_array (&root);
 
   for (i = 0; i < mp->count; i++)
@@ -2838,13 +2850,13 @@ end:
 }
 
 static void
-  vl_api_lisp_adjacencies_get_reply_t_handler
-  (vl_api_lisp_adjacencies_get_reply_t * mp)
+  vl_api_one_adjacencies_get_reply_t_handler
+  (vl_api_one_adjacencies_get_reply_t * mp)
 {
   vat_main_t *vam = &vat_main;
   u32 i, n;
   int retval = clib_net_to_host_u32 (mp->retval);
-  vl_api_lisp_adjacency_t *a;
+  vl_api_one_adjacency_t *a;
 
   if (retval)
     goto end;
@@ -2865,15 +2877,15 @@ end:
 }
 
 static void
-  vl_api_lisp_adjacencies_get_reply_t_handler_json
-  (vl_api_lisp_adjacencies_get_reply_t * mp)
+  vl_api_one_adjacencies_get_reply_t_handler_json
+  (vl_api_one_adjacencies_get_reply_t * mp)
 {
   u8 *s = 0;
   vat_main_t *vam = &vat_main;
   vat_json_node_t *e = 0, root;
   u32 i, n;
   int retval = clib_net_to_host_u32 (mp->retval);
-  vl_api_lisp_adjacency_t *a;
+  vl_api_one_adjacency_t *a;
 
   if (retval)
     goto end;
@@ -2909,8 +2921,7 @@ end:
 }
 
 static void
-vl_api_lisp_map_server_details_t_handler (vl_api_lisp_map_server_details_t
-					  * mp)
+vl_api_one_map_server_details_t_handler (vl_api_one_map_server_details_t * mp)
 {
   vat_main_t *vam = &vat_main;
 
@@ -2920,8 +2931,8 @@ vl_api_lisp_map_server_details_t_handler (vl_api_lisp_map_server_details_t
 }
 
 static void
-  vl_api_lisp_map_server_details_t_handler_json
-  (vl_api_lisp_map_server_details_t * mp)
+  vl_api_one_map_server_details_t_handler_json
+  (vl_api_one_map_server_details_t * mp)
 {
   vat_main_t *vam = &vat_main;
   vat_json_node_t *node = NULL;
@@ -2949,8 +2960,8 @@ static void
 }
 
 static void
-vl_api_lisp_map_resolver_details_t_handler (vl_api_lisp_map_resolver_details_t
-					    * mp)
+vl_api_one_map_resolver_details_t_handler (vl_api_one_map_resolver_details_t
+					   * mp)
 {
   vat_main_t *vam = &vat_main;
 
@@ -2960,8 +2971,8 @@ vl_api_lisp_map_resolver_details_t_handler (vl_api_lisp_map_resolver_details_t
 }
 
 static void
-  vl_api_lisp_map_resolver_details_t_handler_json
-  (vl_api_lisp_map_resolver_details_t * mp)
+  vl_api_one_map_resolver_details_t_handler_json
+  (vl_api_one_map_resolver_details_t * mp)
 {
   vat_main_t *vam = &vat_main;
   vat_json_node_t *node = NULL;
@@ -2989,8 +3000,7 @@ static void
 }
 
 static void
-  vl_api_show_lisp_status_reply_t_handler
-  (vl_api_show_lisp_status_reply_t * mp)
+vl_api_show_one_status_reply_t_handler (vl_api_show_one_status_reply_t * mp)
 {
   vat_main_t *vam = &vat_main;
   i32 retval = ntohl (mp->retval);
@@ -3007,8 +3017,8 @@ static void
 }
 
 static void
-  vl_api_show_lisp_status_reply_t_handler_json
-  (vl_api_show_lisp_status_reply_t * mp)
+  vl_api_show_one_status_reply_t_handler_json
+  (vl_api_show_one_status_reply_t * mp)
 {
   vat_main_t *vam = &vat_main;
   vat_json_node_t node;
@@ -3036,8 +3046,8 @@ static void
 }
 
 static void
-  vl_api_lisp_get_map_request_itr_rlocs_reply_t_handler
-  (vl_api_lisp_get_map_request_itr_rlocs_reply_t * mp)
+  vl_api_one_get_map_request_itr_rlocs_reply_t_handler
+  (vl_api_one_get_map_request_itr_rlocs_reply_t * mp)
 {
   vat_main_t *vam = &vat_main;
   i32 retval = ntohl (mp->retval);
@@ -3052,8 +3062,8 @@ static void
 }
 
 static void
-  vl_api_lisp_get_map_request_itr_rlocs_reply_t_handler_json
-  (vl_api_lisp_get_map_request_itr_rlocs_reply_t * mp)
+  vl_api_one_get_map_request_itr_rlocs_reply_t_handler_json
+  (vl_api_one_get_map_request_itr_rlocs_reply_t * mp)
 {
   vat_main_t *vam = &vat_main;
   vat_json_node_t *node = NULL;
@@ -3091,8 +3101,8 @@ format_lisp_map_request_mode (u8 * s, va_list * args)
 }
 
 static void
-  vl_api_show_lisp_map_request_mode_reply_t_handler
-  (vl_api_show_lisp_map_request_mode_reply_t * mp)
+  vl_api_show_one_map_request_mode_reply_t_handler
+  (vl_api_show_one_map_request_mode_reply_t * mp)
 {
   vat_main_t *vam = &vat_main;
   i32 retval = ntohl (mp->retval);
@@ -3109,8 +3119,8 @@ static void
 }
 
 static void
-  vl_api_show_lisp_map_request_mode_reply_t_handler_json
-  (vl_api_show_lisp_map_request_mode_reply_t * mp)
+  vl_api_show_one_map_request_mode_reply_t_handler_json
+  (vl_api_show_one_map_request_mode_reply_t * mp)
 {
   vat_main_t *vam = &vat_main;
   vat_json_node_t node;
@@ -3132,7 +3142,7 @@ static void
 }
 
 static void
-vl_api_show_lisp_pitr_reply_t_handler (vl_api_show_lisp_pitr_reply_t * mp)
+vl_api_show_one_pitr_reply_t_handler (vl_api_show_one_pitr_reply_t * mp)
 {
   vat_main_t *vam = &vat_main;
   i32 retval = ntohl (mp->retval);
@@ -3149,8 +3159,7 @@ vl_api_show_lisp_pitr_reply_t_handler (vl_api_show_lisp_pitr_reply_t * mp)
 }
 
 static void
-vl_api_show_lisp_pitr_reply_t_handler_json (vl_api_show_lisp_pitr_reply_t *
-					    mp)
+vl_api_show_one_pitr_reply_t_handler_json (vl_api_show_one_pitr_reply_t * mp)
 {
   vat_main_t *vam = &vat_main;
   vat_json_node_t node;
@@ -3771,8 +3780,8 @@ static void vl_api_flow_classify_details_t_handler_json
 #define vl_api_vnet_ip4_nbr_counters_t_print vl_noop_handler
 #define vl_api_vnet_ip6_nbr_counters_t_endian vl_noop_handler
 #define vl_api_vnet_ip6_nbr_counters_t_print vl_noop_handler
-#define vl_api_lisp_adjacencies_get_reply_t_endian vl_noop_handler
-#define vl_api_lisp_adjacencies_get_reply_t_print vl_noop_handler
+#define vl_api_one_adjacencies_get_reply_t_endian vl_noop_handler
+#define vl_api_one_adjacencies_get_reply_t_print vl_noop_handler
 
 /*
  * Generate boilerplate reply handlers, which
@@ -3806,7 +3815,6 @@ _(reset_vrf_reply)                                      \
 _(oam_add_del_reply)                                    \
 _(reset_fib_reply)                                      \
 _(dhcp_proxy_config_reply)                              \
-_(dhcp_proxy_config_2_reply)                            \
 _(dhcp_proxy_set_vss_reply)                             \
 _(dhcp_client_config_reply)                             \
 _(set_ip_flow_hash_reply)                               \
@@ -3843,6 +3851,14 @@ _(ikev2_profile_set_auth_reply)                         \
 _(ikev2_profile_set_id_reply)                           \
 _(ikev2_profile_set_ts_reply)                           \
 _(ikev2_set_local_key_reply)                            \
+_(ikev2_set_responder_reply)                            \
+_(ikev2_set_ike_transforms_reply)                       \
+_(ikev2_set_esp_transforms_reply)                       \
+_(ikev2_set_sa_lifetime_reply)                          \
+_(ikev2_initiate_sa_init_reply)                         \
+_(ikev2_initiate_del_ike_sa_reply)                      \
+_(ikev2_initiate_del_child_sa_reply)                    \
+_(ikev2_initiate_rekey_child_sa_reply)                  \
 _(delete_loopback_reply)                                \
 _(bd_ip_mac_add_del_reply)                              \
 _(map_del_domain_reply)                                 \
@@ -3854,22 +3870,22 @@ _(cop_whitelist_enable_disable_reply)                   \
 _(sw_interface_clear_stats_reply)                       \
 _(ioam_enable_reply)                              \
 _(ioam_disable_reply)                              \
-_(lisp_add_del_locator_reply)                           \
-_(lisp_add_del_local_eid_reply)                         \
-_(lisp_add_del_remote_mapping_reply)                    \
-_(lisp_add_del_adjacency_reply)                         \
-_(lisp_gpe_add_del_fwd_entry_reply)                     \
-_(lisp_add_del_map_resolver_reply)                      \
-_(lisp_add_del_map_server_reply)                        \
-_(lisp_gpe_enable_disable_reply)                        \
-_(lisp_gpe_add_del_iface_reply)                         \
-_(lisp_enable_disable_reply)                            \
-_(lisp_rloc_probe_enable_disable_reply)                 \
-_(lisp_map_register_enable_disable_reply)               \
-_(lisp_pitr_set_locator_set_reply)                      \
-_(lisp_map_request_mode_reply)                          \
-_(lisp_add_del_map_request_itr_rlocs_reply)             \
-_(lisp_eid_table_add_del_map_reply)                     \
+_(one_add_del_locator_reply)                            \
+_(one_add_del_local_eid_reply)                          \
+_(one_add_del_remote_mapping_reply)                     \
+_(one_add_del_adjacency_reply)                          \
+_(one_add_del_map_resolver_reply)                       \
+_(one_add_del_map_server_reply)                         \
+_(one_enable_disable_reply)                             \
+_(one_rloc_probe_enable_disable_reply)                  \
+_(one_map_register_enable_disable_reply)                \
+_(one_pitr_set_locator_set_reply)                       \
+_(one_map_request_mode_reply)                           \
+_(one_add_del_map_request_itr_rlocs_reply)              \
+_(one_eid_table_add_del_map_reply)                      \
+_(gpe_add_del_fwd_entry_reply)                          \
+_(gpe_enable_disable_reply)                             \
+_(gpe_add_del_iface_reply)                              \
 _(vxlan_gpe_add_del_tunnel_reply)                       \
 _(af_packet_delete_reply)                               \
 _(policer_classify_set_interface_reply)                 \
@@ -4012,8 +4028,8 @@ _(CREATE_SUBIF_REPLY, create_subif_reply)                     		\
 _(OAM_ADD_DEL_REPLY, oam_add_del_reply)                                 \
 _(RESET_FIB_REPLY, reset_fib_reply)                                     \
 _(DHCP_PROXY_CONFIG_REPLY, dhcp_proxy_config_reply)                     \
-_(DHCP_PROXY_CONFIG_2_REPLY, dhcp_proxy_config_2_reply)                 \
 _(DHCP_PROXY_SET_VSS_REPLY, dhcp_proxy_set_vss_reply)                   \
+_(DHCP_PROXY_DETAILS, dhcp_proxy_details)                               \
 _(DHCP_CLIENT_CONFIG_REPLY, dhcp_client_config_reply)                   \
 _(SET_IP_FLOW_HASH_REPLY, set_ip_flow_hash_reply)                       \
 _(SW_INTERFACE_IP6_ENABLE_DISABLE_REPLY,                                \
@@ -4076,6 +4092,14 @@ _(IKEV2_PROFILE_SET_AUTH_REPLY, ikev2_profile_set_auth_reply)           \
 _(IKEV2_PROFILE_SET_ID_REPLY, ikev2_profile_set_id_reply)               \
 _(IKEV2_PROFILE_SET_TS_REPLY, ikev2_profile_set_ts_reply)               \
 _(IKEV2_SET_LOCAL_KEY_REPLY, ikev2_set_local_key_reply)                 \
+_(IKEV2_SET_RESPONDER_REPLY, ikev2_set_responder_reply)                 \
+_(IKEV2_SET_IKE_TRANSFORMS_REPLY, ikev2_set_ike_transforms_reply)       \
+_(IKEV2_SET_ESP_TRANSFORMS_REPLY, ikev2_set_esp_transforms_reply)       \
+_(IKEV2_SET_SA_LIFETIME_REPLY, ikev2_set_sa_lifetime_reply)             \
+_(IKEV2_INITIATE_SA_INIT_REPLY, ikev2_initiate_sa_init_reply)           \
+_(IKEV2_INITIATE_DEL_IKE_SA_REPLY, ikev2_initiate_del_ike_sa_reply)     \
+_(IKEV2_INITIATE_DEL_CHILD_SA_REPLY, ikev2_initiate_del_child_sa_reply) \
+_(IKEV2_INITIATE_REKEY_CHILD_SA_REPLY, ikev2_initiate_rekey_child_sa_reply) \
 _(DELETE_LOOPBACK_REPLY, delete_loopback_reply)                         \
 _(BD_IP_MAC_ADD_DEL_REPLY, bd_ip_mac_add_del_reply)                     \
 _(DHCP_COMPL_EVENT, dhcp_compl_event)                                   \
@@ -4098,45 +4122,45 @@ _(GET_NODE_GRAPH_REPLY, get_node_graph_reply)                           \
 _(SW_INTERFACE_CLEAR_STATS_REPLY, sw_interface_clear_stats_reply)      \
 _(IOAM_ENABLE_REPLY, ioam_enable_reply)                   \
 _(IOAM_DISABLE_REPLY, ioam_disable_reply)                     \
-_(LISP_ADD_DEL_LOCATOR_SET_REPLY, lisp_add_del_locator_set_reply)       \
-_(LISP_ADD_DEL_LOCATOR_REPLY, lisp_add_del_locator_reply)               \
-_(LISP_ADD_DEL_LOCAL_EID_REPLY, lisp_add_del_local_eid_reply)           \
-_(LISP_ADD_DEL_REMOTE_MAPPING_REPLY, lisp_add_del_remote_mapping_reply) \
-_(LISP_ADD_DEL_ADJACENCY_REPLY, lisp_add_del_adjacency_reply)           \
-_(LISP_GPE_ADD_DEL_FWD_ENTRY_REPLY, lisp_gpe_add_del_fwd_entry_reply)   \
-_(LISP_ADD_DEL_MAP_RESOLVER_REPLY, lisp_add_del_map_resolver_reply)     \
-_(LISP_ADD_DEL_MAP_SERVER_REPLY, lisp_add_del_map_server_reply)         \
-_(LISP_GPE_ENABLE_DISABLE_REPLY, lisp_gpe_enable_disable_reply)         \
-_(LISP_ENABLE_DISABLE_REPLY, lisp_enable_disable_reply)                 \
-_(LISP_MAP_REGISTER_ENABLE_DISABLE_REPLY,                               \
-  lisp_map_register_enable_disable_reply)                               \
-_(LISP_RLOC_PROBE_ENABLE_DISABLE_REPLY,                                 \
-  lisp_rloc_probe_enable_disable_reply)                                 \
-_(LISP_PITR_SET_LOCATOR_SET_REPLY, lisp_pitr_set_locator_set_reply)     \
-_(LISP_MAP_REQUEST_MODE_REPLY, lisp_map_request_mode_reply)             \
-_(LISP_EID_TABLE_ADD_DEL_MAP_REPLY, lisp_eid_table_add_del_map_reply)   \
-_(LISP_GPE_ADD_DEL_IFACE_REPLY, lisp_gpe_add_del_iface_reply)           \
-_(LISP_LOCATOR_SET_DETAILS, lisp_locator_set_details)                   \
-_(LISP_LOCATOR_DETAILS, lisp_locator_details)                           \
-_(LISP_EID_TABLE_DETAILS, lisp_eid_table_details)                       \
-_(LISP_EID_TABLE_MAP_DETAILS, lisp_eid_table_map_details)               \
-_(LISP_EID_TABLE_VNI_DETAILS, lisp_eid_table_vni_details)               \
-_(LISP_MAP_RESOLVER_DETAILS, lisp_map_resolver_details)                 \
-_(LISP_MAP_SERVER_DETAILS, lisp_map_server_details)                     \
-_(LISP_ADJACENCIES_GET_REPLY, lisp_adjacencies_get_reply)               \
-_(LISP_GPE_FWD_ENTRIES_GET_REPLY, lisp_gpe_fwd_entries_get_reply)       \
-_(LISP_GPE_FWD_ENTRY_PATH_DETAILS,                                      \
-  lisp_gpe_fwd_entry_path_details)                                      \
-_(SHOW_LISP_STATUS_REPLY, show_lisp_status_reply)                       \
-_(LISP_ADD_DEL_MAP_REQUEST_ITR_RLOCS_REPLY,                             \
-  lisp_add_del_map_request_itr_rlocs_reply)                             \
-_(LISP_GET_MAP_REQUEST_ITR_RLOCS_REPLY,                                 \
-  lisp_get_map_request_itr_rlocs_reply)                                 \
-_(SHOW_LISP_PITR_REPLY, show_lisp_pitr_reply)                           \
-_(SHOW_LISP_MAP_REQUEST_MODE_REPLY, show_lisp_map_request_mode_reply)   \
-_(SHOW_LISP_RLOC_PROBE_STATE_REPLY, show_lisp_rloc_probe_state_reply)   \
-_(SHOW_LISP_MAP_REGISTER_STATE_REPLY,                                   \
-  show_lisp_map_register_state_reply)                                   \
+_(ONE_ADD_DEL_LOCATOR_SET_REPLY, one_add_del_locator_set_reply)         \
+_(ONE_ADD_DEL_LOCATOR_REPLY, one_add_del_locator_reply)                 \
+_(ONE_ADD_DEL_LOCAL_EID_REPLY, one_add_del_local_eid_reply)             \
+_(ONE_ADD_DEL_REMOTE_MAPPING_REPLY, one_add_del_remote_mapping_reply)   \
+_(ONE_ADD_DEL_ADJACENCY_REPLY, one_add_del_adjacency_reply)             \
+_(ONE_ADD_DEL_MAP_RESOLVER_REPLY, one_add_del_map_resolver_reply)       \
+_(ONE_ADD_DEL_MAP_SERVER_REPLY, one_add_del_map_server_reply)           \
+_(ONE_ENABLE_DISABLE_REPLY, one_enable_disable_reply)                   \
+_(ONE_MAP_REGISTER_ENABLE_DISABLE_REPLY,                                \
+  one_map_register_enable_disable_reply)                                \
+_(ONE_RLOC_PROBE_ENABLE_DISABLE_REPLY,                                  \
+  one_rloc_probe_enable_disable_reply)                                  \
+_(ONE_PITR_SET_LOCATOR_SET_REPLY, one_pitr_set_locator_set_reply)       \
+_(ONE_MAP_REQUEST_MODE_REPLY, one_map_request_mode_reply)               \
+_(ONE_EID_TABLE_ADD_DEL_MAP_REPLY, one_eid_table_add_del_map_reply)     \
+_(ONE_LOCATOR_SET_DETAILS, one_locator_set_details)                     \
+_(ONE_LOCATOR_DETAILS, one_locator_details)                             \
+_(ONE_EID_TABLE_DETAILS, one_eid_table_details)                         \
+_(ONE_EID_TABLE_MAP_DETAILS, one_eid_table_map_details)                 \
+_(ONE_EID_TABLE_VNI_DETAILS, one_eid_table_vni_details)                 \
+_(ONE_MAP_RESOLVER_DETAILS, one_map_resolver_details)                   \
+_(ONE_MAP_SERVER_DETAILS, one_map_server_details)                       \
+_(ONE_ADJACENCIES_GET_REPLY, one_adjacencies_get_reply)                 \
+_(GPE_ADD_DEL_IFACE_REPLY, gpe_add_del_iface_reply)                     \
+_(GPE_ENABLE_DISABLE_REPLY, gpe_enable_disable_reply)                   \
+_(GPE_ADD_DEL_FWD_ENTRY_REPLY, gpe_add_del_fwd_entry_reply)             \
+_(GPE_FWD_ENTRIES_GET_REPLY, gpe_fwd_entries_get_reply)                 \
+_(GPE_FWD_ENTRY_PATH_DETAILS,                                           \
+  gpe_fwd_entry_path_details)                                           \
+_(SHOW_ONE_STATUS_REPLY, show_one_status_reply)                         \
+_(ONE_ADD_DEL_MAP_REQUEST_ITR_RLOCS_REPLY,                              \
+  one_add_del_map_request_itr_rlocs_reply)                              \
+_(ONE_GET_MAP_REQUEST_ITR_RLOCS_REPLY,                                  \
+  one_get_map_request_itr_rlocs_reply)                                  \
+_(SHOW_ONE_PITR_REPLY, show_one_pitr_reply)                             \
+_(SHOW_ONE_MAP_REQUEST_MODE_REPLY, show_one_map_request_mode_reply)     \
+_(SHOW_ONE_RLOC_PROBE_STATE_REPLY, show_one_rloc_probe_state_reply)     \
+_(SHOW_ONE_MAP_REGISTER_STATE_REPLY,                                    \
+  show_one_map_register_state_reply)                                    \
 _(AF_PACKET_CREATE_REPLY, af_packet_create_reply)                       \
 _(AF_PACKET_DELETE_REPLY, af_packet_delete_reply)                       \
 _(POLICER_ADD_DEL_REPLY, policer_add_del_reply)                         \
@@ -7606,9 +7630,9 @@ api_dhcp_proxy_config (vat_main_t * vam)
 {
   unformat_input_t *i = vam->input;
   vl_api_dhcp_proxy_config_t *mp;
-  u32 vrf_id = 0;
+  u32 rx_vrf_id = 0;
+  u32 server_vrf_id = 0;
   u8 is_add = 1;
-  u8 insert_cid = 1;
   u8 v4_address_set = 0;
   u8 v6_address_set = 0;
   ip4_address_t v4address;
@@ -7624,9 +7648,9 @@ api_dhcp_proxy_config (vat_main_t * vam)
     {
       if (unformat (i, "del"))
 	is_add = 0;
-      else if (unformat (i, "vrf %d", &vrf_id))
+      else if (unformat (i, "rx_vrf_id %d", &rx_vrf_id))
 	;
-      else if (unformat (i, "insert-cid %d", &insert_cid))
+      else if (unformat (i, "server_vrf_id %d", &server_vrf_id))
 	;
       else if (unformat (i, "svr %U", unformat_ip4_address, &v4address))
 	v4_address_set = 1;
@@ -7672,9 +7696,9 @@ api_dhcp_proxy_config (vat_main_t * vam)
   /* Construct the API message */
   M (DHCP_PROXY_CONFIG, mp);
 
-  mp->insert_circuit_id = insert_cid;
   mp->is_add = is_add;
-  mp->vrf_id = ntohl (vrf_id);
+  mp->rx_vrf_id = ntohl (rx_vrf_id);
+  mp->server_vrf_id = ntohl (server_vrf_id);
   if (v6_address_set)
     {
       mp->is_ipv6 = 1;
@@ -7695,100 +7719,98 @@ api_dhcp_proxy_config (vat_main_t * vam)
   return ret;
 }
 
-static int
-api_dhcp_proxy_config_2 (vat_main_t * vam)
+#define vl_api_dhcp_proxy_details_t_endian vl_noop_handler
+#define vl_api_dhcp_proxy_details_t_print vl_noop_handler
+
+static void
+vl_api_dhcp_proxy_details_t_handler (vl_api_dhcp_proxy_details_t * mp)
 {
-  unformat_input_t *i = vam->input;
-  vl_api_dhcp_proxy_config_2_t *mp;
-  u32 rx_vrf_id = 0;
-  u32 server_vrf_id = 0;
-  u8 is_add = 1;
-  u8 insert_cid = 1;
-  u8 v4_address_set = 0;
-  u8 v6_address_set = 0;
-  ip4_address_t v4address;
-  ip6_address_t v6address;
-  u8 v4_src_address_set = 0;
-  u8 v6_src_address_set = 0;
-  ip4_address_t v4srcaddress;
-  ip6_address_t v6srcaddress;
-  int ret;
+  vat_main_t *vam = &vat_main;
 
-  /* Parse args required to build the message */
-  while (unformat_check_input (i) != UNFORMAT_END_OF_INPUT)
-    {
-      if (unformat (i, "del"))
-	is_add = 0;
-      else if (unformat (i, "rx_vrf_id %d", &rx_vrf_id))
-	;
-      else if (unformat (i, "server_vrf_id %d", &server_vrf_id))
-	;
-      else if (unformat (i, "insert-cid %d", &insert_cid))
-	;
-      else if (unformat (i, "svr %U", unformat_ip4_address, &v4address))
-	v4_address_set = 1;
-      else if (unformat (i, "svr %U", unformat_ip6_address, &v6address))
-	v6_address_set = 1;
-      else if (unformat (i, "src %U", unformat_ip4_address, &v4srcaddress))
-	v4_src_address_set = 1;
-      else if (unformat (i, "src %U", unformat_ip6_address, &v6srcaddress))
-	v6_src_address_set = 1;
-      else
-	break;
-    }
+  if (mp->is_ipv6)
+    print (vam->ofp,
+	   "RX Table-ID %d, Server Table-ID %d, Server Address %U, Source Address %U, VSS FIB-ID %d, VSS OUI %d",
+	   ntohl (mp->rx_vrf_id),
+	   ntohl (mp->server_vrf_id),
+	   format_ip6_address, mp->dhcp_server,
+	   format_ip6_address, mp->dhcp_src_address,
+	   ntohl (mp->vss_oui), ntohl (mp->vss_fib_id));
+  else
+    print (vam->ofp,
+	   "RX Table-ID %d, Server Table-ID %d, Server Address %U, Source Address %U, VSS FIB-ID %d, VSS OUI %d",
+	   ntohl (mp->rx_vrf_id),
+	   ntohl (mp->server_vrf_id),
+	   format_ip4_address, mp->dhcp_server,
+	   format_ip4_address, mp->dhcp_src_address,
+	   ntohl (mp->vss_oui), ntohl (mp->vss_fib_id));
+}
 
-  if (v4_address_set && v6_address_set)
-    {
-      errmsg ("both v4 and v6 server addresses set");
-      return -99;
-    }
-  if (!v4_address_set && !v6_address_set)
-    {
-      errmsg ("no server addresses set");
-      return -99;
-    }
+static void vl_api_dhcp_proxy_details_t_handler_json
+  (vl_api_dhcp_proxy_details_t * mp)
+{
+  vat_main_t *vam = &vat_main;
+  vat_json_node_t *node = NULL;
+  struct in_addr ip4;
+  struct in6_addr ip6;
 
-  if (v4_src_address_set && v6_src_address_set)
+  if (VAT_JSON_ARRAY != vam->json_tree.type)
     {
-      errmsg ("both v4 and v6  src addresses set");
-      return -99;
+      ASSERT (VAT_JSON_NONE == vam->json_tree.type);
+      vat_json_init_array (&vam->json_tree);
     }
-  if (!v4_src_address_set && !v6_src_address_set)
-    {
-      errmsg ("no src addresses set");
-      return -99;
-    }
+  node = vat_json_array_add (&vam->json_tree);
 
-  if (!(v4_src_address_set && v4_address_set) &&
-      !(v6_src_address_set && v6_address_set))
+  vat_json_init_object (node);
+  vat_json_object_add_uint (node, "rx-table-id", ntohl (mp->rx_vrf_id));
+  vat_json_object_add_uint (node, "server-table-id",
+			    ntohl (mp->server_vrf_id));
+  if (mp->is_ipv6)
     {
-      errmsg ("no matching server and src addresses set");
-      return -99;
-    }
-
-  /* Construct the API message */
-  M (DHCP_PROXY_CONFIG_2, mp);
-
-  mp->insert_circuit_id = insert_cid;
-  mp->is_add = is_add;
-  mp->rx_vrf_id = ntohl (rx_vrf_id);
-  mp->server_vrf_id = ntohl (server_vrf_id);
-  if (v6_address_set)
-    {
-      mp->is_ipv6 = 1;
-      clib_memcpy (mp->dhcp_server, &v6address, sizeof (v6address));
-      clib_memcpy (mp->dhcp_src_address, &v6srcaddress, sizeof (v6address));
+      clib_memcpy (&ip6, &mp->dhcp_server, sizeof (ip6));
+      vat_json_object_add_ip6 (node, "server_address", ip6);
+      clib_memcpy (&ip6, &mp->dhcp_src_address, sizeof (ip6));
+      vat_json_object_add_ip6 (node, "src_address", ip6);
     }
   else
     {
-      clib_memcpy (mp->dhcp_server, &v4address, sizeof (v4address));
-      clib_memcpy (mp->dhcp_src_address, &v4srcaddress, sizeof (v4address));
+      clib_memcpy (&ip4, &mp->dhcp_server, sizeof (ip4));
+      vat_json_object_add_ip4 (node, "server_address", ip4);
+      clib_memcpy (&ip4, &mp->dhcp_src_address, sizeof (ip4));
+      vat_json_object_add_ip4 (node, "src_address", ip4);
+    }
+  vat_json_object_add_uint (node, "vss-fib-id", ntohl (mp->vss_fib_id));
+  vat_json_object_add_uint (node, "vss-oui", ntohl (mp->vss_oui));
+}
+
+static int
+api_dhcp_proxy_dump (vat_main_t * vam)
+{
+  unformat_input_t *i = vam->input;
+  vl_api_control_ping_t *mp_ping;
+  vl_api_dhcp_proxy_dump_t *mp;
+  u8 is_ipv6 = 0;
+  int ret;
+
+  while (unformat_check_input (i) != UNFORMAT_END_OF_INPUT)
+    {
+      if (unformat (i, "ipv6"))
+	is_ipv6 = 1;
+      else
+	{
+	  clib_warning ("parse error '%U'", format_unformat_error, i);
+	  return -99;
+	}
     }
 
-  /* send it... */
+  M (DHCP_PROXY_DUMP, mp);
+
+  mp->is_ip6 = is_ipv6;
   S (mp);
 
-  /* Wait for a reply, return good/bad news  */
+  /* Use a control ping for synchronization */
+  M (CONTROL_PING, mp_ping);
+  S (mp_ping);
+
   W (ret);
   return ret;
 }
@@ -12738,6 +12760,336 @@ api_ikev2_set_local_key (vat_main_t * vam)
   return ret;
 }
 
+static int
+api_ikev2_set_responder (vat_main_t * vam)
+{
+  unformat_input_t *i = vam->input;
+  vl_api_ikev2_set_responder_t *mp;
+  int ret;
+  u8 *name = 0;
+  u32 sw_if_index = ~0;
+  ip4_address_t address;
+
+  const char *valid_chars = "a-zA-Z0-9_";
+
+  while (unformat_check_input (i) != UNFORMAT_END_OF_INPUT)
+    {
+      if (unformat
+	  (i, "%U interface %d address %U", unformat_token, valid_chars,
+	   &name, &sw_if_index, unformat_ip4_address, &address))
+	vec_add1 (name, 0);
+      else
+	{
+	  errmsg ("parse error '%U'", format_unformat_error, i);
+	  return -99;
+	}
+    }
+
+  if (!vec_len (name))
+    {
+      errmsg ("profile name must be specified");
+      return -99;
+    }
+
+  if (vec_len (name) > 64)
+    {
+      errmsg ("profile name too long");
+      return -99;
+    }
+
+  M (IKEV2_SET_RESPONDER, mp);
+
+  clib_memcpy (mp->name, name, vec_len (name));
+  vec_free (name);
+
+  mp->sw_if_index = sw_if_index;
+  clib_memcpy (mp->address, &address, sizeof (address));
+
+  S (mp);
+  W (ret);
+  return ret;
+}
+
+static int
+api_ikev2_set_ike_transforms (vat_main_t * vam)
+{
+  unformat_input_t *i = vam->input;
+  vl_api_ikev2_set_ike_transforms_t *mp;
+  int ret;
+  u8 *name = 0;
+  u32 crypto_alg, crypto_key_size, integ_alg, dh_group;
+
+  const char *valid_chars = "a-zA-Z0-9_";
+
+  while (unformat_check_input (i) != UNFORMAT_END_OF_INPUT)
+    {
+      if (unformat (i, "%U %d %d %d %d", unformat_token, valid_chars, &name,
+		    &crypto_alg, &crypto_key_size, &integ_alg, &dh_group))
+	vec_add1 (name, 0);
+      else
+	{
+	  errmsg ("parse error '%U'", format_unformat_error, i);
+	  return -99;
+	}
+    }
+
+  if (!vec_len (name))
+    {
+      errmsg ("profile name must be specified");
+      return -99;
+    }
+
+  if (vec_len (name) > 64)
+    {
+      errmsg ("profile name too long");
+      return -99;
+    }
+
+  M (IKEV2_SET_IKE_TRANSFORMS, mp);
+
+  clib_memcpy (mp->name, name, vec_len (name));
+  vec_free (name);
+  mp->crypto_alg = crypto_alg;
+  mp->crypto_key_size = crypto_key_size;
+  mp->integ_alg = integ_alg;
+  mp->dh_group = dh_group;
+
+  S (mp);
+  W (ret);
+  return ret;
+}
+
+
+static int
+api_ikev2_set_esp_transforms (vat_main_t * vam)
+{
+  unformat_input_t *i = vam->input;
+  vl_api_ikev2_set_esp_transforms_t *mp;
+  int ret;
+  u8 *name = 0;
+  u32 crypto_alg, crypto_key_size, integ_alg, dh_group;
+
+  const char *valid_chars = "a-zA-Z0-9_";
+
+  while (unformat_check_input (i) != UNFORMAT_END_OF_INPUT)
+    {
+      if (unformat (i, "%U %d %d %d %d", unformat_token, valid_chars, &name,
+		    &crypto_alg, &crypto_key_size, &integ_alg, &dh_group))
+	vec_add1 (name, 0);
+      else
+	{
+	  errmsg ("parse error '%U'", format_unformat_error, i);
+	  return -99;
+	}
+    }
+
+  if (!vec_len (name))
+    {
+      errmsg ("profile name must be specified");
+      return -99;
+    }
+
+  if (vec_len (name) > 64)
+    {
+      errmsg ("profile name too long");
+      return -99;
+    }
+
+  M (IKEV2_SET_ESP_TRANSFORMS, mp);
+
+  clib_memcpy (mp->name, name, vec_len (name));
+  vec_free (name);
+  mp->crypto_alg = crypto_alg;
+  mp->crypto_key_size = crypto_key_size;
+  mp->integ_alg = integ_alg;
+  mp->dh_group = dh_group;
+
+  S (mp);
+  W (ret);
+  return ret;
+}
+
+static int
+api_ikev2_set_sa_lifetime (vat_main_t * vam)
+{
+  unformat_input_t *i = vam->input;
+  vl_api_ikev2_set_sa_lifetime_t *mp;
+  int ret;
+  u8 *name = 0;
+  u64 lifetime, lifetime_maxdata;
+  u32 lifetime_jitter, handover;
+
+  const char *valid_chars = "a-zA-Z0-9_";
+
+  while (unformat_check_input (i) != UNFORMAT_END_OF_INPUT)
+    {
+      if (unformat (i, "%U %lu %u %u %lu", unformat_token, valid_chars, &name,
+		    &lifetime, &lifetime_jitter, &handover,
+		    &lifetime_maxdata))
+	vec_add1 (name, 0);
+      else
+	{
+	  errmsg ("parse error '%U'", format_unformat_error, i);
+	  return -99;
+	}
+    }
+
+  if (!vec_len (name))
+    {
+      errmsg ("profile name must be specified");
+      return -99;
+    }
+
+  if (vec_len (name) > 64)
+    {
+      errmsg ("profile name too long");
+      return -99;
+    }
+
+  M (IKEV2_SET_SA_LIFETIME, mp);
+
+  clib_memcpy (mp->name, name, vec_len (name));
+  vec_free (name);
+  mp->lifetime = lifetime;
+  mp->lifetime_jitter = lifetime_jitter;
+  mp->handover = handover;
+  mp->lifetime_maxdata = lifetime_maxdata;
+
+  S (mp);
+  W (ret);
+  return ret;
+}
+
+static int
+api_ikev2_initiate_sa_init (vat_main_t * vam)
+{
+  unformat_input_t *i = vam->input;
+  vl_api_ikev2_initiate_sa_init_t *mp;
+  int ret;
+  u8 *name = 0;
+
+  const char *valid_chars = "a-zA-Z0-9_";
+
+  while (unformat_check_input (i) != UNFORMAT_END_OF_INPUT)
+    {
+      if (unformat (i, "%U", unformat_token, valid_chars, &name))
+	vec_add1 (name, 0);
+      else
+	{
+	  errmsg ("parse error '%U'", format_unformat_error, i);
+	  return -99;
+	}
+    }
+
+  if (!vec_len (name))
+    {
+      errmsg ("profile name must be specified");
+      return -99;
+    }
+
+  if (vec_len (name) > 64)
+    {
+      errmsg ("profile name too long");
+      return -99;
+    }
+
+  M (IKEV2_INITIATE_SA_INIT, mp);
+
+  clib_memcpy (mp->name, name, vec_len (name));
+  vec_free (name);
+
+  S (mp);
+  W (ret);
+  return ret;
+}
+
+static int
+api_ikev2_initiate_del_ike_sa (vat_main_t * vam)
+{
+  unformat_input_t *i = vam->input;
+  vl_api_ikev2_initiate_del_ike_sa_t *mp;
+  int ret;
+  u64 ispi;
+
+
+  while (unformat_check_input (i) != UNFORMAT_END_OF_INPUT)
+    {
+      if (unformat (i, "%lx", &ispi))
+	;
+      else
+	{
+	  errmsg ("parse error '%U'", format_unformat_error, i);
+	  return -99;
+	}
+    }
+
+  M (IKEV2_INITIATE_DEL_IKE_SA, mp);
+
+  mp->ispi = ispi;
+
+  S (mp);
+  W (ret);
+  return ret;
+}
+
+static int
+api_ikev2_initiate_del_child_sa (vat_main_t * vam)
+{
+  unformat_input_t *i = vam->input;
+  vl_api_ikev2_initiate_del_child_sa_t *mp;
+  int ret;
+  u32 ispi;
+
+
+  while (unformat_check_input (i) != UNFORMAT_END_OF_INPUT)
+    {
+      if (unformat (i, "%x", &ispi))
+	;
+      else
+	{
+	  errmsg ("parse error '%U'", format_unformat_error, i);
+	  return -99;
+	}
+    }
+
+  M (IKEV2_INITIATE_DEL_CHILD_SA, mp);
+
+  mp->ispi = ispi;
+
+  S (mp);
+  W (ret);
+  return ret;
+}
+
+static int
+api_ikev2_initiate_rekey_child_sa (vat_main_t * vam)
+{
+  unformat_input_t *i = vam->input;
+  vl_api_ikev2_initiate_rekey_child_sa_t *mp;
+  int ret;
+  u32 ispi;
+
+
+  while (unformat_check_input (i) != UNFORMAT_END_OF_INPUT)
+    {
+      if (unformat (i, "%x", &ispi))
+	;
+      else
+	{
+	  errmsg ("parse error '%U'", format_unformat_error, i);
+	  return -99;
+	}
+    }
+
+  M (IKEV2_INITIATE_REKEY_CHILD_SA, mp);
+
+  mp->ispi = ispi;
+
+  S (mp);
+  W (ret);
+  return ret;
+}
+
 /*
  * MAP
  */
@@ -13208,10 +13560,10 @@ lisp_eid_put_vat (u8 * dst, u8 eid[16], u8 type)
 }
 
 static int
-api_lisp_add_del_locator_set (vat_main_t * vam)
+api_one_add_del_locator_set (vat_main_t * vam)
 {
   unformat_input_t *input = vam->input;
-  vl_api_lisp_add_del_locator_set_t *mp;
+  vl_api_one_add_del_locator_set_t *mp;
   u8 is_add = 1;
   u8 *locator_set_name = NULL;
   u8 locator_set_name_set = 0;
@@ -13272,7 +13624,7 @@ api_lisp_add_del_locator_set (vat_main_t * vam)
   data_len = sizeof (vl_api_local_locator_t) * vec_len (locators);
 
   /* Construct the API message */
-  M2 (LISP_ADD_DEL_LOCATOR_SET, mp, data_len);
+  M2 (ONE_ADD_DEL_LOCATOR_SET, mp, data_len);
 
   mp->is_add = is_add;
   clib_memcpy (mp->locator_set_name, locator_set_name,
@@ -13292,11 +13644,13 @@ api_lisp_add_del_locator_set (vat_main_t * vam)
   return ret;
 }
 
+#define api_lisp_add_del_locator_set api_one_add_del_locator_set
+
 static int
-api_lisp_add_del_locator (vat_main_t * vam)
+api_one_add_del_locator (vat_main_t * vam)
 {
   unformat_input_t *input = vam->input;
-  vl_api_lisp_add_del_locator_t *mp;
+  vl_api_one_add_del_locator_t *mp;
   u32 tmp_if_index = ~0;
   u32 sw_if_index = ~0;
   u8 sw_if_index_set = 0;
@@ -13387,7 +13741,7 @@ api_lisp_add_del_locator (vat_main_t * vam)
   vec_add1 (locator_set_name, 0);
 
   /* Construct the API message */
-  M (LISP_ADD_DEL_LOCATOR, mp);
+  M (ONE_ADD_DEL_LOCATOR, mp);
 
   mp->is_add = is_add;
   mp->sw_if_index = ntohl (sw_if_index);
@@ -13404,6 +13758,8 @@ api_lisp_add_del_locator (vat_main_t * vam)
   W (ret);
   return ret;
 }
+
+#define api_lisp_add_del_locator api_one_add_del_locator
 
 uword
 unformat_hmac_key_id (unformat_input_t * input, va_list * args)
@@ -13431,10 +13787,10 @@ unformat_hmac_key_id (unformat_input_t * input, va_list * args)
 }
 
 static int
-api_lisp_add_del_local_eid (vat_main_t * vam)
+api_one_add_del_local_eid (vat_main_t * vam)
 {
   unformat_input_t *input = vam->input;
-  vl_api_lisp_add_del_local_eid_t *mp;
+  vl_api_one_add_del_local_eid_t *mp;
   u8 is_add = 1;
   u8 eid_set = 0;
   lisp_eid_vat_t _eid, *eid = &_eid;
@@ -13507,7 +13863,7 @@ api_lisp_add_del_local_eid (vat_main_t * vam)
   vec_add1 (locator_set_name, 0);
 
   /* Construct the API message */
-  M (LISP_ADD_DEL_LOCAL_EID, mp);
+  M (ONE_ADD_DEL_LOCAL_EID, mp);
 
   mp->is_add = is_add;
   lisp_eid_put_vat (mp->eid, eid->addr, eid->type);
@@ -13530,23 +13886,14 @@ api_lisp_add_del_local_eid (vat_main_t * vam)
   return ret;
 }
 
-/* *INDENT-OFF* */
-/** Used for transferring locators via VPP API */
-typedef CLIB_PACKED(struct
-{
-  u8 is_ip4; /**< is locator an IPv4 address? */
-  u8 priority; /**< locator priority */
-  u8 weight;   /**< locator weight */
-  u8 addr[16]; /**< IPv4/IPv6 address */
-}) rloc_t;
-/* *INDENT-ON* */
+#define api_lisp_add_del_local_eid api_one_add_del_local_eid
 
 static int
 api_lisp_gpe_add_del_fwd_entry (vat_main_t * vam)
 {
   u32 dp_table = 0, vni = 0;;
   unformat_input_t *input = vam->input;
-  vl_api_lisp_gpe_add_del_fwd_entry_t *mp;
+  vl_api_gpe_add_del_fwd_entry_t *mp;
   u8 is_add = 1;
   lisp_eid_vat_t _rmt_eid, *rmt_eid = &_rmt_eid;
   lisp_eid_vat_t _lcl_eid, *lcl_eid = &_lcl_eid;
@@ -13554,8 +13901,7 @@ api_lisp_gpe_add_del_fwd_entry (vat_main_t * vam)
   u32 action = ~0, w;
   ip4_address_t rmt_rloc4, lcl_rloc4;
   ip6_address_t rmt_rloc6, lcl_rloc6;
-  vl_api_lisp_gpe_locator_t *rmt_locs = 0, *lcl_locs = 0, rloc, *curr_rloc =
-    0;
+  vl_api_gpe_locator_t *rmt_locs = 0, *lcl_locs = 0, rloc, *curr_rloc = 0;
   int ret;
 
   memset (&rloc, 0, sizeof (rloc));
@@ -13647,8 +13993,8 @@ api_lisp_gpe_add_del_fwd_entry (vat_main_t * vam)
     }
 
   /* Construct the API message */
-  M2 (LISP_GPE_ADD_DEL_FWD_ENTRY, mp,
-      sizeof (vl_api_lisp_gpe_locator_t) * vec_len (rmt_locs) * 2);
+  M2 (GPE_ADD_DEL_FWD_ENTRY, mp,
+      sizeof (vl_api_gpe_locator_t) * vec_len (rmt_locs) * 2);
 
   mp->is_add = is_add;
   lisp_eid_put_vat (mp->rmt_eid, rmt_eid->addr, rmt_eid->type);
@@ -13664,11 +14010,11 @@ api_lisp_gpe_add_del_fwd_entry (vat_main_t * vam)
     {
       mp->loc_num = clib_host_to_net_u32 (vec_len (rmt_locs) * 2);
       clib_memcpy (mp->locs, lcl_locs,
-		   (sizeof (vl_api_lisp_gpe_locator_t) * vec_len (lcl_locs)));
+		   (sizeof (vl_api_gpe_locator_t) * vec_len (lcl_locs)));
 
-      u32 offset = sizeof (vl_api_lisp_gpe_locator_t) * vec_len (lcl_locs);
+      u32 offset = sizeof (vl_api_gpe_locator_t) * vec_len (lcl_locs);
       clib_memcpy (((u8 *) mp->locs) + offset, rmt_locs,
-		   (sizeof (vl_api_lisp_gpe_locator_t) * vec_len (rmt_locs)));
+		   (sizeof (vl_api_gpe_locator_t) * vec_len (rmt_locs)));
     }
   vec_free (lcl_locs);
   vec_free (rmt_locs);
@@ -13682,10 +14028,10 @@ api_lisp_gpe_add_del_fwd_entry (vat_main_t * vam)
 }
 
 static int
-api_lisp_add_del_map_server (vat_main_t * vam)
+api_one_add_del_map_server (vat_main_t * vam)
 {
   unformat_input_t *input = vam->input;
-  vl_api_lisp_add_del_map_server_t *mp;
+  vl_api_one_add_del_map_server_t *mp;
   u8 is_add = 1;
   u8 ipv4_set = 0;
   u8 ipv6_set = 0;
@@ -13725,7 +14071,7 @@ api_lisp_add_del_map_server (vat_main_t * vam)
     }
 
   /* Construct the API message */
-  M (LISP_ADD_DEL_MAP_SERVER, mp);
+  M (ONE_ADD_DEL_MAP_SERVER, mp);
 
   mp->is_add = is_add;
   if (ipv6_set)
@@ -13746,12 +14092,14 @@ api_lisp_add_del_map_server (vat_main_t * vam)
   W (ret);
   return ret;
 }
+
+#define api_lisp_add_del_map_server api_one_add_del_map_server
 
 static int
-api_lisp_add_del_map_resolver (vat_main_t * vam)
+api_one_add_del_map_resolver (vat_main_t * vam)
 {
   unformat_input_t *input = vam->input;
-  vl_api_lisp_add_del_map_resolver_t *mp;
+  vl_api_one_add_del_map_resolver_t *mp;
   u8 is_add = 1;
   u8 ipv4_set = 0;
   u8 ipv6_set = 0;
@@ -13791,7 +14139,7 @@ api_lisp_add_del_map_resolver (vat_main_t * vam)
     }
 
   /* Construct the API message */
-  M (LISP_ADD_DEL_MAP_RESOLVER, mp);
+  M (ONE_ADD_DEL_MAP_RESOLVER, mp);
 
   mp->is_add = is_add;
   if (ipv6_set)
@@ -13812,12 +14160,14 @@ api_lisp_add_del_map_resolver (vat_main_t * vam)
   W (ret);
   return ret;
 }
+
+#define api_lisp_add_del_map_resolver api_one_add_del_map_resolver
 
 static int
 api_lisp_gpe_enable_disable (vat_main_t * vam)
 {
   unformat_input_t *input = vam->input;
-  vl_api_lisp_gpe_enable_disable_t *mp;
+  vl_api_gpe_enable_disable_t *mp;
   u8 is_set = 0;
   u8 is_en = 1;
   int ret;
@@ -13846,7 +14196,7 @@ api_lisp_gpe_enable_disable (vat_main_t * vam)
     }
 
   /* Construct the API message */
-  M (LISP_GPE_ENABLE_DISABLE, mp);
+  M (GPE_ENABLE_DISABLE, mp);
 
   mp->is_en = is_en;
 
@@ -13859,10 +14209,10 @@ api_lisp_gpe_enable_disable (vat_main_t * vam)
 }
 
 static int
-api_lisp_rloc_probe_enable_disable (vat_main_t * vam)
+api_one_rloc_probe_enable_disable (vat_main_t * vam)
 {
   unformat_input_t *input = vam->input;
-  vl_api_lisp_rloc_probe_enable_disable_t *mp;
+  vl_api_one_rloc_probe_enable_disable_t *mp;
   u8 is_set = 0;
   u8 is_en = 0;
   int ret;
@@ -13888,7 +14238,7 @@ api_lisp_rloc_probe_enable_disable (vat_main_t * vam)
     }
 
   /* Construct the API message */
-  M (LISP_RLOC_PROBE_ENABLE_DISABLE, mp);
+  M (ONE_RLOC_PROBE_ENABLE_DISABLE, mp);
 
   mp->is_enabled = is_en;
 
@@ -13900,11 +14250,13 @@ api_lisp_rloc_probe_enable_disable (vat_main_t * vam)
   return ret;
 }
 
+#define api_lisp_rloc_probe_enable_disable api_one_rloc_probe_enable_disable
+
 static int
-api_lisp_map_register_enable_disable (vat_main_t * vam)
+api_one_map_register_enable_disable (vat_main_t * vam)
 {
   unformat_input_t *input = vam->input;
-  vl_api_lisp_map_register_enable_disable_t *mp;
+  vl_api_one_map_register_enable_disable_t *mp;
   u8 is_set = 0;
   u8 is_en = 0;
   int ret;
@@ -13930,7 +14282,7 @@ api_lisp_map_register_enable_disable (vat_main_t * vam)
     }
 
   /* Construct the API message */
-  M (LISP_MAP_REGISTER_ENABLE_DISABLE, mp);
+  M (ONE_MAP_REGISTER_ENABLE_DISABLE, mp);
 
   mp->is_enabled = is_en;
 
@@ -13942,11 +14294,13 @@ api_lisp_map_register_enable_disable (vat_main_t * vam)
   return ret;
 }
 
+#define api_lisp_map_register_enable_disable api_one_map_register_enable_disable
+
 static int
-api_lisp_enable_disable (vat_main_t * vam)
+api_one_enable_disable (vat_main_t * vam)
 {
   unformat_input_t *input = vam->input;
-  vl_api_lisp_enable_disable_t *mp;
+  vl_api_one_enable_disable_t *mp;
   u8 is_set = 0;
   u8 is_en = 0;
   int ret;
@@ -13974,7 +14328,7 @@ api_lisp_enable_disable (vat_main_t * vam)
     }
 
   /* Construct the API message */
-  M (LISP_ENABLE_DISABLE, mp);
+  M (ONE_ENABLE_DISABLE, mp);
 
   mp->is_en = is_en;
 
@@ -13986,13 +14340,15 @@ api_lisp_enable_disable (vat_main_t * vam)
   return ret;
 }
 
+#define api_lisp_enable_disable api_one_enable_disable
+
 static int
-api_show_lisp_map_register_state (vat_main_t * vam)
+api_show_one_map_register_state (vat_main_t * vam)
 {
-  vl_api_show_lisp_map_register_state_t *mp;
+  vl_api_show_one_map_register_state_t *mp;
   int ret;
 
-  M (SHOW_LISP_MAP_REGISTER_STATE, mp);
+  M (SHOW_ONE_MAP_REGISTER_STATE, mp);
 
   /* send */
   S (mp);
@@ -14002,13 +14358,15 @@ api_show_lisp_map_register_state (vat_main_t * vam)
   return ret;
 }
 
+#define api_show_lisp_map_register_state api_show_one_map_register_state
+
 static int
-api_show_lisp_rloc_probe_state (vat_main_t * vam)
+api_show_one_rloc_probe_state (vat_main_t * vam)
 {
-  vl_api_show_lisp_rloc_probe_state_t *mp;
+  vl_api_show_one_rloc_probe_state_t *mp;
   int ret;
 
-  M (SHOW_LISP_RLOC_PROBE_STATE, mp);
+  M (SHOW_ONE_RLOC_PROBE_STATE, mp);
 
   /* send */
   S (mp);
@@ -14018,13 +14376,15 @@ api_show_lisp_rloc_probe_state (vat_main_t * vam)
   return ret;
 }
 
+#define api_show_lisp_rloc_probe_state api_show_one_rloc_probe_state
+
 static int
-api_show_lisp_map_request_mode (vat_main_t * vam)
+api_show_one_map_request_mode (vat_main_t * vam)
 {
-  vl_api_show_lisp_map_request_mode_t *mp;
+  vl_api_show_one_map_request_mode_t *mp;
   int ret;
 
-  M (SHOW_LISP_MAP_REQUEST_MODE, mp);
+  M (SHOW_ONE_MAP_REQUEST_MODE, mp);
 
   /* send */
   S (mp);
@@ -14034,11 +14394,13 @@ api_show_lisp_map_request_mode (vat_main_t * vam)
   return ret;
 }
 
+#define api_show_lisp_map_request_mode api_show_one_map_request_mode
+
 static int
-api_lisp_map_request_mode (vat_main_t * vam)
+api_one_map_request_mode (vat_main_t * vam)
 {
   unformat_input_t *input = vam->input;
-  vl_api_lisp_map_request_mode_t *mp;
+  vl_api_one_map_request_mode_t *mp;
   u8 mode = 0;
   int ret;
 
@@ -14056,7 +14418,7 @@ api_lisp_map_request_mode (vat_main_t * vam)
 	}
     }
 
-  M (LISP_MAP_REQUEST_MODE, mp);
+  M (ONE_MAP_REQUEST_MODE, mp);
 
   mp->mode = mode;
 
@@ -14068,18 +14430,20 @@ api_lisp_map_request_mode (vat_main_t * vam)
   return ret;
 }
 
+#define api_lisp_map_request_mode api_one_map_request_mode
+
 /**
- * Enable/disable LISP proxy ITR.
+ * Enable/disable ONE proxy ITR.
  *
  * @param vam vpp API test context
  * @return return code
  */
 static int
-api_lisp_pitr_set_locator_set (vat_main_t * vam)
+api_one_pitr_set_locator_set (vat_main_t * vam)
 {
   u8 ls_name_set = 0;
   unformat_input_t *input = vam->input;
-  vl_api_lisp_pitr_set_locator_set_t *mp;
+  vl_api_one_pitr_set_locator_set_t *mp;
   u8 is_add = 1;
   u8 *ls_name = 0;
   int ret;
@@ -14104,7 +14468,7 @@ api_lisp_pitr_set_locator_set (vat_main_t * vam)
       return -99;
     }
 
-  M (LISP_PITR_SET_LOCATOR_SET, mp);
+  M (ONE_PITR_SET_LOCATOR_SET, mp);
 
   mp->is_add = is_add;
   clib_memcpy (mp->ls_name, ls_name, vec_len (ls_name));
@@ -14118,10 +14482,12 @@ api_lisp_pitr_set_locator_set (vat_main_t * vam)
   return ret;
 }
 
+#define api_lisp_pitr_set_locator_set api_one_pitr_set_locator_set
+
 static int
-api_show_lisp_pitr (vat_main_t * vam)
+api_show_one_pitr (vat_main_t * vam)
 {
-  vl_api_show_lisp_pitr_t *mp;
+  vl_api_show_one_pitr_t *mp;
   int ret;
 
   if (!vam->json_output)
@@ -14129,7 +14495,7 @@ api_show_lisp_pitr (vat_main_t * vam)
       print (vam->ofp, "%=20s", "lisp status:");
     }
 
-  M (SHOW_LISP_PITR, mp);
+  M (SHOW_ONE_PITR, mp);
   /* send it... */
   S (mp);
 
@@ -14138,14 +14504,16 @@ api_show_lisp_pitr (vat_main_t * vam)
   return ret;
 }
 
+#define api_show_lisp_pitr api_show_one_pitr
+
 /**
  * Add/delete mapping between vni and vrf
  */
 static int
-api_lisp_eid_table_add_del_map (vat_main_t * vam)
+api_one_eid_table_add_del_map (vat_main_t * vam)
 {
   unformat_input_t *input = vam->input;
-  vl_api_lisp_eid_table_add_del_map_t *mp;
+  vl_api_one_eid_table_add_del_map_t *mp;
   u8 is_add = 1, vni_set = 0, vrf_set = 0, bd_index_set = 0;
   u32 vni, vrf, bd_index;
   int ret;
@@ -14177,7 +14545,7 @@ api_lisp_eid_table_add_del_map (vat_main_t * vam)
       return -99;
     }
 
-  M (LISP_EID_TABLE_ADD_DEL_MAP, mp);
+  M (ONE_EID_TABLE_ADD_DEL_MAP, mp);
 
   mp->is_add = is_add;
   mp->vni = htonl (vni);
@@ -14191,6 +14559,8 @@ api_lisp_eid_table_add_del_map (vat_main_t * vam)
   W (ret);
   return ret;
 }
+
+#define api_lisp_eid_table_add_del_map api_one_eid_table_add_del_map
 
 uword
 unformat_negative_mapping_action (unformat_input_t * input, va_list * args)
@@ -14222,16 +14592,16 @@ unformat_negative_mapping_action (unformat_input_t * input, va_list * args)
 }
 
 /**
- * Add/del remote mapping to/from LISP control plane
+ * Add/del remote mapping to/from ONE control plane
  *
  * @param vam vpp API test context
  * @return return code
  */
 static int
-api_lisp_add_del_remote_mapping (vat_main_t * vam)
+api_one_add_del_remote_mapping (vat_main_t * vam)
 {
   unformat_input_t *input = vam->input;
-  vl_api_lisp_add_del_remote_mapping_t *mp;
+  vl_api_one_add_del_remote_mapping_t *mp;
   u32 vni = 0;
   lisp_eid_vat_t _eid, *eid = &_eid;
   lisp_eid_vat_t _seid, *seid = &_seid;
@@ -14321,7 +14691,7 @@ api_lisp_add_del_remote_mapping (vat_main_t * vam)
 
   data_len = vec_len (rlocs) * sizeof (vl_api_remote_locator_t);
 
-  M2 (LISP_ADD_DEL_REMOTE_MAPPING, mp, data_len);
+  M2 (ONE_ADD_DEL_REMOTE_MAPPING, mp, data_len);
   mp->is_add = is_add;
   mp->vni = htonl (vni);
   mp->action = (u8) action;
@@ -14345,18 +14715,20 @@ api_lisp_add_del_remote_mapping (vat_main_t * vam)
   return ret;
 }
 
+#define api_lisp_add_del_remote_mapping api_one_add_del_remote_mapping
+
 /**
- * Add/del LISP adjacency. Saves mapping in LISP control plane and updates
+ * Add/del ONE adjacency. Saves mapping in ONE control plane and updates
  * forwarding entries in data-plane accordingly.
  *
  * @param vam vpp API test context
  * @return return code
  */
 static int
-api_lisp_add_del_adjacency (vat_main_t * vam)
+api_one_add_del_adjacency (vat_main_t * vam)
 {
   unformat_input_t *input = vam->input;
-  vl_api_lisp_add_del_adjacency_t *mp;
+  vl_api_one_add_del_adjacency_t *mp;
   u32 vni = 0;
   ip4_address_t leid4, reid4;
   ip6_address_t leid6, reid6;
@@ -14437,7 +14809,7 @@ api_lisp_add_del_adjacency (vat_main_t * vam)
       return -99;
     }
 
-  M (LISP_ADD_DEL_ADJACENCY, mp);
+  M (ONE_ADD_DEL_ADJACENCY, mp);
   mp->is_add = is_add;
   mp->vni = htonl (vni);
   mp->leid_len = leid_len;
@@ -14471,11 +14843,13 @@ api_lisp_add_del_adjacency (vat_main_t * vam)
   return ret;
 }
 
+#define api_lisp_add_del_adjacency api_one_add_del_adjacency
+
 static int
 api_lisp_gpe_add_del_iface (vat_main_t * vam)
 {
   unformat_input_t *input = vam->input;
-  vl_api_lisp_gpe_add_del_iface_t *mp;
+  vl_api_gpe_add_del_iface_t *mp;
   u8 action_set = 0, is_add = 1, is_l2 = 0, dp_table_set = 0, vni_set = 0;
   u32 dp_table = 0, vni = 0;
   int ret;
@@ -14522,7 +14896,7 @@ api_lisp_gpe_add_del_iface (vat_main_t * vam)
     }
 
   /* Construct the API message */
-  M (LISP_GPE_ADD_DEL_IFACE, mp);
+  M (GPE_ADD_DEL_IFACE, mp);
 
   mp->is_add = is_add;
   mp->dp_table = dp_table;
@@ -14538,16 +14912,16 @@ api_lisp_gpe_add_del_iface (vat_main_t * vam)
 }
 
 /**
- * Add/del map request itr rlocs from LISP control plane and updates
+ * Add/del map request itr rlocs from ONE control plane and updates
  *
  * @param vam vpp API test context
  * @return return code
  */
 static int
-api_lisp_add_del_map_request_itr_rlocs (vat_main_t * vam)
+api_one_add_del_map_request_itr_rlocs (vat_main_t * vam)
 {
   unformat_input_t *input = vam->input;
-  vl_api_lisp_add_del_map_request_itr_rlocs_t *mp;
+  vl_api_one_add_del_map_request_itr_rlocs_t *mp;
   u8 *locator_set_name = 0;
   u8 locator_set_name_set = 0;
   u8 is_add = 1;
@@ -14584,7 +14958,7 @@ api_lisp_add_del_map_request_itr_rlocs (vat_main_t * vam)
       return -99;
     }
 
-  M (LISP_ADD_DEL_MAP_REQUEST_ITR_RLOCS, mp);
+  M (ONE_ADD_DEL_MAP_REQUEST_ITR_RLOCS, mp);
   mp->is_add = is_add;
   if (is_add)
     {
@@ -14605,11 +14979,13 @@ api_lisp_add_del_map_request_itr_rlocs (vat_main_t * vam)
   return ret;
 }
 
+#define api_lisp_add_del_map_request_itr_rlocs api_one_add_del_map_request_itr_rlocs
+
 static int
-api_lisp_locator_dump (vat_main_t * vam)
+api_one_locator_dump (vat_main_t * vam)
 {
   unformat_input_t *input = vam->input;
-  vl_api_lisp_locator_dump_t *mp;
+  vl_api_one_locator_dump_t *mp;
   vl_api_control_ping_t *mp_ping;
   u8 is_index_set = 0, is_name_set = 0;
   u8 *ls_name = 0;
@@ -14657,7 +15033,7 @@ api_lisp_locator_dump (vat_main_t * vam)
       print (vam->ofp, "%=16s%=16s%=16s", "locator", "priority", "weight");
     }
 
-  M (LISP_LOCATOR_DUMP, mp);
+  M (ONE_LOCATOR_DUMP, mp);
   mp->is_index_set = is_index_set;
 
   if (is_index_set)
@@ -14681,10 +15057,12 @@ api_lisp_locator_dump (vat_main_t * vam)
   return ret;
 }
 
+#define api_lisp_locator_dump api_one_locator_dump
+
 static int
-api_lisp_locator_set_dump (vat_main_t * vam)
+api_one_locator_set_dump (vat_main_t * vam)
 {
-  vl_api_lisp_locator_set_dump_t *mp;
+  vl_api_one_locator_set_dump_t *mp;
   vl_api_control_ping_t *mp_ping;
   unformat_input_t *input = vam->input;
   u8 filter = 0;
@@ -14713,7 +15091,7 @@ api_lisp_locator_set_dump (vat_main_t * vam)
       print (vam->ofp, "%=10s%=15s", "ls_index", "ls_name");
     }
 
-  M (LISP_LOCATOR_SET_DUMP, mp);
+  M (ONE_LOCATOR_SET_DUMP, mp);
 
   mp->filter = filter;
 
@@ -14729,13 +15107,15 @@ api_lisp_locator_set_dump (vat_main_t * vam)
   return ret;
 }
 
+#define api_lisp_locator_set_dump api_one_locator_set_dump
+
 static int
-api_lisp_eid_table_map_dump (vat_main_t * vam)
+api_one_eid_table_map_dump (vat_main_t * vam)
 {
   u8 is_l2 = 0;
   u8 mode_set = 0;
   unformat_input_t *input = vam->input;
-  vl_api_lisp_eid_table_map_dump_t *mp;
+  vl_api_one_eid_table_map_dump_t *mp;
   vl_api_control_ping_t *mp_ping;
   int ret;
 
@@ -14770,7 +15150,7 @@ api_lisp_eid_table_map_dump (vat_main_t * vam)
       print (vam->ofp, "%=10s%=10s", "VNI", is_l2 ? "BD" : "VRF");
     }
 
-  M (LISP_EID_TABLE_MAP_DUMP, mp);
+  M (ONE_EID_TABLE_MAP_DUMP, mp);
   mp->is_l2 = is_l2;
 
   /* send it... */
@@ -14785,10 +15165,12 @@ api_lisp_eid_table_map_dump (vat_main_t * vam)
   return ret;
 }
 
+#define api_lisp_eid_table_map_dump api_one_eid_table_map_dump
+
 static int
-api_lisp_eid_table_vni_dump (vat_main_t * vam)
+api_one_eid_table_vni_dump (vat_main_t * vam)
 {
-  vl_api_lisp_eid_table_vni_dump_t *mp;
+  vl_api_one_eid_table_vni_dump_t *mp;
   vl_api_control_ping_t *mp_ping;
   int ret;
 
@@ -14797,7 +15179,7 @@ api_lisp_eid_table_vni_dump (vat_main_t * vam)
       print (vam->ofp, "VNI");
     }
 
-  M (LISP_EID_TABLE_VNI_DUMP, mp);
+  M (ONE_EID_TABLE_VNI_DUMP, mp);
 
   /* send it... */
   S (mp);
@@ -14811,11 +15193,13 @@ api_lisp_eid_table_vni_dump (vat_main_t * vam)
   return ret;
 }
 
+#define api_lisp_eid_table_vni_dump api_one_eid_table_vni_dump
+
 static int
-api_lisp_eid_table_dump (vat_main_t * vam)
+api_one_eid_table_dump (vat_main_t * vam)
 {
   unformat_input_t *i = vam->input;
-  vl_api_lisp_eid_table_dump_t *mp;
+  vl_api_one_eid_table_dump_t *mp;
   vl_api_control_ping_t *mp_ping;
   struct in_addr ip4;
   struct in6_addr ip6;
@@ -14869,7 +15253,7 @@ api_lisp_eid_table_dump (vat_main_t * vam)
 	     "type", "ls_index", "ttl", "authoritative", "key_id", "key");
     }
 
-  M (LISP_EID_TABLE_DUMP, mp);
+  M (ONE_EID_TABLE_DUMP, mp);
 
   mp->filter = filter;
   if (eid_set)
@@ -14908,11 +15292,13 @@ api_lisp_eid_table_dump (vat_main_t * vam)
   return ret;
 }
 
+#define api_lisp_eid_table_dump api_one_eid_table_dump
+
 static int
 api_lisp_gpe_fwd_entries_get (vat_main_t * vam)
 {
   unformat_input_t *i = vam->input;
-  vl_api_lisp_gpe_fwd_entries_get_t *mp;
+  vl_api_gpe_fwd_entries_get_t *mp;
   u8 vni_set = 0;
   u32 vni = ~0;
   int ret;
@@ -14942,7 +15328,7 @@ api_lisp_gpe_fwd_entries_get (vat_main_t * vam)
 	     "leid", "reid");
     }
 
-  M (LISP_GPE_FWD_ENTRIES_GET, mp);
+  M (GPE_FWD_ENTRIES_GET, mp);
   mp->vni = clib_host_to_net_u32 (vni);
 
   /* send it... */
@@ -14953,16 +15339,16 @@ api_lisp_gpe_fwd_entries_get (vat_main_t * vam)
   return ret;
 }
 
-#define vl_api_lisp_gpe_fwd_entries_get_reply_t_endian vl_noop_handler
-#define vl_api_lisp_gpe_fwd_entries_get_reply_t_print vl_noop_handler
-#define vl_api_lisp_gpe_fwd_entry_path_details_t_endian vl_noop_handler
-#define vl_api_lisp_gpe_fwd_entry_path_details_t_print vl_noop_handler
+#define vl_api_gpe_fwd_entries_get_reply_t_endian vl_noop_handler
+#define vl_api_gpe_fwd_entries_get_reply_t_print vl_noop_handler
+#define vl_api_gpe_fwd_entry_path_details_t_endian vl_noop_handler
+#define vl_api_gpe_fwd_entry_path_details_t_print vl_noop_handler
 
 static int
-api_lisp_adjacencies_get (vat_main_t * vam)
+api_one_adjacencies_get (vat_main_t * vam)
 {
   unformat_input_t *i = vam->input;
-  vl_api_lisp_adjacencies_get_t *mp;
+  vl_api_one_adjacencies_get_t *mp;
   u8 vni_set = 0;
   u32 vni = ~0;
   int ret;
@@ -14991,7 +15377,7 @@ api_lisp_adjacencies_get (vat_main_t * vam)
       print (vam->ofp, "%s %40s", "leid", "reid");
     }
 
-  M (LISP_ADJACENCIES_GET, mp);
+  M (ONE_ADJACENCIES_GET, mp);
   mp->vni = clib_host_to_net_u32 (vni);
 
   /* send it... */
@@ -15002,10 +15388,12 @@ api_lisp_adjacencies_get (vat_main_t * vam)
   return ret;
 }
 
+#define api_lisp_adjacencies_get api_one_adjacencies_get
+
 static int
-api_lisp_map_server_dump (vat_main_t * vam)
+api_one_map_server_dump (vat_main_t * vam)
 {
-  vl_api_lisp_map_server_dump_t *mp;
+  vl_api_one_map_server_dump_t *mp;
   vl_api_control_ping_t *mp_ping;
   int ret;
 
@@ -15014,7 +15402,7 @@ api_lisp_map_server_dump (vat_main_t * vam)
       print (vam->ofp, "%=20s", "Map server");
     }
 
-  M (LISP_MAP_SERVER_DUMP, mp);
+  M (ONE_MAP_SERVER_DUMP, mp);
   /* send it... */
   S (mp);
 
@@ -15027,10 +15415,12 @@ api_lisp_map_server_dump (vat_main_t * vam)
   return ret;
 }
 
+#define api_lisp_map_server_dump api_one_map_server_dump
+
 static int
-api_lisp_map_resolver_dump (vat_main_t * vam)
+api_one_map_resolver_dump (vat_main_t * vam)
 {
-  vl_api_lisp_map_resolver_dump_t *mp;
+  vl_api_one_map_resolver_dump_t *mp;
   vl_api_control_ping_t *mp_ping;
   int ret;
 
@@ -15039,7 +15429,7 @@ api_lisp_map_resolver_dump (vat_main_t * vam)
       print (vam->ofp, "%=20s", "Map resolver");
     }
 
-  M (LISP_MAP_RESOLVER_DUMP, mp);
+  M (ONE_MAP_RESOLVER_DUMP, mp);
   /* send it... */
   S (mp);
 
@@ -15052,18 +15442,20 @@ api_lisp_map_resolver_dump (vat_main_t * vam)
   return ret;
 }
 
+#define api_lisp_map_resolver_dump api_one_map_resolver_dump
+
 static int
-api_show_lisp_status (vat_main_t * vam)
+api_show_one_status (vat_main_t * vam)
 {
-  vl_api_show_lisp_status_t *mp;
+  vl_api_show_one_status_t *mp;
   int ret;
 
   if (!vam->json_output)
     {
-      print (vam->ofp, "%-20s%-16s", "lisp status", "locator-set");
+      print (vam->ofp, "%-20s%-16s", "ONE status", "locator-set");
     }
 
-  M (SHOW_LISP_STATUS, mp);
+  M (SHOW_ONE_STATUS, mp);
   /* send it... */
   S (mp);
   /* Wait for a reply... */
@@ -15071,10 +15463,12 @@ api_show_lisp_status (vat_main_t * vam)
   return ret;
 }
 
+#define api_show_lisp_status api_show_one_status
+
 static int
 api_lisp_gpe_fwd_entry_path_dump (vat_main_t * vam)
 {
-  vl_api_lisp_gpe_fwd_entry_path_dump_t *mp;
+  vl_api_gpe_fwd_entry_path_dump_t *mp;
   vl_api_control_ping_t *mp_ping;
   unformat_input_t *i = vam->input;
   u32 fwd_entry_index = ~0;
@@ -15099,7 +15493,7 @@ api_lisp_gpe_fwd_entry_path_dump (vat_main_t * vam)
       print (vam->ofp, "first line");
     }
 
-  M (LISP_GPE_FWD_ENTRY_PATH_DUMP, mp);
+  M (GPE_FWD_ENTRY_PATH_DUMP, mp);
 
   /* send it... */
   S (mp);
@@ -15113,9 +15507,9 @@ api_lisp_gpe_fwd_entry_path_dump (vat_main_t * vam)
 }
 
 static int
-api_lisp_get_map_request_itr_rlocs (vat_main_t * vam)
+api_one_get_map_request_itr_rlocs (vat_main_t * vam)
 {
-  vl_api_lisp_get_map_request_itr_rlocs_t *mp;
+  vl_api_one_get_map_request_itr_rlocs_t *mp;
   int ret;
 
   if (!vam->json_output)
@@ -15123,13 +15517,15 @@ api_lisp_get_map_request_itr_rlocs (vat_main_t * vam)
       print (vam->ofp, "%=20s", "itr-rlocs:");
     }
 
-  M (LISP_GET_MAP_REQUEST_ITR_RLOCS, mp);
+  M (ONE_GET_MAP_REQUEST_ITR_RLOCS, mp);
   /* send it... */
   S (mp);
   /* Wait for a reply... */
   W (ret);
   return ret;
 }
+
+#define api_lisp_get_map_request_itr_rlocs api_one_get_map_request_itr_rlocs
 
 static int
 api_af_packet_create (vat_main_t * vam)
@@ -15815,6 +16211,24 @@ api_ip_fib_dump (vat_main_t * vam)
   return ret;
 }
 
+static int
+api_ip_mfib_dump (vat_main_t * vam)
+{
+  vl_api_ip_mfib_dump_t *mp;
+  vl_api_control_ping_t *mp_ping;
+  int ret;
+
+  M (IP_MFIB_DUMP, mp);
+  S (mp);
+
+  /* Use a control ping for synchronization */
+  M (CONTROL_PING, mp_ping);
+  S (mp_ping);
+
+  W (ret);
+  return ret;
+}
+
 static void vl_api_ip_neighbor_details_t_handler
   (vl_api_ip_neighbor_details_t * mp)
 {
@@ -15997,6 +16411,24 @@ api_ip6_fib_dump (vat_main_t * vam)
   int ret;
 
   M (IP6_FIB_DUMP, mp);
+  S (mp);
+
+  /* Use a control ping for synchronization */
+  M (CONTROL_PING, mp_ping);
+  S (mp_ping);
+
+  W (ret);
+  return ret;
+}
+
+static int
+api_ip6_mfib_dump (vat_main_t * vam)
+{
+  vl_api_ip6_mfib_dump_t *mp;
+  vl_api_control_ping_t *mp_ping;
+  int ret;
+
+  M (IP6_MFIB_DUMP, mp);
   S (mp);
 
   /* Use a control ping for synchronization */
@@ -17793,12 +18225,10 @@ _(oam_add_del, "src <ip4-address> dst <ip4-address> [vrf <n>] [del]")   \
 _(reset_fib, "vrf <n> [ipv6]")                                          \
 _(dhcp_proxy_config,                                                    \
   "svr <v46-address> src <v46-address>\n"                               \
-   "insert-cid <n> [del]")                                              \
-_(dhcp_proxy_config_2,                                                  \
-  "svr <v46-address> src <v46-address>\n"                               \
-   "rx_vrf_id <nn> server_vrf_id <nn> insert-cid <n> [del]")            \
+   "rx_vrf_id <nn> server_vrf_id <nn>  [del]")                          \
 _(dhcp_proxy_set_vss,                                                   \
   "tbl_id <n> fib_id <n> oui <n> [ipv6] [del]")                         \
+_(dhcp_proxy_dump, "ip6")                                               \
 _(dhcp_client_config,                                                   \
   "<intfc> | sw_if_index <id> [hostname <name>] [disable_event] [del]") \
 _(set_ip_flow_hash,                                                     \
@@ -17914,6 +18344,14 @@ _(ikev2_profile_set_ts, "name <profile_name> protocol <proto>\n"        \
   "start_port <port> end_port <port> start_addr <ip4> end_addr <ip4>\n" \
   "(local|remote)")                                                     \
 _(ikev2_set_local_key, "file <absolute_file_path>")                     \
+_(ikev2_set_responder, "<profile_name> interface <interface> address <addr>") \
+_(ikev2_set_ike_transforms, "<profile_name> <crypto alg> <key size> <integrity alg> <DH group>") \
+_(ikev2_set_esp_transforms, "<profile_name> <crypto alg> <key size> <integrity alg> <DH group>") \
+_(ikev2_set_sa_lifetime, "<profile_name> <seconds> <jitter> <handover> <max bytes>") \
+_(ikev2_initiate_sa_init, "<profile_name>")                             \
+_(ikev2_initiate_del_ike_sa, "<ispi>")                                  \
+_(ikev2_initiate_del_child_sa, "<ispi>")                                \
+_(ikev2_initiate_rekey_child_sa, "<ispi>")                              \
 _(delete_loopback,"sw_if_index <nn>")                                   \
 _(bd_ip_mac_add_del, "bd_id <bridge-domain-id> <ip4/6-addr> <mac-addr> [del]") \
 _(map_add_domain,                                                       \
@@ -17935,7 +18373,48 @@ _(get_node_graph, " ")                                                  \
 _(sw_interface_clear_stats,"<intfc> | sw_if_index <nn>")                \
 _(ioam_enable, "[trace] [pow] [ppc <encap|decap>]")                     \
 _(ioam_disable, "")                                                     \
-_(lisp_add_del_locator_set, "locator-set <locator_name> [iface <intf> |" \
+_(one_add_del_locator_set, "locator-set <locator_name> [iface <intf> |" \
+                            " sw_if_index <sw_if_index> p <priority> "  \
+                            "w <weight>] [del]")                        \
+_(one_add_del_locator, "locator-set <locator_name> "                    \
+                        "iface <intf> | sw_if_index <sw_if_index> "     \
+                        "p <priority> w <weight> [del]")                \
+_(one_add_del_local_eid,"vni <vni> eid "                                \
+                         "<ipv4|ipv6>/<prefix> | <L2 address> "         \
+                         "locator-set <locator_name> [del]"             \
+                         "[key-id sha1|sha256 secret-key <secret-key>]")\
+_(one_add_del_map_resolver, "<ip4|6-addr> [del]")                       \
+_(one_add_del_map_server, "<ip4|6-addr> [del]")                         \
+_(one_enable_disable, "enable|disable")                                 \
+_(one_map_register_enable_disable, "enable|disable")                    \
+_(one_rloc_probe_enable_disable, "enable|disable")                      \
+_(one_add_del_remote_mapping, "add|del vni <vni> eid <dest-eid> "       \
+                               "[seid <seid>] "                         \
+                               "rloc <locator> p <prio> "               \
+                               "w <weight> [rloc <loc> ... ] "          \
+                               "action <action> [del-all]")             \
+_(one_add_del_adjacency, "add|del vni <vni> reid <remote-eid> leid "    \
+                          "<local-eid>")                                \
+_(one_pitr_set_locator_set, "locator-set <loc-set-name> | del")         \
+_(one_map_request_mode, "src-dst|dst-only")                             \
+_(one_add_del_map_request_itr_rlocs, "<loc-set-name> [del]")            \
+_(one_eid_table_add_del_map, "[del] vni <vni> vrf <vrf>")               \
+_(one_locator_set_dump, "[local | remote]")                             \
+_(one_locator_dump, "ls_index <index> | ls_name <name>")                \
+_(one_eid_table_dump, "[eid <ipv4|ipv6>/<prefix> | <mac>] [vni] "       \
+                       "[local] | [remote]")                            \
+_(one_eid_table_vni_dump, "")                                           \
+_(one_eid_table_map_dump, "l2|l3")                                      \
+_(one_map_resolver_dump, "")                                            \
+_(one_map_server_dump, "")                                              \
+_(one_adjacencies_get, "vni <vni>")                                     \
+_(show_one_rloc_probe_state, "")                                        \
+_(show_one_map_register_state, "")                                      \
+_(show_one_status, "")                                                  \
+_(one_get_map_request_itr_rlocs, "")                                    \
+_(show_one_pitr, "")                                                    \
+_(show_one_map_request_mode, "")                                        \
+_(lisp_add_del_locator_set, "locator-set <locator_name> [iface <intf> |"\
                             " sw_if_index <sw_if_index> p <priority> "  \
                             "w <weight>] [del]")                        \
 _(lisp_add_del_locator, "locator-set <locator_name> "                   \
@@ -17945,15 +18424,11 @@ _(lisp_add_del_local_eid,"vni <vni> eid "                               \
                          "<ipv4|ipv6>/<prefix> | <L2 address> "         \
                          "locator-set <locator_name> [del]"             \
                          "[key-id sha1|sha256 secret-key <secret-key>]") \
-_(lisp_gpe_add_del_fwd_entry, "reid <eid> [leid <eid>] vni <vni>"       \
-  "vrf/bd <dp_table> loc-pair <lcl_loc> <rmt_loc> w <weight>... [del]") \
 _(lisp_add_del_map_resolver, "<ip4|6-addr> [del]")                      \
 _(lisp_add_del_map_server, "<ip4|6-addr> [del]")                        \
-_(lisp_gpe_enable_disable, "enable|disable")                            \
 _(lisp_enable_disable, "enable|disable")                                \
 _(lisp_map_register_enable_disable, "enable|disable")                   \
 _(lisp_rloc_probe_enable_disable, "enable|disable")                     \
-_(lisp_gpe_add_del_iface, "up|down")                                    \
 _(lisp_add_del_remote_mapping, "add|del vni <vni> eid <dest-eid> "      \
                                "[seid <seid>] "                         \
                                "rloc <locator> p <prio> "               \
@@ -17976,6 +18451,10 @@ _(lisp_map_server_dump, "")                                             \
 _(lisp_adjacencies_get, "vni <vni>")                                    \
 _(lisp_gpe_fwd_entries_get, "vni <vni>")                                \
 _(lisp_gpe_fwd_entry_path_dump, "index <fwd_entry_index>")              \
+_(lisp_gpe_add_del_iface, "up|down")                                    \
+_(lisp_gpe_enable_disable, "enable|disable")                            \
+_(lisp_gpe_add_del_fwd_entry, "reid <eid> [leid <eid>] vni <vni>"       \
+  "vrf/bd <dp_table> loc-pair <lcl_loc> <rmt_loc> w <weight>... [del]") \
 _(show_lisp_rloc_probe_state, "")                                       \
 _(show_lisp_map_register_state, "")                                     \
 _(show_lisp_status, "")                                                 \
@@ -18031,7 +18510,9 @@ _(flow_classify_set_interface,                                          \
   "<intfc> | sw_if_index <nn> [ip4-table <nn>] [ip6-table <nn>] [del]") \
 _(flow_classify_dump, "type [ip4|ip6]")                                 \
 _(ip_fib_dump, "")                                                      \
+_(ip_mfib_dump, "")                                                     \
 _(ip6_fib_dump, "")                                                     \
+_(ip6_mfib_dump, "")                                                    \
 _(feature_enable_disable, "arc_name <arc_name> "                        \
   "feature_name <feature_name> <intfc> | sw_if_index <nn> [disable]")	\
 _(sw_interface_tag_add_del, "<intfc> | sw_if_index <nn> tag <text>"	\

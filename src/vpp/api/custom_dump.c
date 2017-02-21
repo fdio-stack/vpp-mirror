@@ -772,37 +772,6 @@ static void *vl_api_dhcp_proxy_config_t_print
 {
   u8 *s;
 
-  s = format (0, "SCRIPT: dhcp_proxy_config ");
-
-  s = format (s, "vrf_id %d ", ntohl (mp->vrf_id));
-
-  if (mp->is_ipv6)
-    {
-      s = format (s, "svr %U ", format_ip6_address,
-		  (ip6_address_t *) mp->dhcp_server);
-      s = format (s, "src %U ", format_ip6_address,
-		  (ip6_address_t *) mp->dhcp_src_address);
-    }
-  else
-    {
-      s = format (s, "svr %U ", format_ip4_address,
-		  (ip4_address_t *) mp->dhcp_server);
-      s = format (s, "src %U ", format_ip4_address,
-		  (ip4_address_t *) mp->dhcp_src_address);
-    }
-  if (mp->is_add == 0)
-    s = format (s, "del ");
-
-  s = format (s, "insert-cid %d ", mp->insert_circuit_id);
-
-  FINISH;
-}
-
-static void *vl_api_dhcp_proxy_config_2_t_print
-  (vl_api_dhcp_proxy_config_2_t * mp, void *handle)
-{
-  u8 *s;
-
   s = format (0, "SCRIPT: dhcp_proxy_config_2 ");
 
   s = format (s, "rx_vrf_id %d ", ntohl (mp->rx_vrf_id));
@@ -824,8 +793,6 @@ static void *vl_api_dhcp_proxy_config_2_t_print
     }
   if (mp->is_add == 0)
     s = format (s, "del ");
-
-  s = format (s, "insert-cid %d ", mp->insert_circuit_id);
 
   FINISH;
 }
@@ -2329,12 +2296,12 @@ static void *vl_api_lisp_enable_disable_t_print
   FINISH;
 }
 
-static void *vl_api_lisp_gpe_add_del_iface_t_print
-  (vl_api_lisp_gpe_add_del_iface_t * mp, void *handle)
+static void *vl_api_gpe_add_del_iface_t_print
+  (vl_api_gpe_add_del_iface_t * mp, void *handle)
 {
   u8 *s;
 
-  s = format (0, "SCRIPT: lisp_gpe_add_del_iface ");
+  s = format (0, "SCRIPT: gpe_add_del_iface ");
 
   s = format (s, "%s ", mp->is_add ? "up" : "down");
   s = format (s, "vni %d ", mp->vni);
@@ -2479,12 +2446,12 @@ static void *vl_api_lisp_add_del_local_eid_t_print
   FINISH;
 }
 
-static void *vl_api_lisp_gpe_add_del_fwd_entry_t_print
-  (vl_api_lisp_gpe_add_del_fwd_entry_t * mp, void *handle)
+static void *vl_api_gpe_add_del_fwd_entry_t_print
+  (vl_api_gpe_add_del_fwd_entry_t * mp, void *handle)
 {
   u8 *s;
 
-  s = format (0, "SCRIPT: lisp_gpe_add_del_fwd_entry TODO");
+  s = format (0, "SCRIPT: gpe_add_del_fwd_entry TODO");
 
   FINISH;
 }
@@ -2507,12 +2474,12 @@ static void *vl_api_lisp_add_del_map_resolver_t_print
   FINISH;
 }
 
-static void *vl_api_lisp_gpe_enable_disable_t_print
-  (vl_api_lisp_gpe_enable_disable_t * mp, void *handle)
+static void *vl_api_gpe_enable_disable_t_print
+  (vl_api_gpe_enable_disable_t * mp, void *handle)
 {
   u8 *s;
 
-  s = format (0, "SCRIPT: lisp_gpe_enable_disable ");
+  s = format (0, "SCRIPT: gpe_enable_disable ");
 
   s = format (s, "%s ", mp->is_en ? "enable" : "disable");
 
@@ -2954,7 +2921,6 @@ _(BRIDGE_DOMAIN_DUMP, bridge_domain_dump)                               \
 _(CLASSIFY_SET_INTERFACE_IP_TABLE, classify_set_interface_ip_table)	\
 _(CLASSIFY_SET_INTERFACE_L2_TABLES, classify_set_interface_l2_tables)	\
 _(ADD_NODE_NEXT, add_node_next)						\
-_(DHCP_PROXY_CONFIG_2, dhcp_proxy_config_2)	                        \
 _(DHCP_CLIENT_CONFIG, dhcp_client_config)	                        \
 _(L2TPV3_CREATE_TUNNEL, l2tpv3_create_tunnel)                           \
 _(L2TPV3_SET_TUNNEL_COOKIES, l2tpv3_set_tunnel_cookies)                 \
@@ -3022,8 +2988,8 @@ _(IP_SOURCE_AND_PORT_RANGE_CHECK_ADD_DEL,                               \
 _(IP_SOURCE_AND_PORT_RANGE_CHECK_INTERFACE_ADD_DEL,                     \
   ip_source_and_port_range_check_interface_add_del)                     \
 _(LISP_ENABLE_DISABLE, lisp_enable_disable)                             \
-_(LISP_GPE_ENABLE_DISABLE, lisp_gpe_enable_disable)                     \
-_(LISP_GPE_ADD_DEL_IFACE, lisp_gpe_add_del_iface)                       \
+_(GPE_ENABLE_DISABLE, gpe_enable_disable)                               \
+_(GPE_ADD_DEL_IFACE, gpe_add_del_iface)                                 \
 _(LISP_PITR_SET_LOCATOR_SET, lisp_pitr_set_locator_set)                 \
 _(LISP_MAP_REQUEST_MODE, lisp_map_request_mode)                         \
 _(SHOW_LISP_MAP_REQUEST_MODE, show_lisp_map_request_mode)               \
@@ -3033,7 +2999,7 @@ _(LISP_ADD_DEL_MAP_REQUEST_ITR_RLOCS,                                   \
   lisp_add_del_map_request_itr_rlocs)                                   \
 _(LISP_EID_TABLE_ADD_DEL_MAP, lisp_eid_table_add_del_map)               \
 _(LISP_ADD_DEL_LOCAL_EID, lisp_add_del_local_eid)                       \
-_(LISP_GPE_ADD_DEL_FWD_ENTRY, lisp_gpe_add_del_fwd_entry)               \
+_(GPE_ADD_DEL_FWD_ENTRY, gpe_add_del_fwd_entry)                         \
 _(LISP_ADD_DEL_LOCATOR_SET, lisp_add_del_locator_set)                   \
 _(LISP_ADD_DEL_MAP_RESOLVER, lisp_add_del_map_resolver)                 \
 _(LISP_ADD_DEL_LOCATOR, lisp_add_del_locator)                           \

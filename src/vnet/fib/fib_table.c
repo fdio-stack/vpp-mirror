@@ -1043,6 +1043,7 @@ fib_table_destroy (fib_table_t *fib_table)
 	break;
     }
 }
+
 void
 fib_table_walk (u32 fib_index,
                 fib_protocol_t proto,
@@ -1062,7 +1063,6 @@ fib_table_walk (u32 fib_index,
 	break;
     }
 }
-
 
 void
 fib_table_unlock (u32 fib_index,
@@ -1162,7 +1162,7 @@ fib_table_flush (u32 fib_index,
 
     vec_foreach(fib_entry_index, ctx.ftf_entries)
     {
-        fib_entry_delete(*fib_entry_index, source);
+        fib_table_entry_delete_index(*fib_entry_index, source);
     }
 
     vec_free(ctx.ftf_entries);

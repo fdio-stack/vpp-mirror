@@ -24,14 +24,24 @@ DPDK_MLX5_PMD         ?= n
 
 B := $(DPDK_BUILD_DIR)
 I := $(DPDK_INSTALL_DIR)
-DPDK_VERSION ?= 16.11
-PKG_SUFFIX ?= vpp5
+DPDK_VERSION ?= 17.02
+PKG_SUFFIX ?= vpp1
 DPDK_BASE_URL ?= http://fast.dpdk.org/rel
 DPDK_TARBALL := dpdk-$(DPDK_VERSION).tar.xz
 DPDK_TAR_URL := $(DPDK_BASE_URL)/$(DPDK_TARBALL)
 DPDK_16.07_TARBALL_MD5_CKSUM := 690a2bb570103e58d12f9806e8bf21be
 DPDK_16.11_TARBALL_MD5_CKSUM := 06c1c577795360719d0b4fafaeee21e9
+DPDK_17.02_TARBALL_MD5_CKSUM := 6b9f7387c35641f4e8dbba3e528f2376
 DPDK_SOURCE := $(B)/dpdk-$(DPDK_VERSION)
+
+ifeq ($(DPDK_CRYPTO_SW_PMD),y)
+AESNIMB_LIB_TARBALL := v0.44.tar.gz
+AESNIMB_LIB_TARBALL_URL := http://github.com/01org/intel-ipsec-mb/archive/$(AESNIMB_LIB_TARBALL)
+AESNIMB_LIB_SOURCE := $(B)/intel-ipsec-mb-0.44
+ISA_L_CRYPTO_LIB_TARBALL := isa_l_crypto.tar.gz
+ISA_L_CRYPTO_LIB_TARBALL_URL := http://github.com/01org/isa-l_crypto/archive/master.tar.gz
+ISA_L_CRYPTO_LIB_SOURCE := $(B)/isa-l_crypto-master
+endif
 
 ifneq (,$(findstring clang,$(CC)))
 DPDK_CC=clang
@@ -75,6 +85,12 @@ ifeq ($(DPDK_DEBUG),n)
 DPDK_EXTRA_CFLAGS := -g -mtune=$(DPDK_TUNE)
 else
 DPDK_EXTRA_CFLAGS := -g -O0
+endif
+
+ifeq ($(DPDK_CRYPTO_SW_PMD),y)
+DPDK_EXTRA_CFLAGS += -I$(ISA_L_CRYPTO_LIB_SOURCE)
+DPDK_EXTRA_LDFLAGS += -L$(ISA_L_CRYPTO_LIB_SOURCE)/.libs
+DPDK_MAKE_EXTRA_ARGS += AESNI_MULTI_BUFFER_LIB_PATH=$(AESNIMB_LIB_SOURCE)
 endif
 
 # assemble DPDK make arguments
@@ -143,6 +159,16 @@ $(CURDIR)/$(DPDK_TARBALL):
 		then cp $(DPDK_DOWNLOAD_DIR)/$(DPDK_TARBALL) $(CURDIR) ; \
 		else curl -o $(CURDIR)/$(DPDK_TARBALL) -LO $(DPDK_TAR_URL) ; \
 	fi
+ifeq ($(DPDK_CRYPTO_SW_PMD),y)
+	@if [ -e $(DPDK_DOWNLOAD_DIR)/$(AESNIMB_LIB_TARBALL) ] ; \
+		then cp $(DPDK_DOWNLOAD_DIR)/$(AESNIMB_LIB_TARBALL) $(CURDIR) ; \
+		else curl -o $(CURDIR)/$(AESNIMB_LIB_TARBALL) -LO $(AESNIMB_LIB_TARBALL_URL) ; \
+	fi
+	@if [ -e $(DPDK_DOWNLOAD_DIR)/$(ISA_L_CRYPTO_LIB_TARBALL) ] ; \
+		then cp $(DPDK_DOWNLOAD_DIR)/$(ISA_L_CRYPTO_LIB_TARBALL) $(CURDIR) ; \
+		else curl -o $(CURDIR)/$(ISA_L_CRYPTO_LIB_TARBALL) -LO $(ISA_L_CRYPTO_LIB_TARBALL_URL) ; \
+	fi
+endif
 	@rm -f $(B)/.download.ok
 
 $(B)/.download.ok: $(CURDIR)/$(DPDK_TARBALL)
@@ -159,6 +185,12 @@ download: $(B)/.download.ok
 $(B)/.extract.ok: $(B)/.download.ok
 	@echo --- extracting $(DPDK_TARBALL) ---
 	@tar --directory $(B) --extract --file $(CURDIR)/$(DPDK_TARBALL)
+ifeq ($(DPDK_CRYPTO_SW_PMD),y)
+	@echo --- extracting $(AESNIMB_LIB_TARBALL) ---
+	@tar --directory $(B) --extract --file $(CURDIR)/$(AESNIMB_LIB_TARBALL)
+	@echo --- extracting $(ISA_L_CRYPTO_LIB_TARBALL) ---
+	@tar --directory $(B) --extract --file $(CURDIR)/$(ISA_L_CRYPTO_LIB_TARBALL)
+endif
 	@touch $@
 
 .PHONY: extract
@@ -178,6 +210,12 @@ endif
 patch: $(B)/.patch.ok
 
 $(B)/.config.ok: $(B)/.patch.ok $(B)/custom-config
+ifeq ($(DPDK_CRYPTO_SW_PMD),y)
+	@make -C $(AESNIMB_LIB_SOURCE)
+	@cd $(ISA_L_CRYPTO_LIB_SOURCE) && ./autogen.sh && ./configure
+	@make -C $(ISA_L_CRYPTO_LIB_SOURCE)
+	@cp $(ISA_L_CRYPTO_LIB_SOURCE)/include $(ISA_L_CRYPTO_LIB_SOURCE)/isa-l_crypto -r
+endif
 	@make $(DPDK_MAKE_ARGS) config
 	@touch $@
 
@@ -187,6 +225,10 @@ config: $(B)/.config.ok
 $(B)/.build.ok: $(DPDK_SOURCE_FILES)
 	@if [ ! -e $(B)/.config.ok ] ; then echo 'Please run "make config" first' && false ; fi
 	@make $(DPDK_MAKE_ARGS) install
+ifeq ($(DPDK_CRYPTO_SW_PMD),y)
+	@cp $(AESNIMB_LIB_SOURCE)/libIPSec_MB.a $(I)/lib/
+	@cp $(ISA_L_CRYPTO_LIB_SOURCE)/.libs/libisal_crypto.a $(I)/lib/
+endif
 	@touch $@
 
 .PHONY: build
