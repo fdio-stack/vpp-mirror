@@ -1,4 +1,5 @@
 import os
+import socket
 import fnmatch
 import time
 from hook import Hook
@@ -251,9 +252,10 @@ class VppPapiProvider(object):
                         {'sw_if_index': sw_if_index,
                          'enable': is_enable})
 
-    def sw_interface_ra_suppress(self, sw_if_index):
+    def sw_interface_ra_suppress(self, sw_if_index, suppress=1):
         return self.api(self.papi.sw_interface_ip6nd_ra_config,
-                        {'sw_if_index': sw_if_index})
+                        {'sw_if_index': sw_if_index,
+                         'suppress': suppress})
 
     def ip6_sw_interface_ra_config(self, sw_if_index,
                                    no,
@@ -601,6 +603,9 @@ class VppPapiProvider(object):
     def ip_fib_dump(self):
         return self.api(self.papi.ip_fib_dump, {})
 
+    def ip6_fib_dump(self):
+        return self.api(self.papi.ip6_fib_dump, {})
+
     def ip_neighbor_add_del(self,
                             sw_if_index,
                             mac_address,
@@ -720,6 +725,9 @@ class VppPapiProvider(object):
              'dst_address': dst_address,
              'outer_fib_id': outer_fib_id}
         )
+
+    def mpls_fib_dump(self):
+        return self.api(self.papi.mpls_fib_dump, {})
 
     def mpls_route_add_del(
             self,
@@ -1232,16 +1240,14 @@ class VppPapiProvider(object):
                           rx_table_id=0,
                           server_table_id=0,
                           is_add=1,
-                          is_ipv6=0,
-                          insert_circuit_id=0):
+                          is_ipv6=0):
         return self.api(
-            self.papi.dhcp_proxy_config_2,
+            self.papi.dhcp_proxy_config,
             {
                 'rx_vrf_id': rx_table_id,
                 'server_vrf_id': server_table_id,
                 'is_ipv6': is_ipv6,
                 'is_add': is_add,
-                'insert_circuit_id': insert_circuit_id,
                 'dhcp_server': dhcp_server,
                 'dhcp_src_address': dhcp_src_address,
             })
@@ -1291,3 +1297,140 @@ class VppPapiProvider(object):
 
     def mfib_signal_dump(self):
         return self.api(self.papi.mfib_signal_dump, {})
+
+    def ip_mfib_dump(self):
+        return self.api(self.papi.ip_mfib_dump, {})
+
+    def lisp_enable_disable(self, is_enabled):
+        return self.api(
+            self.papi.lisp_enable_disable,
+            {
+                'is_en': is_enabled,
+            })
+
+    def lisp_locator_set(self,
+                         ls_name,
+                         is_add=1):
+        return self.api(
+            self.papi.lisp_add_del_locator_set,
+            {
+                'is_add': is_add,
+                'locator_set_name': ls_name
+            })
+
+    def lisp_locator_set_dump(self):
+        return self.api(self.papi.lisp_locator_set_dump, {})
+
+    def lisp_locator(self,
+                     ls_name,
+                     sw_if_index,
+                     priority=1,
+                     weight=1,
+                     is_add=1):
+        return self.api(
+            self.papi.lisp_add_del_locator,
+            {
+                'is_add': is_add,
+                'locator_set_name': ls_name,
+                'sw_if_index': sw_if_index,
+                'priority': priority,
+                'weight': weight
+            })
+
+    def lisp_locator_dump(self, is_index_set, ls_name=None, ls_index=0):
+        return self.api(
+            self.papi.lisp_locator_dump,
+            {
+                'is_index_set': is_index_set,
+                'ls_name': ls_name,
+                'ls_index': ls_index,
+            })
+
+    def lisp_local_mapping(self,
+                           ls_name,
+                           eid_type,
+                           eid,
+                           prefix_len,
+                           vni=0,
+                           key_id=0,
+                           key="",
+                           is_add=1):
+        return self.api(
+            self.papi.lisp_add_del_local_eid,
+            {
+                'locator_set_name': ls_name,
+                'is_add': is_add,
+                'eid_type': eid_type,
+                'eid': eid,
+                'prefix_len': prefix_len,
+                'vni': vni,
+                'key_id': key_id,
+                'key': key
+            })
+
+    def lisp_eid_table_dump(self,
+                            eid_set=0,
+                            prefix_length=0,
+                            vni=0,
+                            eid_type=0,
+                            eid=None,
+                            filter_opt=0):
+        return self.api(
+            self.papi.lisp_eid_table_dump,
+            {
+                'eid_set': eid_set,
+                'prefix_length': prefix_length,
+                'vni': vni,
+                'eid_type': eid_type,
+                'eid': eid,
+                'filter': filter_opt,
+            })
+
+    def lisp_remote_mapping(self,
+                            eid_type,
+                            eid,
+                            eid_prefix_len=0,
+                            vni=0,
+                            rlocs=None,
+                            rlocs_num=0,
+                            is_src_dst=0,
+                            is_add=1):
+        return self.api(
+            self.papi.lisp_add_del_remote_mapping,
+            {
+                'is_add': is_add,
+                'eid_type': eid_type,
+                'eid': eid,
+                'eid_len': eid_prefix_len,
+                'rloc_num': rlocs_num,
+                'rlocs': rlocs,
+                'vni': vni,
+                'is_src_dst': is_src_dst,
+            })
+
+    def lisp_adjacency(self,
+                       leid,
+                       reid,
+                       leid_len,
+                       reid_len,
+                       eid_type,
+                       is_add=1,
+                       vni=0):
+        return self.api(
+            self.papi.lisp_add_del_adjacency,
+            {
+                'is_add': is_add,
+                'vni': vni,
+                'eid_type': eid_type,
+                'leid': leid,
+                'reid': reid,
+                'leid_len': leid_len,
+                'reid_len': reid_len,
+            })
+
+    def lisp_adjacencies_get(self, vni=0):
+        return self.api(
+            self.papi.lisp_adjacencies_get,
+            {
+                'vni': vni
+            })
