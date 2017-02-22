@@ -43,7 +43,6 @@ define map_another_segment_reply {
     @param tx_fifo_size - size of the tx fifo in bytes
 */
 define accept_session {
- /* To shut up the jvpp compiler... */
   u32 client_index;
   u32 context;
   u32 accept_cookie;
@@ -66,9 +65,7 @@ define accept_session {
     @param tx_fifo_size - size of the tx fifo in bytes
 */
 define accept_session_reply {
-  /** VPP context */
   u32 context;
-  /* $$$ may mean "I don't want this connection, flush it" */
   i32 retval;
   u8 session_type;
   u8 session_thread_index;
@@ -77,7 +74,7 @@ define accept_session_reply {
 
 /** \brief bidirectional disconnect API
     @param client_index - opaque cookie to identify the sender
-    client to vpp direction only
+                          client to vpp direction only
     @param context - sender context, to match reply w/ request
     @param session_index - cookie #1 from accept_session / connect_reply
     @param session_thread_index - cookie #2
@@ -91,7 +88,7 @@ define disconnect_session {
 
 /** \brief bidirectional disconnect reply API
     @param client_index - opaque cookie to identify the sender
-    client to vpp direction only
+                          client to vpp direction only
     @param client_context - sender context, to match reply w/ request
     @param vpp_context - vpp context, to match reply w/ request
 */
@@ -108,7 +105,7 @@ define disconnect_session_reply {
     @param context - sender context, to match reply w/ request
     @param accept_cookie - sender accept cookie, to identify this bind flavor
     @param uri - a URI, e.g. "tcp://0.0.0.0/0/80" [ipv4]
-    "tcp://::/0/80" [ipv6], "fifo:/myfifo", etc.
+                 "tcp://::/0/80" [ipv6] etc.
     @param options - socket options, fifo sizes, etc.
 */
 define bind_uri {
@@ -144,7 +141,7 @@ define bind_uri_reply {
     @param context - sender context, to match reply w/ request
     @param accept_cookie - sender accept cookie, to identify this bind flavor
     @param uri - a URI, e.g. "tcp4://0.0.0.0/0/80"
-    "tcp6://::/0/80" [ipv6], "fifo:/myfifo", etc.
+                 "tcp6://::/0/80" [ipv6], etc.
     @param options - socket options, fifo sizes, etc.
 */
 define connect_uri {
@@ -185,11 +182,11 @@ define connect_uri_reply {
   u8 segment_name[128];
 };
 
-/** \brief Unind a given URI
+/** \brief Unbind a given URI
     @param client_index - opaque cookie to identify the sender
     @param context - sender context, to match reply w/ request
     @param uri - a URI, e.g. "tcp://0.0.0.0/0/80" [ipv4]
-    "tcp://::/0/80" [ipv6], "fifo:/myfifo", etc.
+                 "tcp://::/0/80" [ipv6], etc.
     @param options - socket options, fifo sizes, etc.
 */
 define unbind_uri {

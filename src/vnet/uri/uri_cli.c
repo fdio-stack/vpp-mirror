@@ -16,7 +16,7 @@
 
 /* types: fifo, tcp4, udp4, tcp6, udp6 */
 u8 *
-format_bind_table_entry (u8 * s, va_list * args)
+format_application_server (u8 * s, va_list * args)
 {
   uri_bind_table_entry_t * e = va_arg (*args, uri_bind_table_entry_t *);
   int verbose = va_arg (*args, int);
@@ -71,12 +71,12 @@ show_uri_command_fn (vlib_main_t * vm, unformat_input_t * input,
     {
       if (pool_elts (um->fifo_bind_table))
         {
-          vlib_cli_output (vm, "%U", format_bind_table_entry, 0 /* header */,
+          vlib_cli_output (vm, "%U", format_application_server, 0 /* header */,
                            verbose);
           /* *INDENT-OFF* */
           pool_foreach (e, um->fifo_bind_table,
           ({
-            vlib_cli_output (vm, "%U", format_bind_table_entry, e, verbose);
+            vlib_cli_output (vm, "%U", format_application_server, e, verbose);
           }));
           /* *INDENT-OFF* */
         }
@@ -122,7 +122,7 @@ show_uri_command_fn (vlib_main_t * vm, unformat_input_t * input,
                     str = format (str, "%-20llx%-20llx%-15lld",
                                   s->server_rx_fifo, s->server_tx_fifo,
                                   s - pool);
-                    tp_vft = uri_get_transport (s->session_type);
+                    tp_vft = session_get_transport_vft (s->session_type);
                     vlib_cli_output (vm, "%U%v",
                                      tp_vft->format_connection,
                                      s->connection_index,
@@ -183,10 +183,9 @@ clear_uri_session_command_fn (vlib_main_t * vm,
     return clib_error_return (0, "session %d not active", session_index);
 
   session = pool_elt_at_index (pool, session_index);
+  server = application_get (session->app_index);
 
-  server = pool_elt_at_index (smm->applications, session->server_index);
-
-  server->session_clear_callback (smm, server, session);
+  server->cb_fns->session_clear_callback (smm, server, session);
 
   return 0;
 }

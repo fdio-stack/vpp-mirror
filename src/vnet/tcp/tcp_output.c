@@ -485,6 +485,8 @@ tcp_send_reset (vlib_buffer_t *pkt, u8 is_ip4)
   u8 tcp_hdr_len, flags = 0;
   tcp_header_t *th, *pkt_th;
   u32 seq, ack;
+  ip4_header_t *ih4, *pkt_ih4;
+  ip6_header_t *ih6, *pkt_ih6;
 
   tcp_get_free_buffer_index (tm, &bi);
   b = vlib_get_buffer (vm, bi);
@@ -495,7 +497,17 @@ tcp_send_reset (vlib_buffer_t *pkt, u8 is_ip4)
   /* Make and write options */
   tcp_hdr_len = sizeof (tcp_header_t);
 
-  pkt_th = vlib_buffer_get_current (pkt);
+  if (is_ip4)
+    {
+      pkt_ih4 = vlib_buffer_get_current (pkt);
+      pkt_th = ip4_next_header (pkt_ih4);
+    }
+  else
+    {
+      pkt_ih6 = vlib_buffer_get_current (pkt);
+      pkt_th = ip6_next_header (pkt_ih6);
+    }
+
   if (tcp_ack (pkt_th))
     {
      flags = TCP_FLAG_RST;
@@ -512,29 +524,26 @@ tcp_send_reset (vlib_buffer_t *pkt, u8 is_ip4)
   th = pkt_push_tcp_net_order (b, pkt_th->dst_port, pkt_th->src_port, seq, ack,
                                tcp_hdr_len, flags, 0);
 
+  /* Swap src and dst ip */
   if (is_ip4)
     {
-      ip4_header_t * ih, *pkt_ih;
 
-      pkt_ih = (ip4_header_t *) (pkt_th - 1);
+      ASSERT((pkt_ih4->ip_version_and_header_length & 0xF0) == 0x40);
 
-      ASSERT((pkt_ih->ip_version_and_header_length & 0xF0) == 0x40);
-
-      ih = pkt_push_ipv4 (vm, b, &pkt_ih->dst_address, &pkt_ih->src_address,
+      ih4 = pkt_push_ipv4 (vm, b, &pkt_ih4->dst_address, &pkt_ih4->src_address,
                           IP_PROTOCOL_TCP);
-      th->checksum = ip4_tcp_udp_compute_checksum (vm, b, ih);
+      th->checksum = ip4_tcp_udp_compute_checksum (vm, b, ih4);
     }
   else
     {
-      ip6_header_t * ih, *pkt_ih;
       int bogus = ~0;
 
-      pkt_ih = (ip6_header_t *) (pkt_th - 1);
+      pkt_ih6 = (ip6_header_t *) (pkt_th - 1);
 
-      ASSERT((pkt_ih->ip_version_traffic_class_and_flow_label & 0xF0) == 0x60);
-      ih = pkt_push_ipv6 (vm, b, &pkt_ih->dst_address, &pkt_ih->dst_address,
+      ASSERT((pkt_ih6->ip_version_traffic_class_and_flow_label & 0xF0) == 0x60);
+      ih6 = pkt_push_ipv6 (vm, b, &pkt_ih6->dst_address, &pkt_ih6->dst_address,
                           IP_PROTOCOL_TCP);
-      th->checksum = ip6_tcp_udp_icmp_compute_checksum (vm, b, ih, &bogus);
+      th->checksum = ip6_tcp_udp_icmp_compute_checksum (vm, b, ih6, &bogus);
       ASSERT(!bogus);
     }
 
@@ -622,7 +631,7 @@ tcp_send_syn (tcp_connection_t *tc)
   tc->rto_boff = 0;
 
   /* Set the connection establishment timer */
-  tcp_timer_set (tm, tc, TCP_TIMER_KEEP, TCP_ESTABLISH_TIME);
+  tcp_timer_set (tm, tc, TCP_TIMER_ESTABLISH, TCP_ESTABLISH_TIME);
 
   tcp_push_ip_hdr (tm, tc, b);
   tcp_enqueue_to_ip_lookup (vm, b, bi, tc->c_is_ip4);

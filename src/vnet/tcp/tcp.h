@@ -21,7 +21,7 @@
 #include <vnet/tcp/tcp_packet.h>
 #include <vnet/tcp/tcp_timer.h>
 #include <vnet/session/transport.h>
-#include <vnet/uri/uri.h>
+#include <vnet/session/session.h>
 
 #define TCP_TICK 10e-3                  /**< TCP tick period (s) */
 #define THZ 1/TCP_TICK                  /**< TCP tick frequency */
@@ -64,7 +64,7 @@ format_function_t format_tcp_state;
   _(KEEP, "KEEP")                       \
   _(2MSL, "2MSL")                       \
   _(RETRANSMIT_SYN, "RETRANSMIT_SYN")   \
-  _(KEEP_SYN, "KEEP_SYN")
+  _(ESTABLISH, "ESTABLISH")
 
 typedef enum _tcp_timers
 {

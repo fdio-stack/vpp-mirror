@@ -16,6 +16,7 @@
 #include <vnet/vnet.h>
 #include <vlibmemory/api.h>
 #include <vnet/uri/uri.h>
+#include <vnet/session/application.h>
 
 #include <vnet/vnet_msg_enum.h>
 
@@ -44,14 +45,15 @@ _(ACCEPT_SESSION_REPLY, accept_session_reply)                           \
 _(DISCONNECT_SESSION, disconnect_session)                               \
 _(DISCONNECT_SESSION_REPLY, disconnect_session_reply)                   \
 
-int
-send_session_create_callback (application_t * ss, stream_session_t * s,
-                              unix_shared_memory_queue_t * vpp_event_queue)
+static int
+send_session_accept_callback (stream_session_t *s)
 {
   vl_api_accept_session_t * mp;
-  unix_shared_memory_queue_t * q;
+  unix_shared_memory_queue_t * q, *vpp_queue;
+  application_t *server = application_get (s->app_index);
 
-  q = vl_api_client_index_to_input_queue (ss->api_client_index);
+  q = vl_api_client_index_to_input_queue (server->api_client_index);
+  vpp_queue = session_manager_get_vpp_event_queue (s->session_thread_index);
 
   if (!q)
     return -1;
@@ -61,26 +63,32 @@ send_session_create_callback (application_t * ss, stream_session_t * s,
 
   /* Note: session_type is the first octet in all types of sessions */
 
-  mp->accept_cookie = ss->accept_cookie;
+  mp->accept_cookie = server->accept_cookie;
   mp->server_rx_fifo = (u64) s->server_rx_fifo;
   mp->server_tx_fifo = (u64) s->server_tx_fifo;
   mp->session_thread_index = s->session_thread_index;
   mp->session_index = s->session_index;
   mp->session_type = s->session_type;
-  mp->vpp_event_queue_address = (u64) vpp_event_queue;
+  mp->vpp_event_queue_address = (u64) vpp_queue;
   vl_msg_api_send_shmem (q, (u8 *) & mp);
 
   return 0;
 }
 
-int
-send_add_segment_callback (application_t * ss, u8 * segment_name,
+static void
+send_session_delete_callback (stream_session_t * s)
+{
+  clib_warning ("not finished");
+}
+
+static int
+send_add_segment_callback (u32 api_client_index, const u8 *segment_name,
                            u32 segment_size)
 {
   vl_api_map_another_segment_t * mp;
   unix_shared_memory_queue_t * q;
 
-  q = vl_api_client_index_to_input_queue (ss->api_client_index);
+  q = vl_api_client_index_to_input_queue (api_client_index);
 
   if (!q)
     return -1;
@@ -97,18 +105,17 @@ send_add_segment_callback (application_t * ss, u8 * segment_name,
   return 0;
 }
 
-int
-send_session_clear_callback (session_manager_main_t * smm, application_t * ss,
-                                 stream_session_t * s)
-
+static void
+send_session_clear_callback (stream_session_t *s)
 {
   vl_api_accept_session_t * mp;
   unix_shared_memory_queue_t * q;
+  application_t *app = application_get (s->app_index);
 
-  q = vl_api_client_index_to_input_queue (ss->api_client_index);
+  q = vl_api_client_index_to_input_queue (app->api_client_index);
 
   if (!q)
-    return -1;
+    return;
 
   mp = vl_msg_api_alloc (sizeof (*mp));
   memset (mp, 0, sizeof (*mp));
@@ -118,7 +125,6 @@ send_session_clear_callback (session_manager_main_t * smm, application_t * ss,
   mp->session_index = s->session_index;
   vl_msg_api_send_shmem (q, (u8 *) & mp);
 
-  return 0;
 }
 
 /**
@@ -126,7 +132,7 @@ send_session_clear_callback (session_manager_main_t * smm, application_t * ss,
  * Only sent if the server has bound the related port with
  * URI_OPTIONS_FLAGS_USE_FIFO
  */
-int
+static int
 redirect_connect_uri_callback (u32 server_api_client_index, void * mp_arg)
 {
   vl_api_connect_uri_t * mp = mp_arg;
@@ -183,16 +189,17 @@ redirect_connect_uri_callback (u32 server_api_client_index, void * mp_arg)
   return rv;
 }
 
-int
-session_connected_callback (application_t *app, stream_session_t *s,
-                            unix_shared_memory_queue_t * vpp_event_queue,
-                            u8 code)
+static int
+send_session_connected_callback (stream_session_t *s, u8 is_fail)
 {
   vl_api_connect_uri_reply_t * mp;
   unix_shared_memory_queue_t * q;
+  application_t *app = application_get (s->app_index);
   u8 *seg_name;
+  unix_shared_memory_queue_t *vpp_queue;
 
   q = vl_api_client_index_to_input_queue (app->api_client_index);
+  vpp_queue = session_manager_get_vpp_event_queue (s->session_thread_index);
 
   if (!q)
     return -1;
@@ -200,25 +207,41 @@ session_connected_callback (application_t *app, stream_session_t *s,
   mp = vl_msg_api_alloc (sizeof (*mp));
   mp->_vl_msg_id = clib_host_to_net_u16 (VL_API_CONNECT_URI_REPLY);
 
-  mp->retval = code;
-  mp->server_rx_fifo = (u64) s->server_rx_fifo;
-  mp->server_tx_fifo = (u64) s->server_tx_fifo;
-  mp->session_thread_index = s->session_thread_index;
-  mp->session_index = s->session_index;
-  mp->session_type = s->session_type;
-  mp->vpp_event_queue_address = (u64) vpp_event_queue;
-  mp->client_event_queue_address = (u64) app->event_queue;
+  mp->retval = is_fail;
+  if (!is_fail)
+    {
+      mp->server_rx_fifo = (u64) s->server_rx_fifo;
+      mp->server_tx_fifo = (u64) s->server_tx_fifo;
+      mp->session_thread_index = s->session_thread_index;
+      mp->session_index = s->session_index;
+      mp->session_type = s->session_type;
+      mp->vpp_event_queue_address = (u64) vpp_queue;
+      mp->client_event_queue_address = (u64) app->event_queue;
 
-  session_manager_get_segment_info (s->server_segment_index, &seg_name,
-                                    &mp->segment_size);
-  mp->segment_name_length = vec_len (seg_name);
-  if (mp->segment_name_length)
-    clib_memcpy (mp->segment_name, seg_name, mp->segment_name_length);
+      session_manager_get_segment_info (s->server_segment_index, &seg_name,
+                                        &mp->segment_size);
+      mp->segment_name_length = vec_len(seg_name);
+      if (mp->segment_name_length)
+        clib_memcpy (mp->segment_name, seg_name, mp->segment_name_length);
+    }
 
   vl_msg_api_send_shmem (q, (u8 *) & mp);
 
+  /* Remove client if connect failed */
+  if (is_fail)
+    application_del (app);
+
   return 0;
 }
+
+static session_cb_vft_t session_cb_vft = {
+    .session_accept_callback = send_session_accept_callback,
+    .session_delete_callback = send_session_delete_callback,
+    .session_clear_callback = send_session_clear_callback,
+    .session_connected_callback = send_session_connected_callback,
+    .add_segment_callback = send_add_segment_callback,
+    .redirect_connect_callback = redirect_connect_uri_callback
+};
 
 static void
 vl_api_bind_uri_t_handler (vl_api_bind_uri_t * mp)
@@ -243,9 +266,7 @@ vl_api_bind_uri_t_handler (vl_api_bind_uri_t * mp)
   a->options = mp->options;
   a->segment_name = segment_name;
   a->segment_name_length = segment_name_length;
-  a->send_session_create_callback = send_session_create_callback;
-  a->send_session_clear_callback = send_session_clear_callback;
-  a->add_segment_callback = send_add_segment_callback;
+  a->session_cb_vft = &session_cb_vft;
 
   rv = vnet_bind_uri (a);
 
@@ -277,13 +298,14 @@ vl_api_unbind_uri_t_handler (vl_api_unbind_uri_t * mp)
 static void
 vl_api_connect_uri_t_handler (vl_api_connect_uri_t * mp)
 {
-  char segment_name[128];
-  u32 segment_name_length;
+  vnet_connect_uri_args_t _a, *a= &_a;
 
-  segment_name_length = ARRAY_LEN(segment_name);
+  a->uri = (char *) mp->uri;
+  a->api_client_index = mp->client_index;
+  a->options = mp->options;
+  a->session_cb_vft = &session_cb_vft;
 
-  vnet_connect_uri ((char *) mp->uri, mp->client_index, mp->options,
-                    segment_name, &segment_name_length, (void *) mp);
+  vnet_connect_uri (a);
 }
 
 static void
@@ -292,17 +314,23 @@ vl_api_disconnect_session_t_handler (vl_api_disconnect_session_t * mp)
   vl_api_disconnect_session_reply_t * rmp;
   int rv;
 
-  rv = vnet_disconnect_uri (mp->client_index, mp->session_index,
-                                    mp->session_thread_index);
+  if (!(rv = uri_api_session_not_valid (mp->session_index,
+                                       mp->session_thread_index)))
+    rv = vnet_disconnect_uri (mp->client_index, mp->session_index,
+                              mp->session_thread_index);
 
   REPLY_MACRO (VL_API_DISCONNECT_SESSION_REPLY);
 }
 
 static void
-vl_api_disconnect_session_reply_t_handler
-(vl_api_disconnect_session_reply_t * mp)
+vl_api_disconnect_session_reply_t_handler (
+    vl_api_disconnect_session_reply_t * mp)
 {
   int rv;
+
+  if (!(rv = uri_api_session_not_valid (mp->session_index,
+                                       mp->session_thread_index)))
+    return;
 
   /* Client objected to clearing the session, log and continue */
   if (mp->retval)
@@ -312,56 +340,41 @@ vl_api_disconnect_session_reply_t_handler
     }
 
   rv = vnet_disconnect_uri (mp->client_index, mp->session_index,
-                                    mp->session_thread_index);
+                            mp->session_thread_index);
 
   if (rv)
     clib_warning ("vpp retval %d", rv);
 }
 
 static void
-vl_api_map_another_segment_reply_t_handler
-(vl_api_map_another_segment_reply_t * mp)
+vl_api_map_another_segment_reply_t_handler (
+    vl_api_map_another_segment_reply_t * mp)
 {
-
+  clib_warning("not implemented");
 }
 
 static void
-vl_api_accept_session_reply_t_handler (vl_api_accept_session_reply_t * mp)
+vl_api_accept_session_reply_t_handler (vl_api_accept_session_reply_t *mp)
 {
-  session_manager_main_t * smm = vnet_get_session_manager_main ();
-  application_t * ss;
+  application_t * server;
   stream_session_t * s;
   int rv;
 
-  s = pool_elt_at_index (smm->sessions[mp->session_thread_index],
-                         mp->session_index);
+  if (uri_api_session_not_valid (mp->session_index, mp->session_thread_index))
+    return;
 
+  s = stream_session_get (mp->session_index, mp->session_thread_index);
   rv = mp->retval;
 
   if (rv)
     {
       /* Server isn't interested, kill the session */
-      ss = pool_elt_at_index (smm->applications, s->server_index);
-      ss->session_delete_callback (smm, s);
+      server = application_get (s->app_index);
+      server->cb_fns.session_delete_callback (s);
       return;
     }
 
-  switch (s->session_type)
-    {
-    case SESSION_TYPE_IP4_UDP:
-      /* set fifo states to ready */
-      s->session_state = SESSION_STATE_READY;
-      break;
-
-    case SESSION_TYPE_IP4_TCP:
-      s->session_state = SESSION_STATE_READY;
-      break;
-    case SESSION_TYPE_IP6_TCP:
-    case SESSION_TYPE_IP6_UDP:
-    default:
-      clib_warning ("session type %d unimplemented", s->session_type);
-      break;
-    }
+  s->session_state = SESSION_STATE_READY;
 }
 
 #define vl_msg_name_crc_list

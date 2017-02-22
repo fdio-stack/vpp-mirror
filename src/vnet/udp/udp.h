@@ -61,6 +61,7 @@ typedef struct _udp_uri_main
 } udp_uri_main_t;
 
 extern udp_uri_main_t udp_uri_main;
+extern vlib_node_registration_t udp4_uri_input_node;
 
 always_inline udp_uri_main_t *
 vnet_get_udp_main ()

@@ -349,12 +349,12 @@ init_error_string_table (uri_udp_test_main_t * utm)
 }
 
 void handle_fifo_event_server_rx (uri_udp_test_main_t *utm, 
-                                  fifo_event_t * e)
+                                  session_fifo_event_t * e)
 {
   svm_fifo_t * rx_fifo, * tx_fifo;
   int nbytes;
 
-  fifo_event_t evt;
+  session_fifo_event_t evt;
   unix_shared_memory_queue_t *q;
   int rv;
 
@@ -381,7 +381,7 @@ void handle_fifo_event_server_rx (uri_udp_test_main_t *utm,
 
 void handle_event_queue (uri_udp_test_main_t * utm)
 {
-  fifo_event_t _e, *e = &_e;;
+  session_fifo_event_t _e, *e = &_e;;
 
   while (1)
     {

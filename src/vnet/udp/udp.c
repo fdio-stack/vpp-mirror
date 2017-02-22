@@ -124,7 +124,7 @@ uri_tx_ip4_udp (transport_connection_t *tconn, vlib_buffer_t *b)
 
   b->current_length = sizeof (*ip) + sizeof (*udp);
 
-  return URI_QUEUE_NEXT_IP4_LOOKUP;
+  return SESSION_QUEUE_NEXT_IP4_LOOKUP;
 }
 
 transport_connection_t *
@@ -201,8 +201,16 @@ udp_send_space_uri (transport_connection_t *t)
   return ~0;
 }
 
+int
+udp_open_connection (ip46_address_t *addr, u16 port)
+{
+  clib_warning("Not implemented");
+  return 0;
+}
+
 const static transport_proto_vft_t udp4_proto = {
   .bind = vnet_bind_ip4_udp_uri,
+  .open = udp_open_connection,
   .unbind = vnet_unbind_ip4_udp_uri,
   .push_header = uri_tx_ip4_udp,
   .get_connection = uri_udp_session_get,
@@ -238,7 +246,7 @@ uri_udp_module_init (vlib_main_t * vm)
   /* TODO move register udp with IP here */
 
   /* Register as transport with URI */
-  uri_register_transport (SESSION_TYPE_IP4_UDP, &udp4_proto);
+  session_register_transport (SESSION_TYPE_IP4_UDP, &udp4_proto);
 
   /*
    * Initialize data structures

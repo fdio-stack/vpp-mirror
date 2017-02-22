@@ -18,7 +18,6 @@
 #include <vnet/pg/pg.h>
 #include <vnet/ip/ip.h>
 
-#include <vnet/uri/uri.h>
 #include <vnet/tcp/tcp.h>
 
 #include <vppinfra/hash.h>
@@ -30,56 +29,56 @@
 #include <vnet/lisp-cp/packets.h>
 #include <math.h>
 
-vlib_node_registration_t uri_queue_node;
+vlib_node_registration_t session_queue_node;
 
 typedef struct 
 {
   u32 session_index;
   u32 server_thread_index;
-} uri_queue_trace_t;
+} session_queue_trace_t;
 
 /* packet trace format function */
-static u8 * format_uri_queue_trace (u8 * s, va_list * args)
+static u8 * format_session_queue_trace (u8 * s, va_list * args)
 {
   CLIB_UNUSED (vlib_main_t * vm) = va_arg (*args, vlib_main_t *);
   CLIB_UNUSED (vlib_node_t * node) = va_arg (*args, vlib_node_t *);
-  uri_queue_trace_t * t = va_arg (*args, uri_queue_trace_t *);
+  session_queue_trace_t * t = va_arg (*args, session_queue_trace_t *);
   
-  s = format (s, "URI_QUEUE: session index %d, server thread index %d",
+  s = format (s, "SESSION_QUEUE: session index %d, server thread index %d",
               t->session_index, t->server_thread_index);
   return s;
 }
 
-vlib_node_registration_t uri_queue_node;
+vlib_node_registration_t session_queue_node;
 
-#define foreach_uri_queue_error                 \
+#define foreach_session_queue_error                 \
 _(TX, "Packets transmitted")                    \
 _(TIMER, "Timer events")
 
 typedef enum {
-#define _(sym,str) URI_QUEUE_ERROR_##sym,
-  foreach_uri_queue_error
+#define _(sym,str) SESSION_QUEUE_ERROR_##sym,
+  foreach_session_queue_error
 #undef _
-  URI_QUEUE_N_ERROR,
-} uri_queue_error_t;
+  SESSION_QUEUE_N_ERROR,
+} session_queue_error_t;
 
-static char * uri_queue_error_strings[] = {
+static char * session_queue_error_strings[] = {
 #define _(sym,string) string,
-  foreach_uri_queue_error
+  foreach_session_queue_error
 #undef _
 };
 
 static u32 session_type_to_next[] =
 {
-    URI_QUEUE_NEXT_TCP_IP4_OUTPUT,
-    URI_QUEUE_NEXT_IP4_LOOKUP,
-    URI_QUEUE_NEXT_TCP_IP6_OUTPUT,
-    URI_QUEUE_NEXT_IP6_LOOKUP,
+    SESSION_QUEUE_NEXT_TCP_IP4_OUTPUT,
+    SESSION_QUEUE_NEXT_IP4_LOOKUP,
+    SESSION_QUEUE_NEXT_TCP_IP6_OUTPUT,
+    SESSION_QUEUE_NEXT_IP6_LOOKUP,
 };
 
 always_inline int
 session_fifo_rx_i (vlib_main_t *vm, vlib_node_runtime_t *node,
-                 session_manager_main_t *smm, fifo_event_t *e0,
+                 session_manager_main_t *smm, session_fifo_event_t *e0,
                  stream_session_t *s0, u32 thread_index, int *n_tx_packets,
                  u8 peek_data)
 {
@@ -97,7 +96,7 @@ session_fifo_rx_i (vlib_main_t *vm, vlib_node_runtime_t *node,
 
   next_index = next0 = session_type_to_next[s0->session_type];
 
-  transport_vft = uri_get_transport (s0->session_type);
+  transport_vft = session_get_transport_vft (s0->session_type);
   tc0 = transport_vft->get_connection (s0->connection_index,
                                        thread_index);
 
@@ -177,7 +176,7 @@ session_fifo_rx_i (vlib_main_t *vm, vlib_node_runtime_t *node,
           VLIB_BUFFER_TRACE_TRAJECTORY_INIT(b0);
           if (PREDICT_FALSE(n_trace > 0))
             {
-              uri_queue_trace_t *t0;
+              session_queue_trace_t *t0;
               vlib_trace_buffer (vm, node, next_index, b0,
                                  1/* follow_chain */);
               vlib_set_trace_count (vm, node, --n_trace);
@@ -265,7 +264,7 @@ session_fifo_rx_i (vlib_main_t *vm, vlib_node_runtime_t *node,
 
 int
 session_fifo_rx_peek (vlib_main_t *vm, vlib_node_runtime_t *node,
-                      session_manager_main_t *smm, fifo_event_t *e0,
+                      session_manager_main_t *smm, session_fifo_event_t *e0,
                       stream_session_t *s0, u32 thread_index, int *n_tx_pkts)
 {
   return session_fifo_rx_i (vm, node, smm, e0, s0, thread_index, n_tx_pkts, 1);
@@ -273,7 +272,7 @@ session_fifo_rx_peek (vlib_main_t *vm, vlib_node_runtime_t *node,
 
 int
 session_fifo_rx_dequeue (vlib_main_t *vm, vlib_node_runtime_t *node,
-                         session_manager_main_t *smm, fifo_event_t *e0,
+                         session_manager_main_t *smm, session_fifo_event_t *e0,
                          stream_session_t *s0, u32 thread_index, int *n_tx_pkts)
 {
   return session_fifo_rx_i (vm, node, smm, e0, s0, thread_index, n_tx_pkts, 0);
@@ -283,8 +282,8 @@ static uword
 session_queue_node_fn (vlib_main_t * vm, vlib_node_runtime_t * node,
                    vlib_frame_t * frame)
 {
-  session_manager_main_t *smm = &session_manager_main;
-  fifo_event_t *my_fifo_events, *e;
+  session_manager_main_t *smm = vnet_get_session_manager_main ();
+  session_fifo_event_t *my_fifo_events, *e;
   u32 n_to_dequeue;
   unix_shared_memory_queue_t *q;
   int n_tx_packets = 0;
@@ -340,7 +339,7 @@ session_queue_node_fn (vlib_main_t * vm, vlib_node_runtime_t * node,
       svm_fifo_t * f0;          /* $$$ prefetch 1 ahead maybe */
       stream_session_t * s0;
       u32 server_session_index0, server_thread_index0;
-      fifo_event_t *e0;
+      session_fifo_event_t *e0;
 
       e0 = &my_fifo_events[i];
       f0 = e0->fifo;
@@ -378,7 +377,7 @@ session_queue_node_fn (vlib_main_t * vm, vlib_node_runtime_t * node,
   /* Couldn't process all events. Probably out of buffers */
   if (PREDICT_FALSE(i < n_to_dequeue))
     {
-      fifo_event_t *partially_read = smm->evts_partially_read[my_thread_index];
+      session_fifo_event_t *partially_read = smm->evts_partially_read[my_thread_index];
       vec_add(partially_read, &my_fifo_events[i], n_to_dequeue - i);
       vec_free(my_fifo_events);
       smm->fifo_events[my_thread_index] = partially_read;
@@ -392,36 +391,34 @@ session_queue_node_fn (vlib_main_t * vm, vlib_node_runtime_t * node,
       smm->evts_partially_read[my_thread_index] = 0;
     }
 
-  vlib_node_increment_counter (vm, uri_queue_node.index, URI_QUEUE_ERROR_TX,
-                               n_tx_packets);
+  vlib_node_increment_counter (vm, session_queue_node.index,
+                               SESSION_QUEUE_ERROR_TX, n_tx_packets);
 
   return n_tx_packets;
 }
 
-VLIB_REGISTER_NODE (uri_queue_node) = {
+VLIB_REGISTER_NODE (session_queue_node) = {
   .function = session_queue_node_fn,
   .name = "session-queue",
-  .format_trace = format_uri_queue_trace,
+  .format_trace = format_session_queue_trace,
   .type = VLIB_NODE_TYPE_INPUT,
   
-  .n_errors = ARRAY_LEN(uri_queue_error_strings),
-  .error_strings = uri_queue_error_strings,
+  .n_errors = ARRAY_LEN(session_queue_error_strings),
+  .error_strings = session_queue_error_strings,
 
-  .n_next_nodes = URI_QUEUE_N_NEXT,
+  .n_next_nodes = SESSION_QUEUE_N_NEXT,
 
   /* .state = VLIB_NODE_STATE_DISABLED, enable on-demand? */
 
   /* edit / add dispositions here */
   .next_nodes = {
-    [URI_QUEUE_NEXT_DROP] = "error-drop",
-    [URI_QUEUE_NEXT_IP4_LOOKUP] = "ip4-lookup",
-    [URI_QUEUE_NEXT_IP6_LOOKUP] = "ip6-lookup",
-    [URI_QUEUE_NEXT_TCP_IP4_OUTPUT] = "tcp4-output",
-    [URI_QUEUE_NEXT_TCP_IP6_OUTPUT] = "tcp6-output",
+    [SESSION_QUEUE_NEXT_DROP] = "error-drop",
+    [SESSION_QUEUE_NEXT_IP4_LOOKUP] = "ip4-lookup",
+    [SESSION_QUEUE_NEXT_IP6_LOOKUP] = "ip6-lookup",
+    [SESSION_QUEUE_NEXT_TCP_IP4_OUTPUT] = "tcp4-output",
+    [SESSION_QUEUE_NEXT_TCP_IP6_OUTPUT] = "tcp6-output",
   },
 };
-
-/* Uses stream_server_main_t, currently no init routine */
 
 /*
  * fd.io coding-style-patch-verification: ON

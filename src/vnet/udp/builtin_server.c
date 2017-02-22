@@ -22,35 +22,34 @@
 #include <vnet/session/session.h>
 #include <vnet/uri/uri.h>
 
-static int builtin_session_create_callback 
-(application_t * ss, stream_session_t * s,
- unix_shared_memory_queue_t * vpp_event_queue)
+/** per-worker built-in server copy buffers */
+u8 **copy_buffers;
+
+static int
+builtin_session_create_callback (stream_session_t * s)
 {
   /* Simple version: declare session ready-to-go... */
   s->session_state = SESSION_STATE_READY;
   return 0;
 }
 
-static int builtin_session_clear_callback (session_manager_main_t * ssm, 
-                                           application_t * ss,
-                                           stream_session_t * s)
+static void
+builtin_session_clear_callback (stream_session_t * s)
 {
-  stream_session_delete (ssm, s);
-  return 0;
+  stream_session_delete (s);
 }
 
-static int builtin_server_rx_callback (session_manager_main_t * ssm, 
-                                       application_t * ss,
-                                       stream_session_t * s)
+static int
+builtin_server_rx_callback (stream_session_t *s)
 {
   svm_fifo_t * rx_fifo, * tx_fifo;
   u32 this_transfer;
   int actual_transfer;
   u8 * my_copy_buffer;
-  fifo_event_t evt;
+  session_fifo_event_t evt;
   unix_shared_memory_queue_t *q;
 
-  my_copy_buffer = ssm->copy_buffers [s->session_thread_index];
+  my_copy_buffer = copy_buffers [s->session_thread_index];
   rx_fifo = s->server_rx_fifo;
   tx_fifo = s->server_tx_fifo;
 
@@ -67,7 +66,7 @@ static int builtin_server_rx_callback (session_manager_main_t * ssm,
   actual_transfer = svm_fifo_enqueue_nowait2 (tx_fifo, 0, this_transfer,
                                               my_copy_buffer);
                                               
-  ssm->copy_buffers [s->session_thread_index] = my_copy_buffer;
+  copy_buffers [s->session_thread_index] = my_copy_buffer;
 
   /* Fabricate TX event, send to ourselves */
   evt.fifo = tx_fifo;
@@ -75,11 +74,17 @@ static int builtin_server_rx_callback (session_manager_main_t * ssm,
   /* $$$$ for event logging */
   evt.enqueue_length = actual_transfer;
   evt.event_id = 0;
-  q = ssm->vpp_event_queues[s->session_thread_index];
+  q = session_manager_get_vpp_event_queue(s->session_thread_index);
   unix_shared_memory_queue_add (q, (u8 *)&evt, 0 /* do wait for mutex */);
 
   return 0;
 }
+
+static session_cb_vft_t builtin_server = {
+    .session_accept_callback = builtin_session_create_callback,
+    .session_clear_callback = builtin_session_clear_callback,
+    .builtin_server_rx_callback = builtin_server_rx_callback
+};
 
 static int
 bind_builtin_uri_server (u8 * uri)
@@ -100,9 +105,7 @@ bind_builtin_uri_server (u8 * uri)
   a->options = 0; /*$$$$ eventually */
   a->segment_name = segment_name;
   a->segment_name_length = segment_name_length;
-  a->send_session_create_callback = builtin_session_create_callback;
-  a->send_session_clear_callback = builtin_session_clear_callback;
-  a->builtin_server_rx_callback = builtin_server_rx_callback;
+  a->session_cb_vft = &builtin_server;
 
   rv = vnet_bind_uri (a);
 
@@ -117,6 +120,20 @@ static int unbind_builtin_uri_server (u8 * uri)
 
   return rv;
 }
+
+static clib_error_t *
+builtin_server_init (vlib_main_t *vm)
+{
+  vlib_thread_main_t *vtm = vlib_get_thread_main ();
+  u32 num_threads;
+
+  num_threads = 1 /* main thread */+ vtm->n_threads;
+
+  vec_validate(copy_buffers, num_threads - 1);
+  return 0;
+}
+
+VLIB_INIT_FUNCTION (builtin_server_init);
 
 static clib_error_t *
 builtin_uri_bind_command_fn (vlib_main_t * vm,
@@ -207,8 +224,6 @@ VLIB_CLI_COMMAND (builtin_uri_unbind_command, static) =
   .function = builtin_uri_unbind_command_fn,
 };
 /* *INDENT-ON* */
-
-
 
 /*
  * fd.io coding-style-patch-verification: ON

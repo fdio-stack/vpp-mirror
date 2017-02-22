@@ -257,7 +257,7 @@ vl_api_disconnect_session_t_handler (vl_api_disconnect_session_t * mp)
 }
 
 void
-handle_fifo_event_connect_rx (uri_tcp_test_main_t *utm, fifo_event_t * e)
+handle_fifo_event_connect_rx (uri_tcp_test_main_t *utm, session_fifo_event_t * e)
 {
   svm_fifo_t * rx_fifo;
   int n_read, bytes;
@@ -322,7 +322,7 @@ handle_fifo_event_connect_rx (uri_tcp_test_main_t *utm, fifo_event_t * e)
 void
 handle_connect_event_queue (uri_tcp_test_main_t * utm)
 {
-  fifo_event_t _e, *e = &_e;;
+  session_fifo_event_t _e, *e = &_e;;
 
   unix_shared_memory_queue_sub (utm->our_event_queue, (u8 *) e, 0 /* nowait */);
   switch (e->event_type)
@@ -350,7 +350,7 @@ uri_tcp_connect_send (uri_tcp_test_main_t *utm)
   session_t * session;
   svm_fifo_t *tx_fifo;
   int buffer_offset, bytes_to_send = 0;
-  fifo_event_t evt;
+  session_fifo_event_t evt;
   static int serial_number = 0;
   int i;
   u32 max_chunk = 64 << 10, write;
@@ -424,12 +424,12 @@ uri_tcp_client_test (uri_tcp_test_main_t * utm)
 }
 
 void
-handle_fifo_event_server_rx (uri_tcp_test_main_t *utm, fifo_event_t * e)
+handle_fifo_event_server_rx (uri_tcp_test_main_t *utm, session_fifo_event_t * e)
 {
   svm_fifo_t * rx_fifo, * tx_fifo;
   int n_read;
 
-  fifo_event_t evt;
+  session_fifo_event_t evt;
   unix_shared_memory_queue_t *q;
   int rv, bytes;
 
@@ -470,7 +470,7 @@ handle_fifo_event_server_rx (uri_tcp_test_main_t *utm, fifo_event_t * e)
 void
 handle_event_queue (uri_tcp_test_main_t * utm)
 {
-  fifo_event_t _e, *e = &_e;;
+  session_fifo_event_t _e, *e = &_e;;
 
   while (1)
     {

@@ -15,25 +15,19 @@
 #ifndef __included_session_h__
 #define __included_session_h__
 
+#include <vnet/session/transport.h>
 #include <vppinfra/bihash_16_8.h>
 #include <vppinfra/bihash_48_8.h>
 #include <vlibmemory/unix_shared_memory_queue.h>
 #include <vlibmemory/api.h>
 #include <vppinfra/sparse_vec.h>
 #include <svm/svm_fifo_segment.h>
-#include <vnet/session/transport.h>
-#include <vnet/uri/uri.h>
 
-/** @file
-    URI-related database
-    
-    Session lookup key; (src-ip, dst-ip, src-port, dst-port, tcp/udp)
-    Value: (owner thread index << 32 | session_index);
+#define HALF_OPEN_LOOKUP_INVALID_VALUE ((u64)~0)
+#define INVALID_INDEX ((u32)~0)
 
-    it's probably a bad idea to hang onto buffers waiting for the
-    server to accept the connection. Be optimistic, set up, and
-    be willing to flush the work.
-*/
+/* TODO decide how much since we have pre-data as well */
+#define MAX_HDRS_LEN    100             /* Max number of bytes for headers */
 
 typedef enum 
 {
@@ -43,30 +37,47 @@ typedef enum
   FIFO_EVENT_SERVER_EXIT,
 } fifo_event_type_t;
 
+#define foreach_session_input_error                                         \
+_(NO_SESSION, "No session drops")                                       \
+_(NO_LISTENER, "No listener for dst port drops")                        \
+_(ENQUEUED, "Packets pushed into rx fifo")                              \
+_(NOT_READY, "Session not ready packets")                               \
+_(FIFO_FULL, "Packets dropped for lack of rx fifo space")               \
+_(EVENT_FIFO_FULL, "Events not sent for lack of event fifo space")      \
+_(API_QUEUE_FULL, "Sessions not created for lack of API queue space")   \
+_(NEW_SEG_NO_SPACE, "Created segment, couldn't allocate a fifo pair")   \
+_(NO_SPACE, "Couldn't allocate a fifo pair")
+
+typedef enum {
+#define _(sym,str) SESSION_ERROR_##sym,
+  foreach_session_input_error
+#undef _
+  SESSION_N_ERROR,
+} session_error_t;
+
 /* Event queue input node static next indices */
 typedef enum {
-  URI_QUEUE_NEXT_DROP,
-  URI_QUEUE_NEXT_TCP_IP4_OUTPUT,
-  URI_QUEUE_NEXT_IP4_LOOKUP,
-  URI_QUEUE_NEXT_TCP_IP6_OUTPUT,
-  URI_QUEUE_NEXT_IP6_LOOKUP,
-  URI_QUEUE_N_NEXT,
-} uri_queue_next_t;
+  SESSION_QUEUE_NEXT_DROP,
+  SESSION_QUEUE_NEXT_TCP_IP4_OUTPUT,
+  SESSION_QUEUE_NEXT_IP4_LOOKUP,
+  SESSION_QUEUE_NEXT_TCP_IP6_OUTPUT,
+  SESSION_QUEUE_NEXT_IP6_LOOKUP,
+  SESSION_QUEUE_N_NEXT,
+} session_queue_next_t;
 
-#define foreach_uri_session_type                \
+#define foreach_session_type                \
   _(IP4_TCP, ip4_tcp)                           \
   _(IP4_UDP, ip4_udp)                           \
   _(IP6_TCP, ip6_tcp)                           \
-  _(IP6_UDP, ip6_udp)                           \
-  _(FIFO, fifo)
+  _(IP6_UDP, ip6_udp)
 
 typedef enum
 {
 #define _(A, a) SESSION_TYPE_##A,
-  foreach_uri_session_type
+  foreach_session_type
 #undef _
-  SESSION_TYPE_N_TYPES,
-} stream_session_type_t;
+  SESSION_N_TYPES,
+} session_type_t;
 
 /* 
  * Application session state
@@ -86,7 +97,7 @@ typedef CLIB_PACKED(struct
   /* $$$$ for event logging */
   u16 event_id;
   u32 enqueue_length;
-}) fifo_event_t;
+}) session_fifo_event_t;
 
 typedef struct _stream_session_t
 {
@@ -108,8 +119,8 @@ typedef struct _stream_session_t
   u32 pid;
 
   /** fifo pointers. Once allocated, these do not move */
-  svm_fifo_t * server_rx_fifo;
-  svm_fifo_t * server_tx_fifo;
+  svm_fifo_t *server_rx_fifo;
+  svm_fifo_t *server_tx_fifo;
 
   /** To avoid n**2 "one event per frame" check */
   u8 enqueue_epoch;
@@ -118,17 +129,11 @@ typedef struct _stream_session_t
   u8 is_deleted;
 
   /** stream server pool index */
-  u32 server_index;
+  u32 app_index;
 
   /** svm segment index */
   u32 server_segment_index;
 } stream_session_t;
-
-typedef enum
-{
-  APP_SERVER,
-  APP_CLIENT
-} application_type_t;
 
 typedef struct _session_manager
 {
@@ -147,93 +152,21 @@ typedef struct _session_manager
   u8 add_segment;
 } session_manager_t;
 
-typedef struct _application application_t;
-typedef struct _session_manager_main session_manager_main_t;
-
-typedef int
-(*app_add_segment_cb) (application_t *server, const u8 *seg_name,
-                       u32 seg_size);
-typedef int
-(*app_session_accept_cb) (application_t *server, stream_session_t *new_session,
-                          unix_shared_memory_queue_t *vpp_event_queue);
-typedef void
-(*app_session_delete_cb) (session_manager_main_t *smm,
-                          stream_session_t *session);
-typedef void
-(*app_session_clear_cb) (session_manager_main_t *smm, application_t *server,
-                         stream_session_t *session);
-typedef void
-(*app_builtin_server_rx_cb) (session_manager_main_t *smm,
-                             application_t *server, stream_session_t *session);
-typedef int
-(*app_session_connected_cb) (application_t *client, stream_session_t *s,
-                             unix_shared_memory_queue_t * vpp_event_queue,
-                             u8 code);
-
-struct _application
-{
-  /** Flags */
-  u32 flags;
-
-  /** Application listens for events on this svm queue */
-  unix_shared_memory_queue_t *event_queue;
-
-  /** Index in server pool */
-  u32 server_index;
-
-  /** Stream session type */
-  u8 session_type;
-
-  /* Stream server mode: accept or connect */
-  u8 mode;
-
-  u32 session_manager_index;
-
-  /*
-   * Bind/Listen specific
-   */
-
-  /** Binary API connection index, ~0 if internal */
-  u32 api_client_index;
-  
-  /** Accept cookie, for multiple session flavors ($$$ maybe) */
-  u32 accept_cookie;
-
-  /** Index of the listen session */
-  u32 listen_session_index;
-
-  /*
-   * Callbacks: shoulder-taps for the server/client
-   */
-
-  /** Notify server of new segment */
-  app_add_segment_cb add_segment_callback;
-
-  /** Notify server of newly accepted session */
-  app_session_accept_cb session_accept_callback;
-
-  /* Rejected session callback */
-  app_session_delete_cb session_delete_callback;
-
-  /* Existing session delete callback */
-  app_session_clear_cb session_clear_callback;
-
-  /* Direct RX callback, for built-in servers */
-  app_builtin_server_rx_cb builtin_server_rx_callback;
-
-  /* Connection request callback */
-  app_session_connected_cb session_connected_callback;
-};
-
 typedef clib_bihash_kv_16_8_t session_kv4_t;
 typedef clib_bihash_kv_48_8_t session_kv6_t;
 
+/* Forward definition */
+typedef struct _session_manager_main session_manager_main_t;
+
 typedef int
 (session_fifo_rx_fn) (vlib_main_t *vm, vlib_node_runtime_t *node,
-                      session_manager_main_t *smm, fifo_event_t *e0,
+                      session_manager_main_t *smm, session_fifo_event_t *e0,
                       stream_session_t *s0, u32 thread_index, int *n_tx_pkts);
 
-typedef struct _session_manager_main
+extern session_fifo_rx_fn session_fifo_rx_peek;
+extern session_fifo_rx_fn session_fifo_rx_dequeue;
+
+struct _session_manager_main
 {
   /** Lookup tables for established sessions and listeners */
   clib_bihash_16_8_t v4_session_hash;
@@ -247,13 +180,10 @@ typedef struct _session_manager_main
   stream_session_t **sessions;
   
   /** Pool of listen sessions. Same type as stream sessions to ease lookups */
-  stream_session_t *listen_sessions[SESSION_TYPE_N_TYPES];
-
-  /* Application pool */
-  application_t *applications;
+  stream_session_t *listen_sessions[SESSION_N_TYPES];
 
   /** Sparse vector to map dst port to stream server  */
-  u16 * stream_server_by_dst_port[SESSION_TYPE_N_TYPES];
+  u16 * stream_server_by_dst_port[SESSION_N_TYPES];
 
   /** per-worker enqueue epoch counters */
   u8 * current_enqueue_epoch;
@@ -265,13 +195,10 @@ typedef struct _session_manager_main
   u32 ** tx_buffers;
 
   /** Per worker-thread vector of partially read events */
-  fifo_event_t **evts_partially_read;
+  session_fifo_event_t **evts_partially_read;
 
   /** per-worker active event vectors */
-  fifo_event_t ** fifo_events;
-
-  /** per-worker built-in server copy buffers */
-  u8 **copy_buffers;
+  session_fifo_event_t **fifo_events;
 
   /** vpp fifo event queue */
   unix_shared_memory_queue_t **vpp_event_queues;
@@ -280,32 +207,44 @@ typedef struct _session_manager_main
   u32 unique_segment_name_counter;
 
   /* Connection manager used by incoming connects */
-  u32 connect_manager_index[SESSION_TYPE_N_TYPES];
+  u32 connect_manager_index[SESSION_N_TYPES];
 
   session_manager_t *session_managers;
 
-  session_fifo_rx_fn *session_rx_fns[SESSION_TYPE_N_TYPES];
+  /** Per transport rx function that can either dequeue or peek */
+  session_fifo_rx_fn *session_rx_fns[SESSION_N_TYPES];
 
   /* Convenience */
   vlib_main_t *vlib_main;
   vnet_main_t *vnet_main;
-
-} session_manager_main_t;
+};
 
 extern session_manager_main_t session_manager_main;
-extern vlib_node_registration_t udp4_uri_input_node;
-extern vlib_node_registration_t tcp4_uri_input_node;
-extern vlib_node_registration_t tcp6_uri_input_node;
 
-always_inline session_manager_t *
-application_get_session_manager (session_manager_main_t *smm, application_t *app)
+/*
+ * Session manager function
+ */
+always_inline session_manager_main_t *
+vnet_get_session_manager_main ()
 {
-  return pool_elt_at_index(smm->session_managers, app->session_manager_index);
+  return &session_manager_main;
 }
 
 always_inline session_manager_t *
-connect_session_manager_get (session_manager_main_t *smm,
-                             stream_session_type_t session_type)
+session_manager_get (session_manager_main_t *smm, u32 index)
+{
+  return pool_elt_at_index(smm->session_managers, index);
+}
+
+always_inline unix_shared_memory_queue_t *
+session_manager_get_vpp_event_queue (u32 thread_index)
+{
+  return session_manager_main.vpp_event_queues[thread_index];
+}
+
+always_inline session_manager_t *
+connects_session_manager_get (session_manager_main_t *smm,
+                              session_type_t session_type)
 {
   return pool_elt_at_index(smm->session_managers,
                            smm->connect_manager_index[session_type]);
@@ -313,35 +252,43 @@ connect_session_manager_get (session_manager_main_t *smm,
 
 void
 session_manager_get_segment_info (u32 index, u8 **name, u32 *size);
-
 int
-stream_session_accept (transport_connection_t *tc, u32 listener_index, u8 sst,
-                       u8 notify);
-
+session_manager_flush_enqueue_events (u32 thread_index);
+int
+session_manager_add_first_segment (session_manager_main_t *smm,
+                                   session_manager_t *sm, u32 segment_size,
+                                   u8 **segment_name);
 void
-stream_session_delete (session_manager_main_t *smm, stream_session_t * s);
+session_manager_del (session_manager_main_t *smm, session_manager_t *sm);
+void
+connects_session_manager_init (session_manager_main_t *smm, u8 session_type);
+
+/*
+ * Stream session functions
+ */
 
 stream_session_t *
 stream_session_lookup_listener4 (ip4_address_t * lcl, u16 lcl_port, u8 proto);
 stream_session_t *
 stream_session_lookup4 (ip4_address_t * lcl, ip4_address_t * rmt, u16 lcl_port,
-                        u16 rmt_port, u8 proto, u32 my_thread_index);
+                        u16 rmt_port, u8 proto, u32 thread_index);
 stream_session_t *
 stream_session_lookup_listener6 (ip6_address_t * lcl, u16 lcl_port, u8 proto);
 stream_session_t *
 stream_session_lookup6 (ip6_address_t * lcl, ip6_address_t * rmt, u16 lcl_port,
-                        u16 rmt_port, u8 , u32 my_thread_index);
-
+                        u16 rmt_port, u8 , u32 thread_index);
 transport_connection_t *
 stream_session_lookup_transport4 (session_manager_main_t *smm,
                                   ip4_address_t * lcl, ip4_address_t * rmt,
                                   u16 lcl_port, u16 rmt_port, u8 proto,
-                                  u32 my_thread_index);
+                                  u32 thread_index);
 transport_connection_t *
 stream_session_lookup_transport6 (session_manager_main_t *smm,
                                   ip6_address_t * lcl, ip6_address_t * rmt,
                                   u16 lcl_port, u16 rmt_port, u8 proto,
-                                  u32 my_thread_index);
+                                  u32 thread_index);
+stream_session_t *
+stream_session_lookup_listener (ip46_address_t *lcl, u16 lcl_port, u8 proto);
 
 always_inline stream_session_t *
 stream_session_get_tsi (u64 ti_and_si, u32 thread_index)
@@ -355,6 +302,21 @@ always_inline stream_session_t *
 stream_session_get (u64 si, u32 thread_index)
 {
   return pool_elt_at_index(session_manager_main.sessions[thread_index], si);
+}
+
+always_inline stream_session_t *
+stream_session_listener_get (u8 sst, u64 si)
+{
+  return pool_elt_at_index(session_manager_main.listen_sessions[sst], si);
+}
+
+always_inline u32
+stream_session_get_index (stream_session_t *s)
+{
+  if (s->session_state == SESSION_STATE_LISTENING)
+    return s - session_manager_main.listen_sessions[s->session_type];
+
+  return s - session_manager_main.sessions[s->session_thread_index];
 }
 
 always_inline u32
@@ -373,66 +335,34 @@ stream_session_peek_bytes (transport_connection_t *tc, u8 *buffer, u32 offset,
 u32
 stream_session_dequeue_drop (transport_connection_t *tc, u32 max_bytes);
 
-int
-stream_session_enqueue_notify (stream_session_t *s, u8 block);
-
 void
-stream_session_connect_notify (transport_connection_t *tc, u8 sst, u8 code);
+stream_session_connect_notify (transport_connection_t *tc, u8 sst, u8 is_fail);
 void
 stream_session_accept_notify (transport_connection_t *tc);
 void
 stream_session_reset_notify (transport_connection_t *tc);
-
-always_inline session_manager_main_t *
-vnet_get_session_manager_main ()
-{
-  return &session_manager_main;
-}
-
 int
-session_manager_flush_enqueue_events (u32 my_thread_index);
+stream_session_accept (transport_connection_t *tc, u32 listener_index, u8 sst,
+                       u8 notify);
+void
+stream_session_open (u8 sst, ip46_address_t *addr, u16 port_host_byte_order,
+                     u32 api_client_index);
+void
+stream_session_delete (stream_session_t * s);
+int
+stream_session_start_listen (u32 server_index, ip46_address_t *ip, u16 port);
+void
+stream_session_stop_listen (u32 server_index);
 
-#define HALF_OPEN_LOOKUP_INVALID_VALUE ((u64)~0)
-#define INVALID_INDEX ((u32)~0)
-
-extern session_fifo_rx_fn session_fifo_rx_peek;
-extern session_fifo_rx_fn session_fifo_rx_dequeue;
+u8 *
+format_stream_session (u8 *s, va_list *args);
 
 void
-uri_register_transport (u8 type, const transport_proto_vft_t *vft);
-
+session_register_transport (u8 type, const transport_proto_vft_t *vft);
 transport_proto_vft_t *
-uri_get_transport (u8 type);
+session_get_transport_vft (u8 type);
 
-/* TODO decide how much since we have pre-data as well */
-#define MAX_HDRS_LEN    100             /* Max number of bytes for headers */
-
-int
-session_manager_add_first_segment (session_manager_main_t *smm,
-                                   session_manager_t *sm, u32 segment_size,
-                                   u8 **segment_name);
-int
-stream_server_listen (session_manager_main_t *smm, application_t *server,
-                      ip46_address_t *ip, u16 port);
-void
-stream_session_open (session_manager_main_t *smm, u8 sst, ip46_address_t *addr,
-                     u16 port_host_byte_order, u32 api_client_index);
-void
-connect_manager_init (session_manager_main_t *smm, u8 session_type);
-void
-stream_server_listen_stop (session_manager_main_t *smm, application_t *ss);
-stream_session_t *
-stream_session_lookup_listener (ip46_address_t * lcl, u16 lcl_port, u8 proto);
-int
-application_connect_to_local_server (application_t *ss,
-                                     ip46_address_t *ip46_address, void *mp,
-                                     u8 is_ip4);
-
-application_t *
-application_new (session_manager_main_t *smm, application_type_t type,
-                 stream_session_type_t sst);
-void
-application_del (session_manager_main_t *smm, application_t *app);
+#endif /* __included_session_h__ */
 
 /*
  * fd.io coding-style-patch-verification: ON
@@ -441,5 +371,3 @@ application_del (session_manager_main_t *smm, application_t *app);
  * eval: (c-set-style "gnu")
  * End:
  */
-
-#endif /* __included_session_h__ */

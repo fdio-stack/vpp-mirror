@@ -24,46 +24,6 @@
 
 uri_main_t uri_main;
 
-/**** fifo uri */
-
-u32
-vnet_bind_fifo_uri (uri_main_t *um, u16 port)
-{
-  return 0;
-}
-
-u32
-vnet_unbind_fifo_uri (uri_main_t *um, u16 port)
-{
-  return 0;
-}
-
-int
-vnet_connect_fifo_uri (char *uri, u32 api_client_index, u64 * options,
-                       char *segment_name_arg, u32 * segment_name_length)
-{
-  uri_main_t * um = &uri_main;
-  uri_bind_table_entry_t * e;
-  uword * p;
-
-  ASSERT(segment_name_length);
-
-  p = hash_get_mem (um->uri_bind_table_entry_by_name, uri);
-
-  if (!p)
-    return VNET_API_ERROR_ADDRESS_NOT_IN_USE;
-
-  e = pool_elt_at_index (um->fifo_bind_table, p[0]);
-
-  *segment_name_length = vec_len(e->segment_name);
-  memcpy (segment_name_arg, e->segment_name, *segment_name_length);
-  e->connect_client_index = api_client_index;
-
-  return 0;
-}
-
-/**** end fifo URI */
-
 /**
  * unformat a vnet URI
  *
@@ -81,17 +41,12 @@ vnet_connect_fifo_uri (char *uri, u32 api_client_index, u64 * options,
  *  etc...
  *
  */
-
 uword
 unformat_vnet_uri (unformat_input_t * input, va_list * args)
 {
   ip46_address_t * address = va_arg (*args, ip46_address_t *);
-  stream_session_type_t * sst = va_arg (*args, stream_session_type_t *);
+  session_type_t * sst = va_arg (*args, session_type_t *);
   u16 * port = va_arg(*args, u16 *);
-  u8 ** fifo_name = va_arg(*args, u8 **);
-  u8 * name = 0;
-
-  *fifo_name = 0;
 
   if (unformat (input, "tcp://%U/%d", unformat_ip4_address, &address->ip4,
                 port))
@@ -117,144 +72,107 @@ unformat_vnet_uri (unformat_input_t * input, va_list * args)
       *sst = SESSION_TYPE_IP6_TCP;
       return 1;
     }
-  if (unformat (input, "fifo://%s", name))
-    {
-      *fifo_name = name;
-      *sst = SESSION_TYPE_FIFO;
-      return 1;
-    }
 
   return 0;
-}
-uri_bind_table_entry_t *
-fifo_bind_table_lookup (uri_main_t *um, char *uri)
-{
-  uword *p;
-  p = hash_get_mem (um->uri_bind_table_entry_by_name, uri);
-  if (!p)
-     return 0;
-
-  return pool_elt_at_index (um->fifo_bind_table, p[0]);
-}
-
-void
-fifo_bind_table_add (uri_main_t *um, u8 *uri, u8 *server_name,
-                    u8 *segment_name, u32 api_client_index, u32 accept_cookie)
-{
-  uri_bind_table_entry_t * e;
-
-  pool_get(um->fifo_bind_table, e);
-  memset(e, 0, sizeof(*e));
-
-  e->bind_name = uri;
-  e->server_name = server_name;
-  e->segment_name = segment_name;
-  e->bind_client_index = api_client_index;
-  e->accept_cookie = accept_cookie;
-
-  hash_set_mem(um->uri_bind_table_entry_by_name, e->bind_name,
-               e - um->fifo_bind_table);
 }
 
 int
-fifo_bind_table_del (uri_main_t *um, uri_bind_table_entry_t *e)
+parse_uri (char *uri, session_type_t *sst, ip46_address_t *addr,
+           u16 *port_number_host_byte_order)
 {
+  unformat_input_t _input, *input = &_input;
 
-  hash_unset_mem(um->uri_bind_table_entry_by_name, e->bind_name);
-  pool_put(um->fifo_bind_table, e);
+  /* Make sure */
+  uri = (char *)format (0, "%s%c", uri, 0);
+
+  /* Parse uri */
+  unformat_init_string (input, uri, strlen (uri));
+  if (!unformat (input, "%U", unformat_vnet_uri, addr, sst,
+                 port_number_host_byte_order))
+    {
+      unformat_free (input);
+      return VNET_API_ERROR_INVALID_VALUE;
+    }
+  unformat_free (input);
 
   return 0;
+}
+
+static u8
+ip_is_local (ip46_address_t *ip46_address, u8 is_ip4)
+{
+  fib_node_index_t fei;
+  fib_entry_flag_t flags;
+  fib_prefix_t prefix;
+
+  /* Check if requester is local */
+  if (is_ip4)
+    {
+      prefix.fp_len = 32;
+      prefix.fp_proto = FIB_PROTOCOL_IP4;
+    }
+  else
+    {
+      prefix.fp_len = 128;
+      prefix.fp_proto = FIB_PROTOCOL_IP6;
+    }
+
+  clib_memcpy(&prefix.fp_addr, ip46_address, sizeof(ip46_address));
+  fei = fib_table_lookup (0, &prefix);
+  flags = fib_entry_get_flags (fei);
+
+  return (flags & FIB_ENTRY_FLAG_LOCAL);
 }
 
 int
 vnet_bind_uri (vnet_bind_uri_args_t *a)
 {
-  uri_main_t *um = &uri_main;
-  vl_api_registration_t *regp;
   u8 * segment_name = 0;
-  u8 * server_name;
-  session_manager_main_t *smm = &session_manager_main;
-  application_t *app = 0;
-  u16 port_number_host_byte_order;
-  stream_session_type_t sst = SESSION_TYPE_N_TYPES;
-  unformat_input_t _input, *input= &_input;
+  application_t *server = 0;
+  u16 port_host_order;
+  session_type_t sst = SESSION_N_TYPES;
   ip46_address_t ip46_address;
-  u8 *fifo_name;
-  session_manager_t *sm;
+  u8 is_ip4;
+  stream_session_t *listener;
   int rv;
 
-  ASSERT(a->uri && a->segment_name_length);
+  rv = parse_uri (a->uri, &sst, &ip46_address, &port_host_order);
+  if (rv)
+    return rv;
 
-  /* Make sure ??? */
-  a->uri = (char *)format (0, "%s%c", a->uri, 0);
+  listener = stream_session_lookup_listener (
+      &ip46_address, clib_host_to_net_u16 (port_host_order), sst);
 
-  if (fifo_bind_table_lookup (um, a->uri))
+  if (listener)
     return VNET_API_ERROR_ADDRESS_IN_USE;
 
-  unformat_init_string (input, a->uri, strlen (a->uri));
-  /* If the URI doesn't parse, return an error */
-  if (!unformat (input, "%U", unformat_vnet_uri, &ip46_address,
-                 &sst, &port_number_host_byte_order, &fifo_name))
+  if (application_lookup (a->api_client_index))
     {
-      unformat_free (input);
-      return VNET_API_ERROR_INVALID_VALUE;
+      clib_warning ("Only one bind supported for now");
+      return VNET_API_ERROR_ADDRESS_IN_USE;
     }
-
-  /* External client? */
-  if (a->api_client_index != ~0)
-    {
-      regp = vl_api_client_index_to_registration (a->api_client_index);
-      ASSERT(regp);
-      server_name = format (0, "%s%c", regp->name, 0);
-    }
-  else
-    server_name = format (0, "<internal>%c", 0);
 
   /*
    * $$$$ lookup client by api client index, to see if we're already
    * talking to this client about some other port
    */
 
-  if (sst == SESSION_TYPE_FIFO)
-    goto uri_bind;
+  is_ip4 = SESSION_TYPE_IP4_UDP == sst || SESSION_TYPE_IP4_TCP == sst;
+  if (!ip_is_local (&ip46_address, is_ip4))
+    return VNET_API_ERROR_INVALID_VALUE;
 
   /* Allocate and initialize stream server */
-  app = application_new (smm, APP_SERVER, sst);
-  sm = application_get_session_manager (smm, app);
+  server = application_new (APP_SERVER, sst, a->api_client_index,
+                            a->options[URI_OPTIONS_FLAGS], a->session_cb_vft);
 
-  /* Add first segment */
-  if ((rv = session_manager_add_first_segment (smm, sm, a->segment_size,
-                                               &segment_name)))
-    {
-      /* If it failed, cleanup */
-      application_del (smm, app);
-      return rv;
-    }
-
-  /* Initialize stream server */
-  app->api_client_index = a->api_client_index;
-  app->flags = a->options[URI_OPTIONS_FLAGS];
-
-  /* Callbacks */
-  app->session_accept_callback = a->send_session_create_callback;
-  app->session_delete_callback = stream_session_delete;
-  app->session_clear_callback = a->send_session_clear_callback;
-  app->builtin_server_rx_callback = a->builtin_server_rx_callback;
-  app->add_segment_callback = a->add_segment_callback;
-
-  /* Setup session manager */
-  sm->add_segment_size = a->options[URI_OPTIONS_ADD_SEGMENT_SIZE];
-  sm->rx_fifo_size = a->options[URI_OPTIONS_RX_FIFO_SIZE];
-  sm->tx_fifo_size = a->options[URI_OPTIONS_TX_FIFO_SIZE];
-  sm->add_segment = 1;
+  application_server_init (server, a->segment_size,
+                           a->options[URI_OPTIONS_ADD_SEGMENT_SIZE],
+                           a->options[URI_OPTIONS_RX_FIFO_SIZE],
+                           a->options[URI_OPTIONS_TX_FIFO_SIZE],
+                           &segment_name);
 
   /* Setup listen path down to transport */
-  stream_server_listen (smm, app, &ip46_address, port_number_host_byte_order);
-
- uri_bind:
-
-  fifo_bind_table_add (um, (u8 *)a->uri, server_name, segment_name,
-                      a->api_client_index, a->accept_cookie);
+  stream_session_start_listen (server->index, &ip46_address, port_host_order);
 
   /*
    * Return values
@@ -263,42 +181,31 @@ vnet_bind_uri (vnet_bind_uri_args_t *a)
   ASSERT (vec_len(segment_name) <= 128);
   a->segment_name_length = vec_len(segment_name);
   memcpy (a->segment_name, segment_name, a->segment_name_length);
-  a->server_event_queue_address = (u64) app->event_queue;
-
-  vec_free (fifo_name);
+  a->server_event_queue_address = (u64) server->event_queue;
 
   return 0;
 }
 
 int
-vnet_unbind_uri (char * uri, u32 api_client_index)
+vnet_unbind_uri (char *uri, u32 api_client_index)
 {
-  uri_main_t * um = &uri_main;
-  session_manager_main_t * smm = &session_manager_main;
-  application_t * ss;
+  application_t * server;
   vl_api_registration_t *regp;
   u16 port_number_host_byte_order;
-  stream_session_type_t sst = SESSION_TYPE_N_TYPES;
-  unformat_input_t _input, *input = &_input;
+  session_type_t sst = SESSION_N_TYPES;
   ip46_address_t ip46_address;
-  u8 *fifo_name;
-  uri_bind_table_entry_t *e;
+  stream_session_t *listener;
+  int rv;
 
-  ASSERT(uri);
+  rv = parse_uri (uri, &sst, &ip46_address, &port_number_host_byte_order);
+  if (rv)
+    return rv;
 
-  /* Clean out the uri->server name mapping */
-  e = fifo_bind_table_lookup (um, uri);
-  if (!e)
+  listener = stream_session_lookup_listener (
+       &ip46_address, clib_host_to_net_u16 (port_number_host_byte_order), sst);
+
+  if (!listener)
     return VNET_API_ERROR_ADDRESS_NOT_IN_USE;
-
-  unformat_init_string (input, uri, strlen (uri));
-  /* If the URI doesn't parse, return an error */
-  if (!unformat (input, "%U", unformat_vnet_uri, &ip46_address, &sst,
-                 &port_number_host_byte_order, &fifo_name))
-    {
-      unformat_free (input);
-      return VNET_API_ERROR_INVALID_VALUE;
-    }
 
   /* External client? */
   if (api_client_index != ~0)
@@ -309,112 +216,96 @@ vnet_unbind_uri (char * uri, u32 api_client_index)
 
   /*
    * Find the stream_server_t corresponding to the api client
-   * $$$$ maybe add a hash table? There may only be three or four...
    */
-  pool_foreach(ss, smm->applications, (
-  {
-    if (ss->api_client_index == api_client_index)
-    goto found;
-  }));
-
-  /* Better never happen... */
-  return VNET_API_ERROR_INVALID_VALUE_2;
-
-  found:
+  server = application_lookup (api_client_index);
+  if (!server)
+    return VNET_API_ERROR_INVALID_VALUE_2;
 
   /* Clear the listener */
-  if (sst != SESSION_TYPE_FIFO)
-    stream_server_listen_stop (smm, ss);
-
-  application_del (smm, ss);
-
-  fifo_bind_table_del (um, e);
+  stream_session_stop_listen (server->index);
+  application_del (server);
 
   return 0;
 }
 
 int
-vnet_connect_uri (char *uri, u32 api_client_index, u64 *options,
-                  char *segment_name, u32 *name_length, void *mp)
+redirect_connect_uri_callback (u32 api_client_index, void *mp) __attribute__((weak));
+
+int redirect_connect_uri_callback (u32 api_client_index, void *mp)
 {
-  session_manager_main_t *smm = &session_manager_main;
-  unformat_input_t _input, *input= &_input;
+  clib_warning ("STUB");
+  return -1;
+}
+
+int
+vnet_connect_uri (vnet_connect_uri_args_t *a)
+{
   ip46_address_t ip46_address;
   u16 port;
-  stream_session_type_t sst;
-  u8 *fifo_name, is_ip4 = 0;
+  session_type_t sst;
   stream_session_t *listener;
-  application_t *ss;
+  application_t *server, *app;
   int rv;
 
-  ASSERT(uri);
-
-  /* TODO XXX connects table */
-
-  memset(&ip46_address, 0, sizeof(ip46_address_t));
-  unformat_init_string (input, uri, strlen (uri));
-
-  if (!unformat (input, "%U", unformat_vnet_uri, &ip46_address,
-                &sst, &port, &fifo_name))
+  app = application_lookup (a->api_client_index);
+  if (app)
     {
-      unformat_free (input);
-      return VNET_API_ERROR_INVALID_VALUE;
+      clib_warning ("Already have a connect from this app");
+      return VNET_API_ERROR_INVALID_VALUE_2;
     }
 
-  /* FIFO do its thing and return */
-  if (SESSION_TYPE_FIFO == sst)
-    {
-      rv = vnet_connect_fifo_uri (uri, api_client_index, options, segment_name,
-                                  name_length);
-      vec_free(fifo_name);
-      return rv;
-    }
+  /* Parse uri */
+  rv = parse_uri (a->uri, &sst, &ip46_address, &port);
+  if (rv)
+    return rv;
+
+  /* Create client app */
+  app = application_new (APP_CLIENT, sst, a->api_client_index,
+                         a->options[URI_OPTIONS_FLAGS], a->session_cb_vft);
 
   /*
    * Figure out if connecting to a local server
    */
-
   listener = stream_session_lookup_listener (&ip46_address,
-                                             clib_host_to_net_u16 (port), sst);
-
-  /* Find the server */
+                                             clib_host_to_net_u16 (port),
+                                             sst);
   if (listener)
     {
-      ss = pool_elt_at_index(smm->applications, listener->server_index);
+      server = application_get (listener->app_index);
 
       /*
        * Server is willing to have a direct fifo connection created
        * instead of going through the state machine, etc.
        */
-      if (SESSION_TYPE_IP4_UDP == sst || SESSION_TYPE_IP4_TCP == sst)
-        is_ip4 = 1;
-
-      if (ss->flags & (URI_OPTIONS_FLAGS_USE_FIFO == 1))
-        return application_connect_to_local_server (ss, &ip46_address, mp,
-                                                      is_ip4);
+      if (server->flags & URI_OPTIONS_FLAGS_USE_FIFO)
+        return server->cb_fns.redirect_connect_callback (
+            server->api_client_index, a->mp);
     }
 
   /*
    * Not connecting to a local server. Create regular session
    */
+  stream_session_open (sst, &ip46_address, port, app->index);
 
-  /* Allocate connect session manager if needed */
-  if (smm->connect_manager_index[sst] == INVALID_INDEX)
-    connect_manager_init(smm, sst);
-
-  /* Notify transport */
-  stream_session_open (smm, sst, &ip46_address, port, api_client_index);
-
-  /* TODO */
-  return VNET_API_ERROR_INVALID_VALUE;
+  return 0;
 }
 
 int
 vnet_disconnect_uri (u32 client_index, u32 session_index, u32 thread_index)
 {
-  session_manager_main_t * smm = &session_manager_main;
-  stream_session_t * session;
-  stream_session_t * pool;
+  stream_session_t *session;
+
+  session = stream_session_get (session_index, thread_index);
+  stream_session_delete (session);
+
+  return 0;
+}
+
+int
+uri_api_session_not_valid (u32 session_index, u32 thread_index)
+{
+  session_manager_main_t *smm = vnet_get_session_manager_main ();
+  stream_session_t *pool;
 
   if (thread_index >= vec_len (smm->sessions))
     return VNET_API_ERROR_INVALID_VALUE;
@@ -424,18 +315,6 @@ vnet_disconnect_uri (u32 client_index, u32 session_index, u32 thread_index)
   if (pool_is_free_index (pool, session_index))
     return VNET_API_ERROR_INVALID_VALUE_2;
 
-  session = pool_elt_at_index (smm->sessions[thread_index],
-                               session_index);
-
-  switch (session->session_type)
-    {
-    case SESSION_TYPE_IP4_UDP:
-      stream_session_delete (smm, session);
-      break;
-
-    default:
-      return VNET_API_ERROR_UNIMPLEMENTED;
-    }
   return 0;
 }
 
@@ -444,7 +323,6 @@ uri_init (vlib_main_t * vm)
 {
   uri_main_t * um = &uri_main;
 
-  um->uri_bind_table_entry_by_name = hash_create_string (0, sizeof (uword));
   um->vlib_main = vm;
   um->vnet_main = vnet_get_main();
   return 0;

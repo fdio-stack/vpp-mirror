@@ -1288,7 +1288,7 @@ tcp46_syn_sent_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
             goto drop;
 
           /* Stop connection establishment and retransmit timers */
-          tcp_timer_reset (tm, tc0, TCP_TIMER_KEEP);
+          tcp_timer_reset (tm, tc0, TCP_TIMER_ESTABLISH);
           tcp_timer_reset (tm, tc0, TCP_TIMER_RETRANSMIT_SYN);
 
           /* Valid SYN or SYN-ACK. Move connection from half-open pool to
@@ -2195,6 +2195,7 @@ do {                                                                    \
   /* SYN-ACK for a SYN */
   _(SYN_SENT, TCP_FLAG_SYN | TCP_FLAG_ACK, TCP_INPUT_NEXT_SYN_SENT,
     TCP_ERROR_NONE);
+  _(SYN_SENT, TCP_FLAG_ACK, TCP_INPUT_NEXT_SYN_SENT, TCP_ERROR_NONE);
   /* ACK for for established connection -> tcp-established. */
   _(ESTABLISHED, TCP_FLAG_ACK, TCP_INPUT_NEXT_ESTABLISHED, TCP_ERROR_NONE);
   /* FIN for for established connection -> tcp-established. */

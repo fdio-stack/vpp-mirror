@@ -166,3 +166,11 @@ typedef struct _transport_proto_vft
 } transport_proto_vft_t;
 
 #endif /* VNET_VNET_URI_TRANSPORT_H_ */
+
+/*
+ * fd.io coding-style-patch-verification: ON
+ *
+ * Local Variables:
+ * eval: (c-set-style "gnu")
+ * End:
+ */

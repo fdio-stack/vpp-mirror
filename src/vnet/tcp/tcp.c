@@ -352,10 +352,9 @@ format_tcp_stream_session_ip4 (u8 *s, va_list *args)
 
   tc = tcp_connection_get (tci, thread_index);
 
-  s = format (s, "%-20U%-20U%-10d%-10d%-8s", format_ip4_address,
-              &tc->c_lcl_ip4, format_ip4_address, &tc->c_rmt_ip4,
-              clib_net_to_host_u16 (tc->c_lcl_port),
-              clib_net_to_host_u16 (tc->c_rmt_port), "tcp");
+  s = format (s, "[%s] %U:%d -> %U:%d", "tcp", format_ip4_address, &tc->c_lcl_ip4,
+              clib_net_to_host_u16 (tc->c_lcl_port), format_ip4_address,
+              &tc->c_rmt_ip4, clib_net_to_host_u16 (tc->c_rmt_port));
 
   return s;
 }
@@ -454,14 +453,18 @@ tcp_timer_keep_handler (u32 conn_index)
 }
 
 void
-tcp_timer_keep_syn_handler (u32 conn_index)
+tcp_timer_establish_handler (u32 conn_index)
 {
   tcp_main_t *tm = vnet_get_tcp_main ();
   tcp_connection_t * tc;
+  u8 sst;
 
   tc = tcp_half_open_connection_get (conn_index);
 
   ASSERT(tc->state == TCP_CONNECTION_STATE_SYN_SENT);
+
+  sst = tc->c_is_ip4 ? SESSION_TYPE_IP4_TCP : SESSION_TYPE_IP6_TCP;
+  stream_session_connect_notify (&tc->connection, sst, 1 /* fail */);
 
   tcp_connection_close (tm, tc);
 }
@@ -475,7 +478,7 @@ static timer_expiration_handler *timer_expiration_handlers[TCP_N_TIMERS] =
     tcp_timer_keep_handler,
     0,
     tcp_timer_retransmit_syn_handler,
-    tcp_timer_keep_syn_handler
+    tcp_timer_establish_handler
 };
 /* *INDENT-ON* */
 
@@ -544,8 +547,8 @@ tcp_init (vlib_main_t * vm)
   ip4_register_protocol (IP_PROTOCOL_TCP, tcp4_input_node.index);
 
   /* Register as transport with URI */
-  uri_register_transport (SESSION_TYPE_IP4_TCP, &tcp4_proto);
-  uri_register_transport (SESSION_TYPE_IP6_TCP, &tcp6_proto);
+  session_register_transport (SESSION_TYPE_IP4_TCP, &tcp4_proto);
+  session_register_transport (SESSION_TYPE_IP6_TCP, &tcp6_proto);
 
   /*
    * Initialize data structures

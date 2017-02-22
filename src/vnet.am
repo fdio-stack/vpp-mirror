@@ -876,10 +876,13 @@ libvnet_la_SOURCES +=				\
   vnet/session/session.c			\
   vnet/session/node.c				\
   vnet/session/transport.c			\
+  vnet/session/application.c			\
+  vnet/session/session_cli.c			\
   vnet/session/hashes.c
 
 nobase_include_HEADERS +=			\
   vnet/session/session.h			\
+  vnet/session/application.h			\
   vnet/session/transport.h
 
 ########################################
@@ -888,7 +891,6 @@ nobase_include_HEADERS +=			\
 
 libvnet_la_SOURCES +=				\
   vnet/uri/uri.c				\
-  vnet/uri/uri_cli.c				\
   vnet/uri/uri_api.c
 
 nobase_include_HEADERS +=			\
