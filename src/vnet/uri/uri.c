@@ -99,6 +99,15 @@ parse_uri (char *uri, session_type_t *sst, ip46_address_t *addr,
 }
 
 static u8
+ip_is_zero (ip46_address_t *ip46_address, u8 is_ip4)
+{
+  if (is_ip4)
+    return (ip46_address->ip4.as_u32 == 0);
+  else
+    return (ip46_address->as_u64[0] == 0 && ip46_address->as_u64[1] == 0);
+}
+
+static u8
 ip_is_local (ip46_address_t *ip46_address, u8 is_ip4)
 {
   fib_node_index_t fei;
@@ -131,17 +140,17 @@ vnet_bind_uri (vnet_bind_uri_args_t *a)
   application_t *server = 0;
   u16 port_host_order;
   session_type_t sst = SESSION_N_TYPES;
-  ip46_address_t ip46_address;
+  ip46_address_t ip46;
   u8 is_ip4;
   stream_session_t *listener;
   int rv;
 
-  rv = parse_uri (a->uri, &sst, &ip46_address, &port_host_order);
+  rv = parse_uri (a->uri, &sst, &ip46, &port_host_order);
   if (rv)
     return rv;
 
   listener = stream_session_lookup_listener (
-      &ip46_address, clib_host_to_net_u16 (port_host_order), sst);
+      &ip46, clib_host_to_net_u16 (port_host_order), sst);
 
   if (listener)
     return VNET_API_ERROR_ADDRESS_IN_USE;
@@ -158,7 +167,7 @@ vnet_bind_uri (vnet_bind_uri_args_t *a)
    */
 
   is_ip4 = SESSION_TYPE_IP4_UDP == sst || SESSION_TYPE_IP4_TCP == sst;
-  if (!ip_is_local (&ip46_address, is_ip4))
+  if (!ip_is_zero (&ip46, is_ip4) && !ip_is_local (&ip46, is_ip4))
     return VNET_API_ERROR_INVALID_VALUE;
 
   /* Allocate and initialize stream server */
@@ -172,7 +181,7 @@ vnet_bind_uri (vnet_bind_uri_args_t *a)
                            &segment_name);
 
   /* Setup listen path down to transport */
-  stream_session_start_listen (server->index, &ip46_address, port_host_order);
+  stream_session_start_listen (server->index, &ip46, port_host_order);
 
   /*
    * Return values

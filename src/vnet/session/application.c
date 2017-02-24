@@ -109,13 +109,9 @@ application_new (application_type_t type, session_type_t sst,
   oldheap = svm_push_data_heap (am->vlib_rp);
 
   /* Allocate server event queue */
-  if (app->event_queue == 0)
-    {
-      app->event_queue = unix_shared_memory_queue_init (
-          128 /* nels $$$$ config */, sizeof(session_fifo_event_t),
-          0 /* consumer pid */,
-          0 /* (do not) send signal when queue non-empty */);
-    }
+  app->event_queue = unix_shared_memory_queue_init (
+      128 /* nels $$$$ config */, sizeof(session_fifo_event_t),
+      0 /* consumer pid */, 0 /* (do not) signal when queue non-empty */);
 
   svm_pop_heap (oldheap);
 

@@ -506,6 +506,12 @@ vl_api_bind_uri_reply_t_handler (vl_api_bind_uri_reply_t * mp)
   svm_fifo_segment_create_args_t _a, *a = &_a;
   int rv;
 
+  if (mp->retval)
+    {
+      clib_warning("bind failed: %d", mp->retval);
+      return;
+    }
+
   if (mp->segment_name_length == 0)
     {
       clib_warning ("segment_name_length zero");

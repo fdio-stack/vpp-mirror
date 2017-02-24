@@ -272,15 +272,19 @@ vl_api_bind_uri_t_handler (vl_api_bind_uri_t * mp)
 
   REPLY_MACRO2 (VL_API_BIND_URI_REPLY,
   ({
-    rmp->segment_name_length = 0;
-    /* $$$$ policy? */
-    rmp->segment_size = mp->initial_segment_size;
-    if (segment_name_length)
+    rmp->retval = rv;
+    if (!rv)
       {
-        memcpy (rmp->segment_name, segment_name, segment_name_length);
-        rmp->segment_name_length = segment_name_length;
+        rmp->segment_name_length = 0;
+        /* $$$$ policy? */
+        rmp->segment_size = mp->initial_segment_size;
+        if (segment_name_length)
+          {
+            memcpy(rmp->segment_name, segment_name, segment_name_length);
+            rmp->segment_name_length = segment_name_length;
+          }
+        rmp->server_event_queue_address = a->server_event_queue_address;
       }
-    rmp->server_event_queue_address = a->server_event_queue_address;
   }));
 }
 
