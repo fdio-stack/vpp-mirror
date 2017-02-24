@@ -691,7 +691,6 @@ static int
 tcp_rcv_ack (tcp_connection_t *tc, vlib_buffer_t *b,
              tcp_header_t *th, u32 *next, u32 *error)
 {
-  tcp_main_t *tm = vnet_get_tcp_main ();
   u32 new_snd_wnd;
 
   /* If the ACK acks something not yet sent (SEG.ACK > SND.NXT) then send an
@@ -739,9 +738,9 @@ tcp_rcv_ack (tcp_connection_t *tc, vlib_buffer_t *b,
   /* If everything has been acked, stop retransmit timer
    * otherwise update */
   if (tc->snd_una == tc->snd_una_max)
-    tcp_timer_reset (tm, tc, TCP_TIMER_RETRANSMIT);
+    tcp_timer_reset (tc, TCP_TIMER_RETRANSMIT);
   else
-    tcp_timer_update (tm, tc, TCP_TIMER_RETRANSMIT, tc->rto);
+    tcp_timer_update (tc, TCP_TIMER_RETRANSMIT, tc->rto);
 
   return 0;
 }
@@ -1072,6 +1071,16 @@ tcp46_established_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
           vlib_buffer_advance (b0, n_advance_bytes0);
           error0 = tcp_segment_rcv (tm, tc0, b0, n_data_bytes0, &next0);
 
+          /* 8: check the FIN bit */
+          if (tcp_fin(th0))
+            {
+              /* Send FIN-ACK */
+              tcp_make_finack (tc0, b0);
+              next0 = tcp_next_output(tc0->c_is_ip4);
+              tc0->state = TCP_STATE_CLOSE_WAIT;
+              stream_session_disconnect_notify (&tc0->connection);
+            }
+
        drop:
           b0->error = node->errors[error0];
           if (PREDICT_FALSE(b0->flags & VLIB_BUFFER_IS_TRACED))
@@ -1271,7 +1280,7 @@ tcp46_syn_sent_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
                 stream_session_reset_notify (&tc0->connection);
 
               /* and close connection */
-              tcp_connection_close (tm, tc0);
+              tcp_connection_close (tc0);
               goto drop;
             }
 
@@ -1288,8 +1297,8 @@ tcp46_syn_sent_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
             goto drop;
 
           /* Stop connection establishment and retransmit timers */
-          tcp_timer_reset (tm, tc0, TCP_TIMER_ESTABLISH);
-          tcp_timer_reset (tm, tc0, TCP_TIMER_RETRANSMIT_SYN);
+          tcp_timer_reset (tc0, TCP_TIMER_ESTABLISH);
+          tcp_timer_reset (tc0, TCP_TIMER_RETRANSMIT_SYN);
 
           /* Valid SYN or SYN-ACK. Move connection from half-open pool to
            * current thread pool. */
@@ -1329,7 +1338,7 @@ tcp46_syn_sent_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
 
               /* TODO Dequeue acknowledged segments if we support Fast Open */
               new_tc0->snd_una = ack0;
-              new_tc0->state = TCP_CONNECTION_STATE_ESTABLISHED;
+              new_tc0->state = TCP_STATE_ESTABLISHED;
 
               /* Notify app that we have connection */
               stream_session_connect_notify (&new_tc0->connection, sst, 0);
@@ -1340,7 +1349,7 @@ tcp46_syn_sent_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
           /* SYN: Simultaneous open. Change state to SYN-RCVD and send SYN-ACK */
           else
             {
-              new_tc0->state = TCP_CONNECTION_STATE_SYN_RCVD;
+              new_tc0->state = TCP_STATE_SYN_RCVD;
 
               /* Notify app that we have connection XXX */
               stream_session_connect_notify (&new_tc0->connection, sst, 0);
@@ -1446,13 +1455,6 @@ VLIB_REGISTER_NODE (tcp6_syn_sent_node) = {
 
 VLIB_NODE_FUNCTION_MULTIARCH (tcp6_syn_sent_node, tcp6_syn_sent_rcv)
 
-static void
-tcp_session_close (tcp_connection_t *tc)
-{
-  /* TODO */
-  clib_warning ("unimplemented");
-}
-
 /**
  * Handles reception for all states except LISTEN, SYN-SEND and ESTABLISHED
  * as per RFC793 p. 64
@@ -1529,7 +1531,7 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
            */
           switch (tc0->state)
             {
-            case TCP_CONNECTION_STATE_CLOSED:
+            case TCP_STATE_CLOSED:
               goto drop;
               break;
             }
@@ -1548,7 +1550,7 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
           /* 5: check the ACK field  */
           switch (tc0->state)
           {
-            case TCP_CONNECTION_STATE_SYN_RCVD:
+            case TCP_STATE_SYN_RCVD:
               /*
                * If the segment acknowledgment is not acceptable, form a
                * reset segment,
@@ -1561,7 +1563,7 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
                   goto drop;
                 }
               /* Switch state to ESTABLISHED */
-              tc0->state = TCP_CONNECTION_STATE_ESTABLISHED;
+              tc0->state = TCP_STATE_ESTABLISHED;
 
               /* Initialize session variables */
               tc0->snd_una = vnet_buffer (b0)->tcp.ack_number;
@@ -1573,31 +1575,29 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
               /* Shoulder tap the server */
               stream_session_accept_notify (&tc0->connection);
 
-              tcp_timer_reset (tm, tc0, TCP_TIMER_RETRANSMIT_SYN);
+              tcp_timer_reset (tc0, TCP_TIMER_RETRANSMIT_SYN);
               break;
-            case TCP_CONNECTION_STATE_ESTABLISHED:
-              /* XXX Packets may have been enqueued before state change */
-              if (tcp_rcv_ack (tc0, b0, tcp0, &next0,
-                                                &error0))
+            case TCP_STATE_ESTABLISHED:
+              /* We can get packets in established state here because they
+               * were enqueued before state change */
+              if (tcp_rcv_ack (tc0, b0, tcp0, &next0, &error0))
                 goto drop;
 
               break;
-            case TCP_CONNECTION_STATE_FIN_WAIT_1:
-              /* XXX In addition to the processing for the ESTABLISHED state, if
+            case TCP_STATE_FIN_WAIT_1:
+              /* In addition to the processing for the ESTABLISHED state, if
                * our FIN is now acknowledged then enter FIN-WAIT-2 and
                * continue processing in that state. */
-              if (!tcp_rcv_ack (tc0, b0, tcp0, &next0,
-                                                 &error0))
-                tc0->state = TCP_CONNECTION_STATE_FIN_WAIT_2;
+              if (!tcp_rcv_ack (tc0, b0, tcp0, &next0, &error0))
+                tc0->state = TCP_STATE_FIN_WAIT_2;
               else
                 goto drop;
               break;
-            case TCP_CONNECTION_STATE_FIN_WAIT_2:
+            case TCP_STATE_FIN_WAIT_2:
               /* In addition to the processing for the ESTABLISHED state, if
                * the retransmission queue is empty, the user's CLOSE can be
                * acknowledged ("ok") but do not delete the TCB. */
-              if (tcp_rcv_ack (tc0, b0, tcp0, &next0,
-                                                &error0))
+              if (tcp_rcv_ack (tc0, b0, tcp0, &next0, &error0))
                 {
                   /* check if rtx queue is empty and ack CLOSE TODO*/
                 }
@@ -1606,26 +1606,24 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
                   goto drop;
                 }
               break;
-            case TCP_CONNECTION_STATE_CLOSE_WAIT:
+            case TCP_STATE_CLOSE_WAIT:
               /* Do the same processing as for the ESTABLISHED state. */
-              if (tcp_rcv_ack (tc0, b0, tcp0, &next0,
-                                                &error0))
+              if (tcp_rcv_ack (tc0, b0, tcp0, &next0, &error0))
                 goto drop;
               break;
-            case TCP_CONNECTION_STATE_CLOSING:
+            case TCP_STATE_CLOSING:
               /* In addition to the processing for the ESTABLISHED state, if
                * the ACK acknowledges our FIN then enter the TIME-WAIT state,
                * otherwise ignore the segment. */
-              if (tcp_rcv_ack (tc0, b0, tcp0, &next0,
-                                                &error0))
+              if (tcp_rcv_ack (tc0, b0, tcp0, &next0, &error0))
                 goto drop;
 
               /* XXX test that send queue empty */
-              tc0->state = TCP_CONNECTION_STATE_TIME_WAIT;
+              tc0->state = TCP_STATE_TIME_WAIT;
               goto drop;
 
               break;
-            case TCP_CONNECTION_STATE_LAST_ACK:
+            case TCP_STATE_LAST_ACK:
               /* The only thing that can arrive in this state is an
                * acknowledgment of our FIN. If our FIN is now acknowledged,
                * delete the TCB, enter the CLOSED state, and return. */
@@ -1633,17 +1631,17 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
               if (!tcp_rcv_ack_is_acceptable (tc0, b0))
                 goto drop;
 
-              tcp_session_close (tc0);
+              tcp_connection_del (tc0);
               goto drop;
 
               break;
-            case TCP_CONNECTION_STATE_TIME_WAIT:
+            case TCP_STATE_TIME_WAIT:
               /* The only thing that can arrive in this state is a
                * retransmission of the remote FIN. Acknowledge it, and restart
                * the 2 MSL timeout. */
 
               /* TODO */
-
+              goto drop;
               break;
             default:
               ASSERT(0);
@@ -1654,19 +1652,55 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
           /* 7: process the segment text */
           switch (tc0->state)
           {
-            case TCP_CONNECTION_STATE_ESTABLISHED:
-            case TCP_CONNECTION_STATE_FIN_WAIT_1:
-            case TCP_CONNECTION_STATE_FIN_WAIT_2:
+            case TCP_STATE_ESTABLISHED:
+            case TCP_STATE_FIN_WAIT_1:
+            case TCP_STATE_FIN_WAIT_2:
               error0 = tcp_segment_rcv (tm, tc0, b0, n_data_bytes0, &next0);
               break;
-            case TCP_CONNECTION_STATE_CLOSE_WAIT:
-            case TCP_CONNECTION_STATE_CLOSING:
-            case TCP_CONNECTION_STATE_LAST_ACK:
-            case TCP_CONNECTION_STATE_TIME_WAIT:
+            case TCP_STATE_CLOSE_WAIT:
+            case TCP_STATE_CLOSING:
+            case TCP_STATE_LAST_ACK:
+            case TCP_STATE_TIME_WAIT:
               /* This should not occur, since a FIN has been received from the
                * remote side.  Ignore the segment text. */
               break;
           }
+
+          /* 8: check the FIN bit */
+          if (!tcp_fin (tcp0))
+            goto drop;
+
+          switch (tc0->state)
+            {
+            case TCP_STATE_ESTABLISHED:
+            case TCP_STATE_SYN_RCVD:
+              /* Send FIN-ACK notify app and enter CLOSE-WAIT*/
+              tcp_make_finack (tc0, b0);
+              next0 = tcp_next_output(tc0->c_is_ip4);
+              stream_session_disconnect_notify (&tc0->connection);
+              tc0->state = TCP_STATE_CLOSE_WAIT;
+              break;
+            case TCP_STATE_CLOSE_WAIT:
+            case TCP_STATE_CLOSING:
+            case TCP_STATE_LAST_ACK:
+              /* move along .. */
+              break;
+            case TCP_STATE_FIN_WAIT_1:
+              tc0->state = TCP_STATE_TIME_WAIT;
+              tcp_connection_timers_stop (tc0);
+              tcp_timer_set (tc0, TCP_TIMER_2MSL, TCP_2MSL_TIME);
+              break;
+            case TCP_STATE_FIN_WAIT_2:
+              tc0->state = TCP_STATE_TIME_WAIT;
+              tcp_timer_set (tc0, TCP_TIMER_2MSL, TCP_2MSL_TIME);
+              break;
+            case TCP_STATE_TIME_WAIT:
+              /* Remain in the TIME-WAIT state. Restart the 2 MSL time-wait
+               * timeout.
+               */
+              tcp_timer_update (tc0, TCP_TIMER_2MSL, TCP_2MSL_TIME);
+              break;
+            }
 
           b0->error = error0 ? node->errors[error0] : 0;
 
@@ -1859,7 +1893,7 @@ tcp46_listen_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
 
           child0->irs = vnet_buffer (b0)->tcp.seq_number;
           child0->rcv_nxt = vnet_buffer (b0)->tcp.seq_number + 1;
-          child0->state = TCP_CONNECTION_STATE_SYN_RCVD;
+          child0->state = TCP_STATE_SYN_RCVD;
 
           /* RFC1323: TSval timestamps sent on {SYN} and {SYN,ACK}
            * segments are used to initialize PAWS. */
@@ -1988,7 +2022,7 @@ format_tcp_state (u8 *s, va_list *args)
 {
   tcp_state_t *state = va_arg (*args, tcp_state_t *);
 
-  if (state[0] < TCP_N_CONNECTION_STATE)
+  if (state[0] < TCP_N_STATES)
     s = format (s, "%s", tcp_fsm_states[state[0]]);
   else
     s = format (s, "UNKNOWN");
@@ -2184,8 +2218,8 @@ tcp_dispatch_table_init (tcp_main_t *tm)
 
 #define _(t,f,n,e)                                                      \
 do {                                                                    \
-    tm->dispatch_table[TCP_CONNECTION_STATE_##t][f].next = (n);         \
-    tm->dispatch_table[TCP_CONNECTION_STATE_##t][f].error = (e);        \
+    tm->dispatch_table[TCP_STATE_##t][f].next = (n);         \
+    tm->dispatch_table[TCP_STATE_##t][f].error = (e);        \
 } while (0)
 
   /* SYNs for new connections -> tcp-listen. */

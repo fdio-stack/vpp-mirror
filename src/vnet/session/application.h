@@ -34,14 +34,11 @@ typedef struct _stream_session_cb_vft
   /** Notify server of newly accepted session */
   int (*session_accept_callback) (stream_session_t *new_session);
 
-  /* Rejected session callback */
-  void (*session_delete_callback) (stream_session_t *session);
-
-  /* Existing session delete callback */
-  void (*session_clear_callback) (stream_session_t *session);
-
   /* Connection request callback */
   int (*session_connected_callback)(stream_session_t *s, u8 code);
+
+  /** Notify app that session is closing */
+  void (*session_disconnect_callback) (stream_session_t *s);
 
   /* Direct RX callback, for built-in servers */
   int (*builtin_server_rx_callback)(stream_session_t *session);

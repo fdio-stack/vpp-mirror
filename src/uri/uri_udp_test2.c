@@ -30,7 +30,7 @@
 #include <svm/svm_fifo_segment.h>
 #include <pthread.h>
 
-#include <vnet/uri/uri.h>
+#include <vnet/session/session_interface.h>
 
 #define vl_typedefs		/* define message structures */
 #include <vpp/api/vpe_all_api_h.h>

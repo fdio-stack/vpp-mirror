@@ -48,10 +48,10 @@
 
 typedef enum _tcp_state
 {
-#define _(sym, str) TCP_CONNECTION_STATE_##sym,
+#define _(sym, str) TCP_STATE_##sym,
   foreach_tcp_fsm_state
 #undef _
-  TCP_N_CONNECTION_STATE
+  TCP_N_STATES
 } tcp_state_t;
 
 format_function_t format_tcp_state;
@@ -82,6 +82,21 @@ extern timer_expiration_handler tcp_timer_retransmit_syn_handler;
 
 #define TCP_TIMER_HANDLE_INVALID ((u32) ~0)
 
+/* Timer delays as multiples of 100ms */
+#define TCP_TO_TIMER_TICK       TCP_TICK*10  /* Period for converting from TCP
+                                              * ticks to timer units */
+#define TCP_DELACK_TIME         1       /* 0.1s */
+#define TCP_ESTABLISH_TIME      750     /* 75s */
+#define TCP_2MSL_TIME           300     /* 30s */
+
+#define TCP_RTO_MAX 60 * THZ    /* Min max RTO (60s) as per RFC6298 */
+#define TCP_RTT_MAX 30 * THZ    /* 30s (probably too much) */
+#define TCP_RTO_SYN_RETRIES 3   /* SYN retries without doubling RTO */
+#define TCP_RTO_INIT 1 * THZ    /* Initial retransmit timer */
+
+void
+tcp_update_time (f64 now, u32 thread_index);
+
 /** TCP connection flags */
 #define foreach_tcp_connection_flag             \
   _(DELACK, "Delay ACK")                        \
@@ -106,20 +121,6 @@ typedef enum _tcp_connection_flag
 #undef _
   TCP_CONN_N_FLAGS
 } tcp_connection_flags_e;
-
-/* Timer delays as multiples of 100ms */
-#define TCP_TO_TIMER_TICK       TCP_TICK*10  /* Period for converting from TCP
-                                              * ticks to timer units */
-#define TCP_DELACK_TIME         1       /* 0.1s */
-#define TCP_ESTABLISH_TIME      750     /* 75s */
-
-#define TCP_RTO_MAX 60 * THZ    /* Min max RTO (60s) as per RFC6298 */
-#define TCP_RTT_MAX 30 * THZ    /* 30s (probably too much) */
-#define TCP_RTO_SYN_RETRIES 3   /* SYN retries without doubling RTO */
-#define TCP_RTO_INIT 1 * THZ    /* Initial retransmit timer */
-
-void
-tcp_update_time (f64 now, u32 thread_index);
 
 /** TCP buffer flags */
 #define foreach_tcp_buf_flag                            \
@@ -290,7 +291,7 @@ typedef struct _tcp_main
   tcp_connection_t *listener_pool;
 
   /** Dispatch table by state and flags */
-  tcp_lookup_dispatch_t dispatch_table[TCP_N_CONNECTION_STATE][64];
+  tcp_lookup_dispatch_t dispatch_table[TCP_N_STATES][64];
 
   u8 log2_tstamp_clocks_per_tick;
 
@@ -348,7 +349,9 @@ tcp_connection_get (u32 conn_index, u32 thread_index)
 }
 
 void
-tcp_connection_close (tcp_main_t *tm, tcp_connection_t *tc);
+tcp_connection_close (tcp_connection_t *tc);
+void
+tcp_connection_del (tcp_connection_t *tc);
 void
 tcp_connection_drop (tcp_main_t *tm, tcp_connection_t *tc);
 
@@ -366,6 +369,8 @@ tcp_half_open_connection_get (u32 conn_index)
 
 void
 tcp_make_ack (tcp_connection_t *ts, vlib_buffer_t *b);
+void
+tcp_make_finack (tcp_connection_t *tc, vlib_buffer_t *b);
 void
 tcp_make_synack (tcp_connection_t *ts, vlib_buffer_t *b);
 void
@@ -451,23 +456,25 @@ tcp_time_now (void)
 }
 
 u32
-tcp_push_header_uri (transport_connection_t *tconn, vlib_buffer_t *b);
+tcp_push_header (transport_connection_t *tconn, vlib_buffer_t *b);
 
 u32
 tcp_prepare_retransmit_segment (tcp_connection_t *tc, vlib_buffer_t *b,
                                 u32 max_bytes);
 
 void
-tcp_timers_init (tcp_connection_t *tc);
+tcp_connection_timers_init (tcp_connection_t *tc);
+void
+tcp_connection_timers_stop (tcp_connection_t *tc);
 
 void
 tcp_connection_init_vars (tcp_connection_t *tc);
 
 always_inline void
-tcp_timer_set (tcp_main_t *tm, tcp_connection_t *tc, u8 timer_id, u32 interval)
+tcp_timer_set (tcp_connection_t *tc, u8 timer_id, u32 interval)
 {
   tc->timers[timer_id]
-    = tw_timer_start_16t_2w_512sl (&tm->timer_wheels[tc->c_thread_index],
+    = tw_timer_start_16t_2w_512sl (&tcp_main.timer_wheels[tc->c_thread_index],
                                    tc->c_c_index, timer_id, interval);
 }
 
@@ -475,31 +482,30 @@ always_inline void
 tcp_retransmit_timer_set (tcp_main_t *tm, tcp_connection_t *tc)
 {
   /* XXX Switch to faster TW */
-  tcp_timer_set (tm, tc, TCP_TIMER_RETRANSMIT,
+  tcp_timer_set (tc, TCP_TIMER_RETRANSMIT,
                  clib_max(tc->rto * TCP_TO_TIMER_TICK, 1));
 }
 
 always_inline void
-tcp_timer_reset (tcp_main_t *tm, tcp_connection_t *tc, u8 timer_id)
+tcp_timer_reset (tcp_connection_t *tc, u8 timer_id)
 {
   if (tc->timers[timer_id] == TCP_TIMER_HANDLE_INVALID)
     return;
 
-  tw_timer_stop_16t_2w_512sl (&tm->timer_wheels[tc->c_thread_index], 
+  tw_timer_stop_16t_2w_512sl (&tcp_main.timer_wheels[tc->c_thread_index],
                                tc->timers[timer_id]);
   tc->timers[timer_id] = TCP_TIMER_HANDLE_INVALID;
 }
 
 always_inline void
-tcp_timer_update (tcp_main_t *tm, tcp_connection_t *tc, u8 timer_id,
-                  u32 interval)
+tcp_timer_update (tcp_connection_t *tc, u8 timer_id, u32 interval)
 {
   if (tc->timers[timer_id] != TCP_TIMER_HANDLE_INVALID)
-    tw_timer_stop_16t_2w_512sl (&tm->timer_wheels[tc->c_thread_index],
-                                 tc->timers[timer_id]);
-  tc->timers[timer_id] 
-    = tw_timer_start_16t_2w_512sl (&tm->timer_wheels[tc->c_thread_index],
-                                    tc->c_c_index, timer_id, interval);
+    tw_timer_stop_16t_2w_512sl (&tcp_main.timer_wheels[tc->c_thread_index],
+                                tc->timers[timer_id]);
+  tc->timers[timer_id] = tw_timer_start_16t_2w_512sl (
+      &tcp_main.timer_wheels[tc->c_thread_index], tc->c_c_index, timer_id,
+      interval);
 }
 
 always_inline u8

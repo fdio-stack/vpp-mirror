@@ -38,7 +38,7 @@ format_stream_session (u8 *s, va_list *args)
                   ss->server_tx_fifo, stream_session_get_index (ss));
   tp_vft = session_get_transport_vft (ss->session_type);
   s = format (s, "%-40U%v", tp_vft->format_connection, ss->connection_index,
-              ss->session_thread_index, str);
+              ss->thread_index, str);
   vec_free(str);
 
   return s;
@@ -145,7 +145,8 @@ clear_session_command_fn (vlib_main_t *vm, unformat_input_t *input,
   session = pool_elt_at_index (pool, session_index);
   server = application_get (session->app_index);
 
-  server->cb_fns.session_clear_callback (session);
+  /* Disconnect both app and transport */
+  server->cb_fns.session_disconnect_callback (session);
 
   return 0;
 }

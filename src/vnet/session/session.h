@@ -16,8 +16,6 @@
 #define __included_session_h__
 
 #include <vnet/session/transport.h>
-#include <vppinfra/bihash_16_8.h>
-#include <vppinfra/bihash_48_8.h>
 #include <vlibmemory/unix_shared_memory_queue.h>
 #include <vlibmemory/api.h>
 #include <vppinfra/sparse_vec.h>
@@ -65,7 +63,7 @@ typedef enum {
   SESSION_QUEUE_N_NEXT,
 } session_queue_next_t;
 
-#define foreach_session_type                \
+#define foreach_session_type                    \
   _(IP4_TCP, ip4_tcp)                           \
   _(IP4_UDP, ip4_udp)                           \
   _(IP6_TCP, ip6_tcp)                           \
@@ -113,7 +111,7 @@ typedef struct _stream_session_t
   /** Transport specific */
   u32 connection_index;
 
-  u8 session_thread_index;
+  u8 thread_index;
 
   /** Application specific */
   u32 pid;
@@ -151,9 +149,6 @@ typedef struct _session_manager
   /** Flag that indicates if additional segments should be created */
   u8 add_segment;
 } session_manager_t;
-
-typedef clib_bihash_kv_16_8_t session_kv4_t;
-typedef clib_bihash_kv_48_8_t session_kv6_t;
 
 /* Forward definition */
 typedef struct _session_manager_main session_manager_main_t;
@@ -316,7 +311,7 @@ stream_session_get_index (stream_session_t *s)
   if (s->session_state == SESSION_STATE_LISTENING)
     return s - session_manager_main.listen_sessions[s->session_type];
 
-  return s - session_manager_main.sessions[s->session_thread_index];
+  return s - session_manager_main.sessions[s->thread_index];
 }
 
 always_inline u32
@@ -340,6 +335,8 @@ stream_session_connect_notify (transport_connection_t *tc, u8 sst, u8 is_fail);
 void
 stream_session_accept_notify (transport_connection_t *tc);
 void
+stream_session_disconnect_notify (transport_connection_t *tc);
+void
 stream_session_reset_notify (transport_connection_t *tc);
 int
 stream_session_accept (transport_connection_t *tc, u32 listener_index, u8 sst,
@@ -347,6 +344,8 @@ stream_session_accept (transport_connection_t *tc, u32 listener_index, u8 sst,
 void
 stream_session_open (u8 sst, ip46_address_t *addr, u16 port_host_byte_order,
                      u32 api_client_index);
+void
+stream_session_disconnect (stream_session_t *s);
 void
 stream_session_delete (stream_session_t * s);
 int

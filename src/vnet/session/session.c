@@ -23,121 +23,12 @@
 #include <vnet/fib/ip4_fib.h>
 #include <vnet/session/application.h>
 
-/** Per-type vector of transport protocol virtual function tables*/
+/**
+ * Per-type vector of transport protocol virtual function tables
+ */
 static transport_proto_vft_t *tp_vfts;
 
 session_manager_main_t session_manager_main;
-
-/** Allocate vpp event queue (once) per worker thread */
-void
-vpp_session_event_queue_allocate (session_manager_main_t *smm, u32 thread_index)
-{
-  api_main_t *am = &api_main;
-  void *oldheap;
-
-  if (smm->vpp_event_queues[thread_index] == 0)
-    {
-      /* Allocate event fifo in the /vpe-api shared-memory segment */
-      oldheap = svm_push_data_heap (am->vlib_rp);
-
-      smm->vpp_event_queues[thread_index] = unix_shared_memory_queue_init (
-          2048 /* nels $$$$ config */, sizeof(session_fifo_event_t),
-          0 /* consumer pid */,
-          0 /* (do not) send signal when queue non-empty */);
-
-      svm_pop_heap (oldheap);
-    }
-}
-
-static void
-make_v4_ss_kv (session_kv4_t *kv, ip4_address_t * lcl, ip4_address_t * rmt,
-               u16 lcl_port, u16 rmt_port, u8 proto)
-{
-  v4_connection_key_t key;
-  memset(&key, 0, sizeof(v4_connection_key_t));
-
-  key.src.as_u32 = lcl->as_u32;
-  key.dst.as_u32 = rmt->as_u32;
-  key.src_port = lcl_port;
-  key.dst_port = rmt_port;
-  key.proto = proto;
-
-  kv->key[0] = key.as_u64[0];
-  kv->key[1] = key.as_u64[1];
-  kv->value = ~0ULL;
-}
-
-static void
-make_v4_listener_kv (session_kv4_t *kv, ip4_address_t * lcl, u16 lcl_port,
-                     u8 proto)
-{
-  v4_connection_key_t key;
-  memset(&key, 0, sizeof(v4_connection_key_t));
-
-  key.src.as_u32 = lcl->as_u32;
-  key.dst.as_u32 = 0;
-  key.src_port = lcl_port;
-  key.dst_port = 0;
-  key.proto = proto;
-
-  kv->key[0] = key.as_u64[0];
-  kv->key[1] = key.as_u64[1];
-  kv->value = ~0ULL;
-}
-
-static void
-make_v4_ss_kv_from_tc (session_kv4_t * kv, transport_connection_t *t)
-{
-  return make_v4_ss_kv (kv, &t->lcl_ip.ip4, &t->rmt_ip.ip4, t->lcl_port,
-                        t->rmt_port, t->proto);
-}
-
-static void
-make_v6_ss_kv (session_kv6_t *kv, ip6_address_t * lcl, ip6_address_t * rmt,
-               u16 lcl_port, u16 rmt_port, u8 proto)
-{
-  v6_connection_key_t key;
-  memset(&key, 0, sizeof(v6_connection_key_t));
-
-  key.src.as_u64[0] = lcl->as_u64[0];
-  key.src.as_u64[1] = lcl->as_u64[1];
-  key.dst.as_u64[0] = rmt->as_u64[0];
-  key.dst.as_u64[1] = rmt->as_u64[1];
-  key.src_port = lcl_port;
-  key.dst_port = rmt_port;
-  key.proto = proto;
-
-  kv->key[0] = key.as_u64[0];
-  kv->key[1] = key.as_u64[1];
-  kv->value = ~0ULL;
-}
-
-static void
-make_v6_listener_kv (session_kv6_t *kv, ip6_address_t * lcl, u16 lcl_port,
-                     u8 proto)
-{
-  v6_connection_key_t key;
-  memset(&key, 0, sizeof(v6_connection_key_t));
-
-  key.src.as_u64[0] = lcl->as_u64[0];
-  key.src.as_u64[1] = lcl->as_u64[1];
-  key.dst.as_u64[0] = 0;
-  key.dst.as_u64[1] = 0;
-  key.src_port = lcl_port;
-  key.dst_port = 0;
-  key.proto = proto;
-
-  kv->key[0] = key.as_u64[0];
-  kv->key[1] = key.as_u64[1];
-  kv->value = ~0ULL;
-}
-
-static void
-make_v6_ss_kv_from_tc (session_kv6_t *kv, transport_connection_t *t)
-{
-  make_v6_ss_kv (kv, &t->lcl_ip.ip6, &t->rmt_ip.ip6, t->lcl_port,
-                 t->rmt_port, t->proto);
-}
 
 /*
  * Session lookup key; (src-ip, dst-ip, src-port, dst-port, session-type)
@@ -177,7 +68,7 @@ stream_session_table_add (session_manager_main_t *smm, stream_session_t * s,
   transport_connection_t * tc;
 
   tc = tp_vfts[s->session_type].get_connection (s->connection_index,
-                                                s->session_thread_index);
+                                                s->thread_index);
   stream_session_table_add_for_tc (s->session_type, tc, value);
 }
 
@@ -244,7 +135,7 @@ stream_session_table_del (session_manager_main_t *smm, stream_session_t *s)
   transport_connection_t * ts;
 
   ts = tp_vfts[s->session_type].get_connection (s->connection_index,
-                                             s->session_thread_index);
+                                             s->thread_index);
   return stream_session_table_del_for_tc (smm, s->session_type, ts);
 }
 
@@ -479,6 +370,29 @@ stream_session_lookup_transport6 (session_manager_main_t *smm,
   return 0;
 }
 
+/**
+ * Allocate vpp event queue (once) per worker thread
+ */
+void
+vpp_session_event_queue_allocate (session_manager_main_t *smm, u32 thread_index)
+{
+  api_main_t *am = &api_main;
+  void *oldheap;
+
+  if (smm->vpp_event_queues[thread_index] == 0)
+    {
+      /* Allocate event fifo in the /vpe-api shared-memory segment */
+      oldheap = svm_push_data_heap (am->vlib_rp);
+
+      smm->vpp_event_queues[thread_index] = unix_shared_memory_queue_init (
+          2048 /* nels $$$$ config */, sizeof(session_fifo_event_t),
+          0 /* consumer pid */,
+          0 /* (do not) send signal when queue non-empty */);
+
+      svm_pop_heap (oldheap);
+    }
+}
+
 void
 session_manager_get_segment_info (u32 index, u8 **name, u32 *size)
 {
@@ -487,7 +401,6 @@ session_manager_get_segment_info (u32 index, u8 **name, u32 *size)
   *name = s->h->segment_name;
   *size = s->ssvm.ssvm_size;
 }
-
 
 always_inline int
 session_manager_add_segment_i (session_manager_main_t *smm,
@@ -744,7 +657,7 @@ stream_session_create_i (session_manager_main_t *smm, application_t *app,
   s->session_state = SESSION_STATE_CONNECTING;
   s->app_index = application_get_index (app);
   s->server_segment_index = fifo_segment_index;
-  s->session_thread_index = thread_index;
+  s->thread_index = thread_index;
   s->session_index = pool_index;
 
   /* Attach transport to session */
@@ -795,7 +708,7 @@ stream_session_enqueue_data (transport_connection_t *tc, u8 *data, u16 len,
       /* Queue RX event on this fifo. Eventually these will need to be flushed
        * by calling stream_server_flush_enqueue_events () */
       session_manager_main_t *smm = vnet_get_session_manager_main ();
-      u32 thread_index = s->session_thread_index;
+      u32 thread_index = s->thread_index;
       u32 my_enqueue_epoch = smm->current_enqueue_epoch[thread_index];
 
       if (s->enqueue_epoch != my_enqueue_epoch)
@@ -1048,7 +961,7 @@ stream_session_connect_notify (transport_connection_t *tc, u8 sst, u8 is_fail)
         return;
 
       app->session_index = stream_session_get_index (new_s);
-      app->thread_index = new_s->session_thread_index;
+      app->thread_index = new_s->thread_index;
 
       /* Allocate vpp event queue for this thread if needed */
       vpp_session_event_queue_allocate (smm, tc->thread_index);
@@ -1068,12 +981,22 @@ stream_session_accept_notify (transport_connection_t *tc)
   stream_session_t *s;
 
   s = stream_session_get (tc->s_index, tc->thread_index);
-
-  /* Get session's server */
   server = application_get (s->app_index);
-
-  /* Shoulder-tap the server */
   server->cb_fns.session_accept_callback (s);
+}
+
+/**
+ * Send disconnect to application
+ */
+void
+stream_session_disconnect_notify (transport_connection_t *tc)
+{
+  application_t *server;
+  stream_session_t *s;
+
+  s = stream_session_get (tc->s_index, tc->thread_index);
+  server = application_get (s->app_index);
+  server->cb_fns.session_disconnect_callback (s);
 }
 
 void
@@ -1119,7 +1042,7 @@ stream_session_delete (stream_session_t *s)
 {
   session_manager_main_t *smm = vnet_get_session_manager_main ();
   svm_fifo_segment_private_t * fifo_segment;
-  u32 my_thread_index = s->session_thread_index;
+  u32 my_thread_index = s->thread_index;
   int rv;
 
   /* delete from the main lookup table */
@@ -1134,7 +1057,6 @@ stream_session_delete (stream_session_t *s)
   svm_fifo_segment_free_fifo (fifo_segment, s->server_rx_fifo);
   svm_fifo_segment_free_fifo (fifo_segment, s->server_tx_fifo);
 
-  tp_vfts[s->session_type].delete (s->connection_index, my_thread_index);
   pool_put(smm->sessions[my_thread_index], s);
 }
 
@@ -1159,10 +1081,14 @@ stream_session_open (u8 sst, ip46_address_t *addr, u16 port_host_byte_order,
   stream_session_half_open_table_add (sst, tc, value);
 }
 
+/**
+ * Disconnect session and propagate to transport
+ */
 void
-stream_session_close (session_manager_main_t *smm, application_t *ss)
+stream_session_disconnect (stream_session_t *s)
 {
-  /* TODO */
+  tp_vfts[s->session_type].close (s->connection_index, s->thread_index);
+  stream_session_delete (s);
 }
 
 void

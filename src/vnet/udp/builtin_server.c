@@ -20,7 +20,7 @@
 #include <vnet/udp/udp.h>
 #include <vnet/ip/udp.h>
 #include <vnet/session/session.h>
-#include <vnet/uri/uri.h>
+#include <vnet/session/session_interface.h>
 
 /** per-worker built-in server copy buffers */
 u8 **copy_buffers;
@@ -34,9 +34,9 @@ builtin_session_create_callback (stream_session_t * s)
 }
 
 static void
-builtin_session_clear_callback (stream_session_t * s)
+builtin_session_disconnect_callback (stream_session_t *s)
 {
-  stream_session_delete (s);
+  stream_session_disconnect (s);
 }
 
 static int
@@ -49,7 +49,7 @@ builtin_server_rx_callback (stream_session_t *s)
   session_fifo_event_t evt;
   unix_shared_memory_queue_t *q;
 
-  my_copy_buffer = copy_buffers [s->session_thread_index];
+  my_copy_buffer = copy_buffers [s->thread_index];
   rx_fifo = s->server_rx_fifo;
   tx_fifo = s->server_tx_fifo;
 
@@ -66,7 +66,7 @@ builtin_server_rx_callback (stream_session_t *s)
   actual_transfer = svm_fifo_enqueue_nowait2 (tx_fifo, 0, this_transfer,
                                               my_copy_buffer);
                                               
-  copy_buffers [s->session_thread_index] = my_copy_buffer;
+  copy_buffers [s->thread_index] = my_copy_buffer;
 
   /* Fabricate TX event, send to ourselves */
   evt.fifo = tx_fifo;
@@ -74,17 +74,19 @@ builtin_server_rx_callback (stream_session_t *s)
   /* $$$$ for event logging */
   evt.enqueue_length = actual_transfer;
   evt.event_id = 0;
-  q = session_manager_get_vpp_event_queue(s->session_thread_index);
+  q = session_manager_get_vpp_event_queue(s->thread_index);
   unix_shared_memory_queue_add (q, (u8 *)&evt, 0 /* do wait for mutex */);
 
   return 0;
 }
 
+/* *INDENT-OFF* */
 static session_cb_vft_t builtin_server = {
     .session_accept_callback = builtin_session_create_callback,
-    .session_clear_callback = builtin_session_clear_callback,
+    .session_disconnect_callback = builtin_session_disconnect_callback,
     .builtin_server_rx_callback = builtin_server_rx_callback
 };
+/* *INDENT-ON* */
 
 static int
 bind_builtin_uri_server (u8 * uri)

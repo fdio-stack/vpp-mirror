@@ -19,7 +19,7 @@
 #include <vnet/ip/ip.h>
 
 #include <vnet/udp/udp.h>
-#include <vnet/uri/uri.h>
+#include <vnet/session/session_interface.h>
 
 #include <vppinfra/hash.h>
 #include <vppinfra/error.h>

@@ -12,17 +12,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <vnet/uri/uri.h>
+#include <vnet/session/session_interface.h>
 #include <vnet/session/session.h>
 #include <vlibmemory/api.h>
 #include <vnet/dpo/load_balance.h>
 #include <vnet/fib/ip4_fib.h>
 
 /** @file
-    URI handling, bind tables
+    URI based session API bind/unbind/connect/disconnect calls
 */
-
-uri_main_t uri_main;
 
 /**
  * unformat a vnet URI
@@ -238,15 +236,6 @@ vnet_unbind_uri (char *uri, u32 api_client_index)
 }
 
 int
-redirect_connect_uri_callback (u32 api_client_index, void *mp) __attribute__((weak));
-
-int redirect_connect_uri_callback (u32 api_client_index, void *mp)
-{
-  clib_warning ("STUB");
-  return -1;
-}
-
-int
 vnet_connect_uri (vnet_connect_uri_args_t *a)
 {
   ip46_address_t ip46_address;
@@ -305,39 +294,10 @@ vnet_disconnect_uri (u32 client_index, u32 session_index, u32 thread_index)
   stream_session_t *session;
 
   session = stream_session_get (session_index, thread_index);
-  stream_session_delete (session);
+  stream_session_disconnect (session);
 
   return 0;
 }
-
-int
-uri_api_session_not_valid (u32 session_index, u32 thread_index)
-{
-  session_manager_main_t *smm = vnet_get_session_manager_main ();
-  stream_session_t *pool;
-
-  if (thread_index >= vec_len (smm->sessions))
-    return VNET_API_ERROR_INVALID_VALUE;
-
-  pool = smm->sessions[thread_index];
-
-  if (pool_is_free_index (pool, session_index))
-    return VNET_API_ERROR_INVALID_VALUE_2;
-
-  return 0;
-}
-
-static clib_error_t *
-uri_init (vlib_main_t * vm)
-{
-  uri_main_t * um = &uri_main;
-
-  um->vlib_main = vm;
-  um->vnet_main = vnet_get_main();
-  return 0;
-}
-
-VLIB_INIT_FUNCTION (uri_init);
 
 /*
  * fd.io coding-style-patch-verification: ON

@@ -18,6 +18,75 @@
 
 #include <vnet/vnet.h>
 #include <vnet/ip/ip.h>
+#include <vppinfra/bihash_16_8.h>
+#include <vppinfra/bihash_48_8.h>
+
+/*
+ * Protocol independent transport properties associated to a session
+ */
+typedef struct _transport_connection
+{
+  ip46_address_t rmt_ip;        /**< Remote IP */
+  ip46_address_t lcl_ip;        /**< Local IP */
+  u16 lcl_port;                 /**< Local port */
+  u16 rmt_port;                 /**< Remote port */
+  u8 proto;                     /**< Transport protocol id */
+
+  u32 s_index;                  /**< Parent session index */
+  u32 c_index;                  /**< Connection index in transport pool */
+  u8 is_ip4;                    /**< Flag if IP4 connection */
+  u32 thread_index;             /**< Worker-thread index */
+
+  /** Macros for 'derived classes' where base is named "connection" */
+#define c_lcl_ip connection.lcl_ip
+#define c_rmt_ip connection.rmt_ip
+#define c_lcl_ip4 connection.lcl_ip.ip4
+#define c_rmt_ip4 connection.rmt_ip.ip4
+#define c_lcl_ip6 connection.lcl_ip.ip6
+#define c_rmt_ip6 connection.rmt_ip.ip6
+#define c_lcl_port connection.lcl_port
+#define c_rmt_port connection.rmt_port
+#define c_proto connection.proto
+#define c_state connection.state
+#define c_s_index connection.s_index
+#define c_c_index connection.c_index
+#define c_is_ip4 connection.is_ip4
+#define c_thread_index connection.thread_index
+} transport_connection_t;
+
+/*
+ * Transport protocol virtual function table
+ */
+typedef struct _transport_proto_vft
+{
+  /*
+   * Setup
+   */
+  u32 (*bind) (vlib_main_t *, u32, ip46_address_t *, u16);
+  u32 (*unbind) (vlib_main_t *, u32);
+  int (*open) (ip46_address_t *addr, u16 port_host_byte_order);
+  void (*close) (u32 conn_index, u32 thread_index);
+
+  /*
+   * Transmission
+   */
+  u32 (*push_header) (transport_connection_t *tconn, vlib_buffer_t *b);
+  u16 (*send_mss) (transport_connection_t *tc);
+  u32 (*send_space) (transport_connection_t *tc);
+  u32 (*rx_fifo_offset) (transport_connection_t *tc);
+
+  /*
+   * Connection retrieval
+   */
+  transport_connection_t *(*get_connection) (u32 conn_idx, u32 thread_idx);
+  transport_connection_t *(*get_listener) (u32 conn_index);
+  transport_connection_t *(*get_half_open) (u32 conn_index);
+
+  /*
+   * Format
+   */
+  u8 *(*format_connection) (u8 *s, va_list *args);
+} transport_proto_vft_t;
 
 /* 16 octets */
 typedef CLIB_PACKED (struct
@@ -58,6 +127,99 @@ typedef CLIB_PACKED(struct
   };
 }) v6_connection_key_t;
 
+typedef clib_bihash_kv_16_8_t session_kv4_t;
+typedef clib_bihash_kv_48_8_t session_kv6_t;
+
+always_inline void
+make_v4_ss_kv (session_kv4_t *kv, ip4_address_t * lcl, ip4_address_t * rmt,
+               u16 lcl_port, u16 rmt_port, u8 proto)
+{
+  v4_connection_key_t key;
+  memset(&key, 0, sizeof(v4_connection_key_t));
+
+  key.src.as_u32 = lcl->as_u32;
+  key.dst.as_u32 = rmt->as_u32;
+  key.src_port = lcl_port;
+  key.dst_port = rmt_port;
+  key.proto = proto;
+
+  kv->key[0] = key.as_u64[0];
+  kv->key[1] = key.as_u64[1];
+  kv->value = ~0ULL;
+}
+
+always_inline void
+make_v4_listener_kv (session_kv4_t *kv, ip4_address_t * lcl, u16 lcl_port,
+                     u8 proto)
+{
+  v4_connection_key_t key;
+  memset(&key, 0, sizeof(v4_connection_key_t));
+
+  key.src.as_u32 = lcl->as_u32;
+  key.dst.as_u32 = 0;
+  key.src_port = lcl_port;
+  key.dst_port = 0;
+  key.proto = proto;
+
+  kv->key[0] = key.as_u64[0];
+  kv->key[1] = key.as_u64[1];
+  kv->value = ~0ULL;
+}
+
+always_inline void
+make_v4_ss_kv_from_tc (session_kv4_t * kv, transport_connection_t *t)
+{
+  return make_v4_ss_kv (kv, &t->lcl_ip.ip4, &t->rmt_ip.ip4, t->lcl_port,
+                        t->rmt_port, t->proto);
+}
+
+always_inline void
+make_v6_ss_kv (session_kv6_t *kv, ip6_address_t * lcl, ip6_address_t * rmt,
+               u16 lcl_port, u16 rmt_port, u8 proto)
+{
+  v6_connection_key_t key;
+  memset(&key, 0, sizeof(v6_connection_key_t));
+
+  key.src.as_u64[0] = lcl->as_u64[0];
+  key.src.as_u64[1] = lcl->as_u64[1];
+  key.dst.as_u64[0] = rmt->as_u64[0];
+  key.dst.as_u64[1] = rmt->as_u64[1];
+  key.src_port = lcl_port;
+  key.dst_port = rmt_port;
+  key.proto = proto;
+
+  kv->key[0] = key.as_u64[0];
+  kv->key[1] = key.as_u64[1];
+  kv->value = ~0ULL;
+}
+
+always_inline void
+make_v6_listener_kv (session_kv6_t *kv, ip6_address_t * lcl, u16 lcl_port,
+                     u8 proto)
+{
+  v6_connection_key_t key;
+  memset(&key, 0, sizeof(v6_connection_key_t));
+
+  key.src.as_u64[0] = lcl->as_u64[0];
+  key.src.as_u64[1] = lcl->as_u64[1];
+  key.dst.as_u64[0] = 0;
+  key.dst.as_u64[1] = 0;
+  key.src_port = lcl_port;
+  key.dst_port = 0;
+  key.proto = proto;
+
+  kv->key[0] = key.as_u64[0];
+  kv->key[1] = key.as_u64[1];
+  kv->value = ~0ULL;
+}
+
+always_inline void
+make_v6_ss_kv_from_tc (session_kv6_t *kv, transport_connection_t *t)
+{
+  make_v6_ss_kv (kv, &t->lcl_ip.ip6, &t->rmt_ip.ip6, t->lcl_port,
+                 t->rmt_port, t->proto);
+}
+
 typedef struct _transport_endpoint
 {
   ip46_address_t ip;
@@ -77,93 +239,6 @@ transport_endpoint_table_add (transport_endpoint_table_t *ht,
 void
 transport_endpoint_table_del (transport_endpoint_table_t *ht,
                               transport_endpoint_t *te);
-/*
- * Protocol independent transport properties associated to a session
- */
-typedef struct _transport_connection
-{
-  ip46_address_t rmt_ip;        /**< Remote IP */
-  ip46_address_t lcl_ip;        /**< Local IP */
-  u16 lcl_port;                 /**< Local port */
-  u16 rmt_port;                 /**< Remote port */
-  u8 proto;                     /**< Transport protocol id */
-
-  u32 s_index;                  /**< Parent session index */
-  u32 c_index;                  /**< Connection index in transport pool */
-  u8 is_ip4;                    /**< Flag if IP4 connection */
-  u32 thread_index;             /**< Worker-thread index */
-
-  /** Macros for 'derived classes' where base is named "connection" */
-#define c_lcl_ip connection.lcl_ip
-#define c_rmt_ip connection.rmt_ip
-#define c_lcl_ip4 connection.lcl_ip.ip4
-#define c_rmt_ip4 connection.rmt_ip.ip4
-#define c_lcl_ip6 connection.lcl_ip.ip6
-#define c_rmt_ip6 connection.rmt_ip.ip6
-#define c_lcl_port connection.lcl_port
-#define c_rmt_port connection.rmt_port
-#define c_proto connection.proto
-#define c_state connection.state
-#define c_s_index connection.s_index
-#define c_c_index connection.c_index
-#define c_is_ip4 connection.is_ip4
-#define c_thread_index connection.thread_index
-} transport_connection_t;
-
-typedef u32
-(*tp_application_bind) (vlib_main_t *, u32, ip46_address_t *, u16);
-
-typedef u32
-(*tp_application_unbind) (vlib_main_t *, u32);
-
-typedef u32
-(*tp_application_send) (transport_connection_t *tconn, vlib_buffer_t *b);
-
-typedef u8 *
-(*tp_connection_format) (u8 *s, va_list *args);
-
-typedef transport_connection_t *
-(*tp_connection_get) (u32 conn_index, u32 my_thread_index);
-
-typedef transport_connection_t *
-(*tp_listen_connection_get) (u32 conn_index);
-
-typedef transport_connection_t *
-(*tp_half_open_connection_get) (u32 conne_index);
-
-typedef void
-(*tp_connection_close) (u32 conn_index, u32 my_thread_index);
-
-typedef int
-(*tp_connection_open) (ip46_address_t *addr, u16 port_host_byte_order);
-
-typedef u16
-(*tp_connection_snd_mss) (transport_connection_t *tc);
-
-typedef u32
-(*tp_connection_snd_space) (transport_connection_t *tc);
-
-typedef u32
-(*tp_connection_get_rx_fifo_offset) (transport_connection_t *tc);
-
-/*
- * Transport protocol virtual function table
- */
-typedef struct _transport_proto_vft
-{
-  tp_application_bind bind;
-  tp_application_unbind unbind;
-  tp_application_send push_header;
-  tp_connection_format format_connection;
-  tp_connection_get get_connection;
-  tp_listen_connection_get get_listener;
-  tp_half_open_connection_get get_half_open;
-  tp_connection_close delete;
-  tp_connection_open open;
-  tp_connection_snd_mss send_mss;
-  tp_connection_snd_space send_space;
-  tp_connection_get_rx_fifo_offset rx_fifo_offset;
-} transport_proto_vft_t;
 
 #endif /* VNET_VNET_URI_TRANSPORT_H_ */
 

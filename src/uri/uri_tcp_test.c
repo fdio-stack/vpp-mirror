@@ -21,7 +21,7 @@
 #include <vlibmemory/api.h>
 #include <vpp/api/vpe_msg_enum.h>
 
-#include <vnet/uri/uri.h>
+#include <vnet/session/session_interface.h>
 
 #define vl_typedefs             /* define message structures */
 #include <vpp/api/vpe_all_api_h.h>

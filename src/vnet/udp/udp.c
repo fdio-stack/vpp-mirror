@@ -26,7 +26,7 @@
 udp_uri_main_t udp_uri_main;
 
 u32
-vnet_bind_ip4_udp_uri (vlib_main_t *vm, u32 session_index, ip46_address_t *ip,
+udp_session_bind_ip4 (vlib_main_t *vm, u32 session_index, ip46_address_t *ip,
                        u16 port_number_host_byte_order)
 {
   udp_uri_main_t *um = vnet_get_udp_main ();
@@ -59,7 +59,7 @@ vnet_bind_ip6_udp_uri (vlib_main_t *vm, u32 session_index, ip46_address_t *ip,
 }
 
 u32
-vnet_unbind_ip4_udp_uri (vlib_main_t *vm, u32 listener_index)
+udp_session_unbind_ip4 (vlib_main_t *vm, u32 listener_index)
 {
   udp_uri_main_t *um = vnet_get_udp_main ();
   udp_session_t *listener;
@@ -85,7 +85,7 @@ vnet_unbind_ip6_udp_uri (vlib_main_t *vm, u32 listener_index)
 }
 
 transport_connection_t *
-uri_udp_session_get_listener (u32 listener_index)
+udp_session_get_listener (u32 listener_index)
 {
   udp_uri_main_t *um = vnet_get_udp_main ();
   udp_session_t *us;
@@ -95,7 +95,7 @@ uri_udp_session_get_listener (u32 listener_index)
 }
 
 u32
-uri_tx_ip4_udp (transport_connection_t *tconn, vlib_buffer_t *b)
+udp_push_header (transport_connection_t *tconn, vlib_buffer_t *b)
 {
   ip4_header_t * ip;
   udp_header_t * udp;
@@ -128,7 +128,7 @@ uri_tx_ip4_udp (transport_connection_t *tconn, vlib_buffer_t *b)
 }
 
 transport_connection_t *
-uri_udp_session_get (u32 connection_index, u32 my_thread_index)
+udp_session_get (u32 connection_index, u32 my_thread_index)
 {
   udp_uri_main_t *um = vnet_get_udp_main ();
 
@@ -138,7 +138,7 @@ uri_udp_session_get (u32 connection_index, u32 my_thread_index)
 }
 
 void
-uri_udp_session_delete (u32 connection_index, u32 my_thread_index)
+udp_session_close (u32 connection_index, u32 my_thread_index)
 {
   udp_uri_main_t *um = vnet_get_udp_main ();
   pool_put_index (um->udp_sessions[my_thread_index], connection_index);
@@ -208,18 +208,20 @@ udp_open_connection (ip46_address_t *addr, u16 port)
   return 0;
 }
 
+/* *INDENT-OFF* */
 const static transport_proto_vft_t udp4_proto = {
-  .bind = vnet_bind_ip4_udp_uri,
+  .bind = udp_session_bind_ip4,
   .open = udp_open_connection,
-  .unbind = vnet_unbind_ip4_udp_uri,
-  .push_header = uri_tx_ip4_udp,
-  .get_connection = uri_udp_session_get,
-  .get_listener = uri_udp_session_get_listener,
-  .delete = uri_udp_session_delete,
+  .unbind = udp_session_unbind_ip4,
+  .push_header = udp_push_header,
+  .get_connection = udp_session_get,
+  .get_listener = udp_session_get_listener,
+  .close = udp_session_close,
   .send_mss = udp_send_mss_uri,
   .send_space = udp_send_space_uri,
   .format_connection = format_ip4_udp_stream_session
 };
+/* *INDENT-ON* */
 
 static clib_error_t *
 uri_udp_module_init (vlib_main_t * vm)

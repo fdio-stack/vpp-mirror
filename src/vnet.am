@@ -878,25 +878,17 @@ libvnet_la_SOURCES +=				\
   vnet/session/transport.c			\
   vnet/session/application.c			\
   vnet/session/session_cli.c			\
-  vnet/session/hashes.c
+  vnet/session/hashes.c				\
+  vnet/session/session_interface.c		\
+  vnet/session/session_api.c
 
 nobase_include_HEADERS +=			\
   vnet/session/session.h			\
   vnet/session/application.h			\
-  vnet/session/transport.h
+  vnet/session/transport.h			\
+  vnet/session/session_interface.h
 
-########################################
-# URI connection managmeent
-########################################
-
-libvnet_la_SOURCES +=				\
-  vnet/uri/uri.c				\
-  vnet/uri/uri_api.c
-
-nobase_include_HEADERS +=			\
-  vnet/uri/uri.h
-
-API_FILES += vnet/uri/uri.api
+API_FILES += vnet/session/session.api
 
 ########################################
 # Linux packet interface

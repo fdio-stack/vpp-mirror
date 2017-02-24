@@ -182,7 +182,7 @@ session_fifo_rx_i (vlib_main_t *vm, vlib_node_runtime_t *node,
               vlib_set_trace_count (vm, node, --n_trace);
               t0 = vlib_add_trace (vm, node, b0, sizeof(*t0));
               t0->session_index = s0->session_index;
-              t0->server_thread_index = s0->session_thread_index;
+              t0->server_thread_index = s0->thread_index;
             }
 
           if (1)
@@ -352,7 +352,7 @@ session_queue_node_fn (vlib_main_t * vm, vlib_node_runtime_t * node,
       s0 = pool_elt_at_index(smm->sessions[my_thread_index],
                              server_session_index0);
 
-      ASSERT(s0->session_thread_index == my_thread_index);
+      ASSERT(s0->thread_index == my_thread_index);
 
       switch (e0->event_type)
         {

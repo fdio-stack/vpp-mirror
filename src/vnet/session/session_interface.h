@@ -23,15 +23,6 @@
 
 typedef struct
 {
-  /* Convenience */
-  vlib_main_t * vlib_main;
-  vnet_main_t * vnet_main;
-} uri_main_t;
-
-extern uri_main_t uri_main;
-
-typedef struct
-{
   char *uri;
   u32 api_client_index;
   u32 accept_cookie;
@@ -84,9 +75,6 @@ int
 vnet_connect_uri (vnet_connect_uri_args_t *a);
 int
 vnet_disconnect_uri (u32 client_index, u32 session_index, u32 thread_index);
-
-int
-uri_api_session_not_valid (u32 session_index, u32 thread_index);
 
 #endif /* __included_uri_h__ */
 
