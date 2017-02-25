@@ -1986,6 +1986,7 @@ typedef enum _tcp_input_next
   TCP_INPUT_NEXT_RCV_PROCESS,
   TCP_INPUT_NEXT_SYN_SENT,
   TCP_INPUT_NEXT_ESTABLISHED,
+  TCP_INPUT_NEXT_RESET,
   TCP_INPUT_N_NEXT
 } tcp_input_next_t;
 
@@ -1994,14 +1995,16 @@ typedef enum _tcp_input_next
   _ (LISTEN, "tcp4-listen")                     \
   _ (RCV_PROCESS, "tcp4-rcv-process")           \
   _ (SYN_SENT, "tcp4-syn-sent")                 \
-  _ (ESTABLISHED, "tcp4-established")
+  _ (ESTABLISHED, "tcp4-established")		\
+  _ (RESET, "tcp4-reset")
 
 #define foreach_tcp6_input_next                 \
   _ (DROP, "error-drop")                        \
   _ (LISTEN, "tcp6-listen")                     \
   _ (RCV_PROCESS, "tcp6-rcv-process")           \
   _ (SYN_SENT, "tcp6-syn-sent")                 \
-  _ (ESTABLISHED, "tcp6-established")
+  _ (ESTABLISHED, "tcp6-established")		\
+  _ (RESET, "tcp6-reset")
 
 typedef struct
 {
@@ -2045,11 +2048,11 @@ format_tcp_rx_trace (u8 * s, va_list * args)
   return s;
 }
 
+#define filter_flags (TCP_FLAG_SYN|TCP_FLAG_ACK|TCP_FLAG_RST|TCP_FLAG_FIN)
+
 always_inline uword
-tcp46_input_inline (vlib_main_t * vm,
-                    vlib_node_runtime_t * node,
-                    vlib_frame_t * from_frame,
-                    int is_ip4)
+tcp46_input_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
+		    vlib_frame_t * from_frame, int is_ip4)
 {
   u32 n_left_from, next_index, * from, * to_next;
   u32 my_thread_index = vm->cpu_index;
@@ -2065,30 +2068,29 @@ tcp46_input_inline (vlib_main_t * vm,
     {
       u32 n_left_to_next;
 
-      vlib_get_next_frame (vm, node, next_index,
-                           to_next, n_left_to_next);
+      vlib_get_next_frame(vm, node, next_index, to_next, n_left_to_next);
 
       while (n_left_from > 0 && n_left_to_next > 0)
-        {
-          u32 bi0;
-          vlib_buffer_t * b0;
-          tcp_header_t * tcp0 = 0;
-          tcp_connection_t *tc0;
-          ip4_header_t * ip40;
-          ip6_header_t * ip60;
-          u32 error0 = TCP_ERROR_NO_LISTENER, next0 = TCP_INPUT_NEXT_DROP;
-          u8 flags0;
+	{
+	  u32 bi0;
+	  vlib_buffer_t * b0;
+	  tcp_header_t * tcp0 = 0;
+	  tcp_connection_t *tc0;
+	  ip4_header_t * ip40;
+	  ip6_header_t * ip60;
+	  u32 error0 = TCP_ERROR_NO_LISTENER, next0 = TCP_INPUT_NEXT_DROP;
+	  u8 flags0;
 
-          bi0 = from[0];
-          to_next[0] = bi0;
-          from += 1;
-          to_next += 1;
-          n_left_from -= 1;
-          n_left_to_next -= 1;
+	  bi0 = from[0];
+	  to_next[0] = bi0;
+	  from += 1;
+	  to_next += 1;
+	  n_left_from -= 1;
+	  n_left_to_next -= 1;
 
-          b0 = vlib_get_buffer (vm, bi0);
+	  b0 = vlib_get_buffer (vm, bi0);
 
-          if (is_ip4)
+	  if (is_ip4)
             {
               ip40 = vlib_buffer_get_current (b0);
               tcp0 = ip4_next_header (ip40);
@@ -2117,11 +2119,18 @@ tcp46_input_inline (vlib_main_t * vm,
               vnet_buffer (b0)->tcp.ack_number = clib_net_to_host_u32 (
                   tcp0->ack_number);
 
-              flags0 = tcp0->flags
-                  & (TCP_FLAG_SYN | TCP_FLAG_ACK | TCP_FLAG_RST | TCP_FLAG_FIN);
+              flags0 = tcp0->flags & filter_flags;
               next0 = tm->dispatch_table[tc0->state][flags0].next;
               error0 = tm->dispatch_table[tc0->state][flags0].error;
             }
+	  else
+	    {
+              vnet_buffer (b0)->tcp.connection_index = tc0->c_c_index;
+
+	      /* Send reset */
+	      next0 = TCP_INPUT_NEXT_RESET;
+	      error0 = TCP_ERROR_NO_LISTENER;
+	    }
 
           b0->error = error0 ? node->errors[error0] : 0;
 

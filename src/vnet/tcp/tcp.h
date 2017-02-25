@@ -569,6 +569,67 @@ tcp_cc_algo_get (tcp_cc_algorithm_type_e type)
 void
 tcp_cc_init (tcp_connection_t *tc);
 
+/**
+ * Push TCP header to buffer
+ *
+ * @param vm - vlib_main
+ * @param b - buffer to write the header to
+ * @param sp_net - source port net order
+ * @param dp_net - destination port net order
+ * @param seq - sequence number net order
+ * @param ack - ack number net order
+ * @param tcp_hdr_opts_len - header and options length in bytes
+ * @param flags - header flags
+ * @param wnd - window size
+ *
+ * @return - pointer to start of TCP header
+ */
+always_inline void *
+vlib_buffer_push_tcp_net_order (vlib_buffer_t *b, u16 sp, u16 dp, u32 seq,
+				u32 ack, u8 tcp_hdr_opts_len, u8 flags, u16 wnd)
+{
+  tcp_header_t *th;
+
+  th = vlib_buffer_push_uninit (b, tcp_hdr_opts_len);
+
+  th->src_port = sp;
+  th->dst_port = dp;
+  th->seq_number = seq;
+  th->ack_number = ack;
+  th->data_offset_and_reserved = (tcp_hdr_opts_len >> 2) << 4;
+  th->flags = flags;
+  th->window = wnd;
+  th->checksum = 0;
+  th->urgent_pointer = 0;
+  return th;
+}
+
+/**
+ * Push TCP header to buffer
+ *
+ * @param vm - vlib_main
+ * @param b - buffer to write the header to
+ * @param sp_net - source port net order
+ * @param dp_net - destination port net order
+ * @param seq - sequence number host order
+ * @param ack - ack number host order
+ * @param tcp_hdr_opts_len - header and options length in bytes
+ * @param flags - header flags
+ * @param wnd - window size
+ *
+ * @return - pointer to start of TCP header
+ */
+always_inline void *
+vlib_buffer_push_tcp (vlib_buffer_t *b, u16 sp_net, u16 dp_net, u32 seq,
+		      u32 ack, u8 tcp_hdr_opts_len, u8 flags, u16 wnd)
+{
+  return vlib_buffer_push_tcp_net_order (b, sp_net, dp_net,
+					 clib_host_to_net_u32 (seq),
+					 clib_host_to_net_u32 (ack),
+					 tcp_hdr_opts_len, flags,
+					 clib_host_to_net_u16 (wnd));
+}
+
 #endif /* _vnet_tcp_h_ */
 
 /*

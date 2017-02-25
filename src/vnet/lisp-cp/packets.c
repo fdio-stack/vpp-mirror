@@ -142,91 +142,6 @@ pkt_push_udp (vlib_main_t * vm, vlib_buffer_t * b, u16 sp, u16 dp)
 }
 
 void *
-pkt_push_tcp_net_order (vlib_buffer_t * b, u16 sp, u16 dp, u32 seq, u32 ack,
-                        u8 tcp_hdr_opts_len, u8 flags, u16 wnd)
-{
-  tcp_header_t *th;
-
-  th = vlib_buffer_push_uninit (b, tcp_hdr_opts_len);
-
-  th->src_port = sp;
-  th->dst_port = dp;
-  th->seq_number = seq;
-  th->ack_number = ack;
-  th->data_offset_and_reserved = (tcp_hdr_opts_len >> 2) << 4;
-  th->flags = flags;
-  th->window = wnd;
-  th->checksum = 0;
-  th->urgent_pointer = 0;
-  return th;
-}
-
-void *
-pkt_push_tcp (vlib_buffer_t *b, u16 sp_net, u16 dp_net, u32 seq, u32 ack,
-              u8 tcp_hdr_opts_len, u8 flags, u16 wnd)
-{
-  return pkt_push_tcp_net_order (b, sp_net, dp_net,
-                                 clib_host_to_net_u32 (seq),
-                                 clib_host_to_net_u32 (ack), tcp_hdr_opts_len,
-                                 flags, clib_host_to_net_u16 (wnd));
-}
-
-void *
-pkt_push_ipv4 (vlib_main_t * vm, vlib_buffer_t * b, ip4_address_t * src,
-	       ip4_address_t * dst, int proto)
-{
-  ip4_header_t *ih;
-
-  /* make some room */
-  ih = vlib_buffer_push_uninit (b, sizeof (ip4_header_t));
-
-  ih->ip_version_and_header_length = 0x45;
-  ih->tos = 0;
-  ih->length = clib_host_to_net_u16 (vlib_buffer_length_in_chain (vm, b));
-
-  /* iph->fragment_id = clib_host_to_net_u16(get_IP_ID ()); */
-
-  /* TODO: decide if we allow fragments in case of control */
-  ih->flags_and_fragment_offset = clib_host_to_net_u16 (IP_DF);
-  ih->ttl = 255;
-  ih->protocol = proto;
-  ih->src_address.as_u32 = src->as_u32;
-  ih->dst_address.as_u32 = dst->as_u32;
-
-  ih->checksum = ip4_header_checksum (ih);
-  return ih;
-}
-
-void *
-pkt_push_ipv6 (vlib_main_t * vm, vlib_buffer_t * b, ip6_address_t * src,
-	       ip6_address_t * dst, int proto)
-{
-  ip6_header_t *ip6h;
-  u16 payload_length;
-
-  /* make some room */
-  ip6h = vlib_buffer_push_uninit (b, sizeof (ip6_header_t));
-
-  ip6h->ip_version_traffic_class_and_flow_label =
-    clib_host_to_net_u32 (0x6 << 28);
-
-  /* calculate ip6 payload length */
-  payload_length = vlib_buffer_length_in_chain (vm, b);
-  payload_length -= sizeof (*ip6h);
-
-  ip6h->payload_length = clib_host_to_net_u16 (payload_length);
-
-  ip6h->hop_limit = 0xff;
-  ip6h->protocol = proto;
-  clib_memcpy (ip6h->src_address.as_u8, src->as_u8,
-	       sizeof (ip6h->src_address));
-  clib_memcpy (ip6h->dst_address.as_u8, dst->as_u8,
-	       sizeof (ip6h->src_address));
-
-  return ip6h;
-}
-
-void *
 pkt_push_ip (vlib_main_t * vm, vlib_buffer_t * b, ip_address_t * src,
 	     ip_address_t * dst, u32 proto)
 {
@@ -240,11 +155,11 @@ pkt_push_ip (vlib_main_t * vm, vlib_buffer_t * b, ip_address_t * src,
   switch (ip_addr_version (src))
     {
     case IP4:
-      return pkt_push_ipv4 (vm, b, &ip_addr_v4 (src), &ip_addr_v4 (dst),
+      return vlib_buffer_push_ip4 (vm, b, &ip_addr_v4 (src), &ip_addr_v4 (dst),
 			    proto);
       break;
     case IP6:
-      return pkt_push_ipv6 (vm, b, &ip_addr_v6 (src), &ip_addr_v6 (dst),
+      return vlib_buffer_push_ip6 (vm, b, &ip_addr_v6 (src), &ip_addr_v6 (dst),
 			    proto);
       break;
     }
