@@ -405,7 +405,7 @@ tcp_ack_is_dupack (tcp_connection_t *tc, vlib_buffer_t *b, u32 new_snd_wnd)
 {
   return ((vnet_buffer (b)->tcp.ack_number == tc->snd_una)
       && seq_gt (tc->snd_una_max, tc->snd_una)
-      && (vnet_buffer (b)->tcp.seq_end != vnet_buffer (b)->tcp.seq_number)
+      && (vnet_buffer (b)->tcp.seq_end == vnet_buffer (b)->tcp.seq_number)
       && (new_snd_wnd == tc->snd_wnd));
 }
 
@@ -1077,8 +1077,9 @@ tcp46_established_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
           /* 8: check the FIN bit */
           if (tcp_fin(th0))
             {
-              /* Send FIN-ACK */
-              tcp_make_finack (tc0, b0);
+              /* Send ACK and enter CLOSE-WAIT */
+              tcp_make_ack (tc0, b0);
+              tcp_connection_force_ack (tc0, b0);
               next0 = tcp_next_output(tc0->c_is_ip4);
               tc0->state = TCP_STATE_CLOSE_WAIT;
               stream_session_disconnect_notify (&tc0->connection);
@@ -1676,6 +1677,7 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
             case TCP_STATE_ESTABLISHED:
             case TCP_STATE_SYN_RCVD:
               /* Send FIN-ACK notify app and enter CLOSE-WAIT*/
+              tcp_connection_timers_reset (tc0);
               tcp_make_finack (tc0, b0);
               next0 = tcp_next_output(tc0->c_is_ip4);
               stream_session_disconnect_notify (&tc0->connection);
@@ -2267,6 +2269,7 @@ do {                                                       	\
   _(FIN_WAIT_2, TCP_FLAG_FIN, TCP_INPUT_NEXT_RCV_PROCESS, TCP_ERROR_NONE);
   _(FIN_WAIT_2, TCP_FLAG_FIN | TCP_FLAG_ACK, TCP_INPUT_NEXT_RCV_PROCESS,
     TCP_ERROR_NONE);
+  _(LAST_ACK, TCP_FLAG_ACK, TCP_INPUT_NEXT_RCV_PROCESS, TCP_ERROR_NONE);
 #undef _
 }
 

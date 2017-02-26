@@ -228,6 +228,8 @@ typedef struct _transport_endpoint
 {
   ip46_address_t ip;
   u16 port;
+  u8 is_ip4;
+  u32 vrf;
 } transport_endpoint_t;
 
 typedef clib_bihash_24_8_t transport_endpoint_table_t;

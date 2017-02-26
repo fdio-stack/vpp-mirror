@@ -479,6 +479,14 @@ void
 tcp_connection_init_vars (tcp_connection_t *tc);
 
 always_inline void
+tcp_connection_force_ack (tcp_connection_t *tc, vlib_buffer_t *b)
+{
+  /* Reset flags, make sure ack is sent */
+  tc->flags = TCP_CONN_SNDACK;
+  vnet_buffer (b)->tcp.flags &= ~TCP_BUF_FLAG_DUPACK;
+}
+
+always_inline void
 tcp_timer_set (tcp_connection_t *tc, u8 timer_id, u32 interval)
 {
   tc->timers[timer_id]

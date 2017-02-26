@@ -21,7 +21,7 @@
 #include <vlibmemory/api.h>
 #include <vpp/api/vpe_msg_enum.h>
 
-#include <vnet/session/session_interface.h>
+#include "../vnet/session/application_interface.h"
 
 #define vl_typedefs             /* define message structures */
 #include <vpp/api/vpe_all_api_h.h>
@@ -256,6 +256,7 @@ vl_api_disconnect_session_t_handler (vl_api_disconnect_session_t * mp)
 
   rmp = vl_msg_api_alloc (sizeof (*rmp));
   memset (rmp, 0, sizeof (*rmp));
+
   rmp->_vl_msg_id = ntohs (VL_API_DISCONNECT_SESSION_REPLY);
   rmp->retval = rv;
   rmp->session_index = mp->session_index;
@@ -568,7 +569,7 @@ vl_api_bind_uri_reply_t_handler (vl_api_bind_uri_reply_t * mp)
 
   if (mp->segment_name_length == 0)
     {
-      clib_warning ("segment_name_length zero");
+      clib_warning("segment_name_length zero");
       return;
     }
 
@@ -581,13 +582,12 @@ vl_api_bind_uri_reply_t_handler (vl_api_bind_uri_reply_t * mp)
   rv = svm_fifo_segment_attach (a);
   if (rv)
     {
-      clib_warning ("svm_fifo_segment_attach ('%s') failed",
-                    mp->segment_name);
+      clib_warning("svm_fifo_segment_attach ('%s') failed", mp->segment_name);
       return;
     }
 
-  utm->our_event_queue = (unix_shared_memory_queue_t *)
-    mp->server_event_queue_address;
+  utm->our_event_queue =
+      (unix_shared_memory_queue_t *) mp->server_event_queue_address;
 
   utm->state = STATE_READY;
 }
@@ -678,11 +678,11 @@ uri_tcp_bind (uri_tcp_test_main_t *utm)
   bmp->client_index = utm->my_client_index;
   bmp->context = ntohl(0xfeedface);
   bmp->initial_segment_size = 256<<20;    /* size of initial segment */
-  bmp->options[URI_OPTIONS_FLAGS] =
-    URI_OPTIONS_FLAGS_USE_FIFO | URI_OPTIONS_FLAGS_ADD_SEGMENT;
-  bmp->options[URI_OPTIONS_RX_FIFO_SIZE] = fifo_size;
-  bmp->options[URI_OPTIONS_TX_FIFO_SIZE] = fifo_size;
-  bmp->options[URI_OPTIONS_ADD_SEGMENT_SIZE] = 128<<20;
+  bmp->options[SESSION_OPTIONS_FLAGS] =
+    SESSION_OPTIONS_FLAGS_USE_FIFO | SESSION_OPTIONS_FLAGS_ADD_SEGMENT;
+  bmp->options[SESSION_OPTIONS_RX_FIFO_SIZE] = fifo_size;
+  bmp->options[SESSION_OPTIONS_TX_FIFO_SIZE] = fifo_size;
+  bmp->options[SESSION_OPTIONS_ADD_SEGMENT_SIZE] = 128<<20;
   memcpy (bmp->uri, utm->uri, vec_len (utm->uri));
   vl_msg_api_send_shmem (utm->vl_input_queue, (u8 *)&bmp);
 }

@@ -508,14 +508,23 @@ session_manager_del (session_manager_main_t *smm, session_manager_t *sm)
 
           session = pool_elt_at_index(smm->sessions[deleted_thread_indices[i]],
                                       deleted_sessions[i]);
+
+          /* Instead of directly removing the session call disconnect */
+          stream_session_disconnect (session);
+
+          /*
           stream_session_table_del (smm, session);
           pool_put(smm->sessions[deleted_thread_indices[i]], session);
+          */
         }
 
       vec_reset_length(deleted_sessions);
       vec_reset_length(deleted_thread_indices);
 
-      svm_fifo_segment_delete (fifo_segment);
+      /* Instead of removing the segment, test when removing the session if
+       * the segment can be removed
+       */
+      /* svm_fifo_segment_delete (fifo_segment); */
     }
 
   vec_free(deleted_sessions);
@@ -769,6 +778,9 @@ stream_session_enqueue_notify (stream_session_t *s, u8 block)
   unix_shared_memory_queue_t * q;
   static u32 serial_number;
 
+  if (PREDICT_FALSE (s->session_state == SESSION_STATE_CLOSED))
+    return 0;
+
   /* Get session's server */
   app = application_get (s->app_index);
 
@@ -987,7 +999,11 @@ stream_session_accept_notify (transport_connection_t *tc)
 }
 
 /**
- * Send disconnect to application
+ * Notification from transport that connection is being closed.
+ *
+ * A disconnect is sent to application but state is not removed. Once
+ * disconnect is acknowledged by application, session disconnect is called.
+ * Ultimately this leads to close being called on transport (passive close).
  */
 void
 stream_session_disconnect_notify (transport_connection_t *tc)
@@ -1025,7 +1041,22 @@ stream_session_delete (stream_session_t *s)
   /* Cleanup app if client */
   app = application_get (s->app_index);
   if (app->mode == APP_CLIENT)
-    application_del (app);
+    {
+      application_del (app);
+    }
+  else if (app->mode == APP_SERVER)
+    {
+      svm_fifo_segment_private_t * fifo_segment;
+      svm_fifo_t **fifos;
+
+      /*
+       * Check if any fifos left in segment. If not, remove segment
+       */
+      fifo_segment = svm_fifo_get_segment (s->server_segment_index);
+      fifos = (svm_fifo_t **) fifo_segment->h->fifos;
+      if (vec_len(fifos) == 0)
+	svm_fifo_segment_delete (fifo_segment);
+    }
 
   pool_put(smm->sessions[s->thread_index], s);
 }
@@ -1033,9 +1064,9 @@ stream_session_delete (stream_session_t *s)
 /**
  * Notification from transport that connection is being deleted
  *
- * This should be called only on fully established sessions. For instance
- * failed connects should call stream_session_connect_notify and indicate
- * the connection has failed.
+ * This should be called only on previously fully established sessions. For
+ * instance failed connects should call stream_session_connect_notify and
+ * indicate that the connect has failed.
  */
 void
 stream_session_delete_notify (transport_connection_t *tc)
@@ -1121,6 +1152,7 @@ stream_session_open (u8 sst, ip46_address_t *addr, u16 port_host_byte_order,
 /**
  * Disconnect session and propagate to transport. This should eventually
  * result in a delete notification that allows us to cleanup session state.
+ * Called for both active/passive disconnects.
  */
 void
 stream_session_disconnect (stream_session_t *s)

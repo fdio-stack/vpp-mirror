@@ -30,7 +30,7 @@
 #include <svm/svm_fifo_segment.h>
 #include <pthread.h>
 
-#include <vnet/session/session_interface.h>
+#include "../vnet/session/application_interface.h"
 
 #define vl_typedefs		/* define message structures */
 #include <vpp/api/vpe_all_api_h.h>
@@ -784,11 +784,11 @@ void uri_udp_test (uri_udp_test_main_t * utm)
   bmp->client_index = utm->my_client_index;
   bmp->context = ntohl(0xfeedface);
   bmp->initial_segment_size = 256<<20;    /* size of initial segment */
-  bmp->options[URI_OPTIONS_FLAGS] = 
-    URI_OPTIONS_FLAGS_USE_FIFO | URI_OPTIONS_FLAGS_ADD_SEGMENT;
-  bmp->options[URI_OPTIONS_RX_FIFO_SIZE] = 16<<10;
-  bmp->options[URI_OPTIONS_TX_FIFO_SIZE] = 16<<10;
-  bmp->options[URI_OPTIONS_ADD_SEGMENT_SIZE] = 128<<20;
+  bmp->options[SESSION_OPTIONS_FLAGS] =
+    SESSION_OPTIONS_FLAGS_USE_FIFO | SESSION_OPTIONS_FLAGS_ADD_SEGMENT;
+  bmp->options[SESSION_OPTIONS_RX_FIFO_SIZE] = 16<<10;
+  bmp->options[SESSION_OPTIONS_TX_FIFO_SIZE] = 16<<10;
+  bmp->options[SESSION_OPTIONS_ADD_SEGMENT_SIZE] = 128<<20;
   memcpy (bmp->uri, utm->uri, vec_len (utm->uri));
   vl_msg_api_send_shmem (utm->vl_input_queue, (u8 *)&bmp);
 

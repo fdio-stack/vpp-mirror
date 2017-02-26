@@ -20,7 +20,7 @@
 #include <vnet/udp/udp.h>
 #include <vnet/ip/udp.h>
 #include <vnet/session/session.h>
-#include <vnet/session/session_interface.h>
+#include <vnet/session/application_interface.h>
 
 /** per-worker built-in server copy buffers */
 u8 **copy_buffers;
@@ -91,23 +91,26 @@ static session_cb_vft_t builtin_server = {
 static int
 bind_builtin_uri_server (u8 * uri)
 {
-  vnet_bind_uri_args_t _a, *a = & _a;
+  vnet_bind_args_t _a, *a = & _a;
   char segment_name[128];
   u32 segment_name_length;
   int rv;
+  u64 options[16];
 
   segment_name_length = ARRAY_LEN(segment_name);
 
   memset (a, 0, sizeof (*a));
+  memset (options, 0 , sizeof (options));
 
   a->uri = (char *) uri;
   a->api_client_index = ~0; /* built-in server */
-  a->accept_cookie = 0x12345678;
-  a->segment_size = (2<<30); /*$$$$ config / arg */
-  a->options = 0; /*$$$$ eventually */
   a->segment_name = segment_name;
   a->segment_name_length = segment_name_length;
   a->session_cb_vft = &builtin_server;
+
+  options[SESSION_OPTIONS_ACCEPT_COOKIE] = 0x12345678;
+  options[SESSION_OPTIONS_SEGMENT_SIZE] = (2<<30); /*$$$$ config / arg */
+  a->options = options;
 
   rv = vnet_bind_uri (a);
 

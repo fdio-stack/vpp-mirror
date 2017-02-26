@@ -426,6 +426,12 @@ tcp_make_finack (tcp_connection_t *tc, vlib_buffer_t *b)
   tcp_reuse_buffer (vm, b);
   tcp_make_ack_i (tc, b, TCP_STATE_ESTABLISHED,
                   TCP_FLAG_ACK | TCP_FLAG_FIN);
+
+  /* Reset flags, make sure ack is sent */
+  tc->flags = TCP_CONN_SNDACK;
+  vnet_buffer (b)->tcp.flags &= ~TCP_BUF_FLAG_DUPACK;
+
+  tc->snd_nxt += 1;
 }
 
 /**
@@ -501,7 +507,6 @@ int
 tcp_make_reset_in_place (vlib_main_t *vm, vlib_buffer_t *b0, tcp_state_t state,
 			 u32 my_thread_index, u8 is_ip4)
 {
-  tcp_connection_t *tc0 = 0;
   u8 tcp_hdr_len = sizeof(tcp_header_t);
   ip4_header_t *ih4;
   ip6_header_t *ih6;
@@ -509,6 +514,7 @@ tcp_make_reset_in_place (vlib_main_t *vm, vlib_buffer_t *b0, tcp_state_t state,
   ip4_address_t src_ip40;
   ip6_address_t src_ip60;
   u16 src_port0;
+  u32 tmp;
 
   /* Find IP and TCP headers */
   if (is_ip4)
@@ -556,31 +562,19 @@ tcp_make_reset_in_place (vlib_main_t *vm, vlib_buffer_t *b0, tcp_state_t state,
       if (!tcp_syn(th0))
 	return -1;
 
+      tmp = clib_net_to_host_u32 (th0->seq_number);
+
       /* Got a SYN for no listener. */
       th0->flags = TCP_FLAG_RST | TCP_FLAG_ACK;
+      th0->ack_number = clib_host_to_net_u32 (tmp + 1);
       th0->seq_number = 0;
-      th0->ack_number = clib_host_to_net_u32 (
-      vnet_buffer (b0)->tcp.seq_end);
+
     }
-  else if (state >= TCP_STATE_SYN_RCVD)
+  else if (state >= TCP_STATE_SYN_SENT)
     {
-      /* Got a weird packet on an established or establishing connection */
-      tc0 = tcp_connection_get (vnet_buffer(b0)->tcp.connection_index,
-				my_thread_index);
       th0->flags = TCP_FLAG_RST | TCP_FLAG_ACK;
       th0->seq_number = th0->ack_number;
-      th0->ack_number = clib_host_to_net_u32 (tc0->rcv_nxt);
-    }
-  else if (state == TCP_STATE_SYN_SENT)
-    {
-      tc0 = tcp_half_open_connection_get (
-      vnet_buffer(b0)->tcp.connection_index);
-      th0->seq_number = th0->ack_number;
       th0->ack_number = 0;
-    }
-  else
-    {
-      return -1;
     }
 
   src_port0 = th0->src_port;
@@ -805,7 +799,6 @@ tcp_send_fin (tcp_connection_t *tc)
   vlib_buffer_make_headroom (b, MAX_HDRS_LEN);
 
   tcp_make_finack (tc, b);
-  tc->snd_nxt += 1;
 
   tcp_enqueue_to_output (vm, b, bi, tc->c_is_ip4);
 }
@@ -1365,10 +1358,11 @@ tcp46_send_reset_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
 
 	  /* Prepare to send to IP lookup */
 	  vnet_buffer (b0)->sw_if_index[VLIB_TX] = 0;
-	  next0 = is_ip4 ? ip4_lookup_node.index : ip6_lookup_node.index;
+	  next0 = TCP_RESET_NEXT_IP_LOOKUP;
 
 	 done:
 	  b0->error = error0 != 0 ? node->errors[error0] : 0;
+	  b0->flags |= VNET_BUFFER_LOCALLY_ORIGINATED;
 	  if (PREDICT_FALSE(b0->flags & VLIB_BUFFER_IS_TRACED))
 	    {
 

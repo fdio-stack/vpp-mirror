@@ -62,6 +62,9 @@ typedef struct _application
   /** Binary API connection index, ~0 if internal */
   u32 api_client_index;
 
+  /* */
+  u32 api_context;
+
   /** Application listens for events on this svm queue */
   unix_shared_memory_queue_t *event_queue;
 

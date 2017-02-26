@@ -115,7 +115,7 @@ tcp_connection_cleanup (tcp_connection_t *tc)
       pool_put(tm->local_endpoints, tep);
     }
 
-  /* Deallocate connection */
+  /* Make sure all timers are cleared */
   tcp_connection_timers_reset (tc);
 
   /* Check if half-open */
@@ -140,7 +140,15 @@ tcp_connection_del (tcp_connection_t *tc)
 }
 
 /**
- * Close connection
+ * Begin connection closing procedure.
+ *
+ * If at the end the connection is not in CLOSED state, it is not removed.
+ * Instead, we rely on on TCP to advance through state machine to either
+ * 1) LAST_ACK (passive close) whereby when the last ACK is received
+ * tcp_connection_del is called. This notifies session of the delete and
+ * calls cleanup.
+ * 2) TIME_WAIT (active close) whereby after 2MSL the 2MSL timer triggers
+ * and cleanup is called.
  */
 void
 tcp_connection_close (tcp_connection_t *tc)

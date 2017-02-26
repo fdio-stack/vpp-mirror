@@ -27,7 +27,6 @@ define bind_uri {
   u32 accept_cookie;
   u32 initial_segment_size;
   u8 uri[128];
-  /* or some such */
   u64 options[16];
 };
 
@@ -57,23 +56,21 @@ define connect_uri {
   u32 context;
   u8 uri[128];
   u64 client_queue_address;
-  /* or some such */
   u64 options[16];
 };
 
 /** \brief Bind reply
     @param context - sender context, to match reply w/ request
     @param retval - return code for the request
-    @param event_queue_address - vpp event queue address or 0
-    @param need_map - 1 if the client needs to attach to the fifo segment
-    @param segment_name - set if the client needs to attach to the segment
+    @param event_queue_address - vpp event queue address or 0 if this 
+                                 connection shouldn't send events
+    @param segment_name_length - length of segment name 
+    @param segment_name - name of segment client needs to attach to
 */
 define bind_uri_reply {
     u32 context;
     i32 retval;
-    /** 0 if this connection shouldn't send events */
     u64 server_event_queue_address;
-    /** length non-zero if binder should map segment */
     u8 segment_name_length;
     u32 segment_size;
     u8 segment_name[128];
@@ -141,9 +138,12 @@ define map_another_segment_reply {
     @param context - sender context, to match reply w/ request
     @param accept_cookie - tells client which bind flavor just occurred
     @param rx_fifo_address - rx (vpp -> vpp-client) fifo address 
-    @param rx_fifo_size - size of the rx fifo in bytes
     @param tx_fifo_address - tx (vpp-client -> vpp) fifo address 
-    @param tx_fifo_size - size of the tx fifo in bytes
+    @param session_index - index of new session
+    @param session_thread_index - thread index of new session
+    @param vpp_event_queue_address - vpp's event queue address
+    @param session_type - type of session
+    
 */
 define accept_session {
   u32 client_index;
@@ -155,17 +155,14 @@ define accept_session {
   u32 session_thread_index;
   u64 vpp_event_queue_address;
   u8 session_type;
-  /* v6 size */
-  u8 key [48];
 };
 
 /** \brief client->vpp, reply to an accept message
     @param context - sender context, to match reply w/ request
-    @param accept_cookie - tells client which bind flavor just occurred
-    @param rx_fifo_address - rx (vpp -> vpp-client) fifo address 
-    @param rx_fifo_size - size of the rx fifo in bytes
-    @param tx_fifo_address - tx (vpp-client -> vpp) fifo address 
-    @param tx_fifo_size - size of the tx fifo in bytes
+    @param retval - return code for the request
+    @param session_index - session index from accept_session / connect_reply
+    @param session_thread_index - thread index from accept_session /
+                                  connect_reply
 */
 define accept_session_reply {
   u32 context;
@@ -192,8 +189,11 @@ define disconnect_session {
 /** \brief bidirectional disconnect reply API
     @param client_index - opaque cookie to identify the sender
                           client to vpp direction only
-    @param client_context - sender context, to match reply w/ request
-    @param vpp_context - vpp context, to match reply w/ request
+    @param context - sender context, to match reply w/ request
+    @param retval - return code for the request
+    @param session_index - session index from accept_session / connect_reply
+    @param session_thread_index - thread index from accept_session /
+                                  connect_reply
 */
 define disconnect_session_reply {
   u32 client_index;
@@ -222,7 +222,10 @@ define reset_session {
     @param client_index - opaque cookie to identify the sender
                           client to vpp direction only
     @param context - sender context, to match reply w/ request
-    @param vpp_context - vpp context, to match reply w/ request
+    @param retval - return code for the request
+    @param session_index - session index from accept_session / connect_reply
+    @param session_thread_index - thread index from accept_session /
+                                  connect_reply
 */
 define reset_session_reply {
   u32 client_index;
@@ -232,6 +235,193 @@ define reset_session_reply {
   u32 session_thread_index;
 };
 
+/** \brief Bind to an ip:port pair for a given transport protocol
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param vrf - bind namespace
+    @param is_ip4 - flag that is 1 if ip address family is IPv4
+    @param ip - ip address
+    @param port - port 
+    @param proto - protocol 0 - TCP 1 - UDP
+    @param options - socket options, fifo sizes, etc.
+*/
+define bind {
+  u32 client_index;
+  u32 context;
+  u32 vrf;
+  u8 is_ip4;
+  u8 ip[16];
+  u16 port;
+  u8 proto;
+  u64 options[16];
+};
+
+/** \brief Unbind 
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param handle - bind handle obtained from bind reply
+*/
+define unbind {
+  u32 client_index;
+  u32 context;
+  u64 handle;
+};
+
+/** \brief Connect to a remote peer
+    @param client_index - opaque cookie to identify the sender
+    @param context - sender context, to match reply w/ request
+    @param vrf - connection namespace
+    @param is_ip4 - flag that is 1 if ip address family is IPv4
+    @param ip - ip address
+    @param port - port 
+    @param proto - protocol 0 - TCP 1 - UDP
+    @param client_queue_address - client's API queue address. Non-zero when 
+                                  used to perform redirects
+    @param options - socket options, fifo sizes, etc.
+*/
+define connect {
+  u32 client_index;
+  u32 context;
+  u32 vrf;
+  u8 is_ip4;
+  u8 ip[16];
+  u16 port;
+  u8 proto;
+  u64 client_queue_address;
+  u64 options[16];
+};
+
+/** \brief Bind reply
+    @param context - sender context, to match reply w/ request
+    @param handle - bind handle
+    @param retval - return code for the request
+    @param event_queue_address - vpp event queue address or 0 if this 
+                                 connection shouldn't send events
+    @param segment_name_length - length of segment name 
+    @param segment_name - name of segment client needs to attach to
+*/
+define bind_reply {
+  u32 context;
+  u64 handle;
+  i32 retval;
+  u64 server_event_queue_address;
+  u32 segment_size;
+  u8 segment_name_length;
+  u8 segment_name[128];
+};
+
+/** \brief unbind reply
+    @param context - sender context, to match reply w/ request
+    @param retval - return code for the request
+*/
+define unbind_reply {
+  u32 context;
+  i32 retval;
+};
+
+/** \brief vpp/server->client, connect reply
+    @param context - sender context, to match reply w/ request
+    @param retval - return code for the request
+    @param handle - connection handle
+    @param server_rx_fifo - rx (vpp -> vpp-client) fifo address 
+    @param server_tx_fifo - tx (vpp-client -> vpp) fifo address 
+    @param vpp_event_queue_address - vpp's event queue address
+    @param client_event_queue_address - client's event queue address
+    @param segment_name_length - non-zero if the client needs to attach to 
+                                 the fifo segment
+    @param segment_name - set if the client needs to attach to the segment
+*/
+define connect_reply {
+  u32 context;
+  i32 retval;
+  u64 handle;
+  u64 server_rx_fifo;
+  u64 server_tx_fifo;
+  u64 client_event_queue_address;
+  u64 vpp_event_queue_address;
+  u32 segment_size;
+  u8 segment_name_length;
+  u8 segment_name[128];
+};
+
+/** \brief bidirectional disconnect API
+    @param client_index - opaque cookie to identify the sender
+                          client to vpp direction only
+    @param context - sender context, to match reply w/ request
+    @param handle - session handle obtained through accept/connect
+*/
+define disconnect {
+  u32 client_index;
+  u32 context;
+  u64 handle;
+};
+
+/** \brief bidirectional disconnect reply API
+    @param client_index - opaque cookie to identify the sender
+                          client to vpp direction only
+    @param client_context - sender context, to match reply w/ request
+    @param handle - session handle obtained through accept/connect
+*/
+define disconnect_reply {
+  u32 client_index;
+  u32 context;
+  i32 retval;
+  u64 handle;
+};
+
+/** \brief vpp->client, accept this session
+    @param context - sender context, to match reply w/ request
+    @param accept_cookie - tells client which bind flavor just occurred
+    @param handle - session handle obtained through accept/connect
+    @param rx_fifo_address - rx (vpp -> vpp-client) fifo address 
+    @param tx_fifo_address - tx (vpp-client -> vpp) fifo address 
+    @param vpp_event_queue_address - vpp's event queue address
+*/
+define accept {
+  u32 client_index;
+  u32 context;
+  u32 accept_cookie;
+  u64 handle;
+  u64 server_rx_fifo;
+  u64 server_tx_fifo;
+  u64 vpp_event_queue_address;
+};
+
+/** \brief client->vpp, reply to an accept message
+    @param context - sender context, to match reply w/ request
+    @param retval - return code for the request
+    @param handle - session handle obtained through accept/connect
+*/
+define accept_reply {
+  u32 context;
+  i32 retval;
+  u64 handle;
+};
+
+/** \brief vpp->client reset session API
+    @param client_index - opaque cookie to identify the sender
+                          client to vpp direction only
+    @param context - sender context, to match reply w/ request
+    @param handle - session handle obtained through accept/connect
+*/
+define reset {
+  u32 client_index;
+  u32 context;
+  u64 handle;
+};
+
+/** \brief client->vpp reset session reply
+    @param client_index - opaque cookie to identify the sender
+                          client to vpp direction only
+    @param context - sender context, to match reply w/ request
+    @param handle - session handle obtained through accept/connect
+*/
+define reset_reply {
+  u32 client_index;
+  u32 context;
+  i32 retval;
+  u64 handle;
+};
 /*
  * Local Variables:
  * eval: (c-set-style "gnu")

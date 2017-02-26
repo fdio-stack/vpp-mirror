@@ -19,8 +19,6 @@
 #include <vnet/ip/ip.h>
 
 #include <vnet/udp/udp.h>
-#include <vnet/session/session_interface.h>
-
 #include <vppinfra/hash.h>
 #include <vppinfra/error.h>
 #include <vppinfra/elog.h>
@@ -28,6 +26,7 @@
 #include <vnet/ip/udp_packet.h>
 
 #include <vlibmemory/api.h>
+#include "../session/application_interface.h"
 
 vlib_node_registration_t udp4_uri_input_node;
 
