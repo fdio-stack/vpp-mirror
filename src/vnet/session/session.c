@@ -872,8 +872,8 @@ stream_session_start_listen (u32 server_index, ip46_address_t *ip, u16 port)
   s->app_index = srv->index;
 
   /* Transport bind/listen  */
-  tci = tp_vfts[srv->session_type].bind (smm->vlib_main, s->session_index,
-                                            ip, port);
+  tci = tp_vfts[srv->session_type].bind (smm->vlib_main, s->session_index, ip,
+					 port);
 
   /* Attach transport to session */
   s->connection_index = tci;
@@ -968,7 +968,8 @@ stream_session_connect_notify (transport_connection_t *tc, u8 sst, u8 is_fail)
     }
 
   /* Notify client */
-  app->cb_fns.session_connected_callback (new_s, is_fail);
+  app->cb_fns.session_connected_callback (app->api_client_index, new_s,
+					  is_fail);
 
   /* Cleanup session lookup */
   stream_session_half_open_table_del (smm, sst, tc);
@@ -999,10 +1000,69 @@ stream_session_disconnect_notify (transport_connection_t *tc)
   server->cb_fns.session_disconnect_callback (s);
 }
 
+/**
+ * Cleans up session and associated app if needed.
+ */
+void
+stream_session_delete (stream_session_t *s)
+{
+  session_manager_main_t *smm = vnet_get_session_manager_main ();
+  svm_fifo_segment_private_t *fifo_segment;
+  application_t *app;
+  int rv;
+
+  /* delete from the main lookup table */
+  rv = stream_session_table_del (smm, s);
+
+  if (rv)
+    clib_warning("hash delete error, rv %d", rv);
+
+  /* Cleanup fifo segments */
+  fifo_segment = svm_fifo_get_segment (s->server_segment_index);
+  svm_fifo_segment_free_fifo (fifo_segment, s->server_rx_fifo);
+  svm_fifo_segment_free_fifo (fifo_segment, s->server_tx_fifo);
+
+  /* Cleanup app if client */
+  app = application_get (s->app_index);
+  if (app->mode == APP_CLIENT)
+    application_del (app);
+
+  pool_put(smm->sessions[s->thread_index], s);
+}
+
+/**
+ * Notification from transport that connection is being deleted
+ *
+ * This should be called only on fully established sessions. For instance
+ * failed connects should call stream_session_connect_notify and indicate
+ * the connection has failed.
+ */
+void
+stream_session_delete_notify (transport_connection_t *tc)
+{
+  stream_session_t *s;
+
+  s = stream_session_get_if_valid (tc->s_index, tc->thread_index);
+  if (!s)
+    {
+      clib_warning ("Surprised!");
+      return;
+    }
+  stream_session_delete (s);
+}
+
+/**
+ * Notify application that connection has been reset.
+ */
 void
 stream_session_reset_notify (transport_connection_t *tc)
 {
-  clib_warning("not yet implemented");
+  stream_session_t *s;
+  application_t *app;
+  s = stream_session_get (tc->s_index, tc->thread_index);
+
+  app = application_get (s->app_index);
+  app->cb_fns.session_reset_callback (s);
 }
 
 /**
@@ -1038,29 +1098,6 @@ stream_session_accept (transport_connection_t *tc, u32 listener_index, u8 sst,
 }
 
 void
-stream_session_delete (stream_session_t *s)
-{
-  session_manager_main_t *smm = vnet_get_session_manager_main ();
-  svm_fifo_segment_private_t * fifo_segment;
-  u32 my_thread_index = s->thread_index;
-  int rv;
-
-  /* delete from the main lookup table */
-  rv = stream_session_table_del (smm, s);
-
-  if (rv)
-    clib_warning("hash delete error, rv %d", rv);
-
-  /* recover the fifo segment */
-  fifo_segment = svm_fifo_get_segment (s->server_segment_index);
-
-  svm_fifo_segment_free_fifo (fifo_segment, s->server_rx_fifo);
-  svm_fifo_segment_free_fifo (fifo_segment, s->server_tx_fifo);
-
-  pool_put(smm->sessions[my_thread_index], s);
-}
-
-void
 stream_session_open (u8 sst, ip46_address_t *addr, u16 port_host_byte_order,
                      u32 app_index)
 {
@@ -1082,12 +1119,23 @@ stream_session_open (u8 sst, ip46_address_t *addr, u16 port_host_byte_order,
 }
 
 /**
- * Disconnect session and propagate to transport
+ * Disconnect session and propagate to transport. This should eventually
+ * result in a delete notification that allows us to cleanup session state.
  */
 void
 stream_session_disconnect (stream_session_t *s)
 {
   tp_vfts[s->session_type].close (s->connection_index, s->thread_index);
+  s->session_state = SESSION_STATE_CLOSED;
+}
+
+/**
+ * Cleanup transport and session state.
+ */
+void
+stream_session_cleanup (stream_session_t *s)
+{
+  tp_vfts[s->session_type].cleanup (s->connection_index, s->thread_index);
   stream_session_delete (s);
 }
 

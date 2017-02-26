@@ -92,39 +92,12 @@ tcp_session_get_listener (u32 listener_index)
 }
 
 /**
- * Close connection
- */
-void
-tcp_connection_close (tcp_connection_t *tc)
-{
-  /* Send FIN if needed */
-  if (tc->state == TCP_STATE_ESTABLISHED
-      || tc->state == TCP_STATE_SYN_RCVD
-      || TCP_STATE_CLOSE_WAIT)
-    tcp_send_fin (tc);
-
-  /* Switch state */
-  if (tc->state == TCP_STATE_ESTABLISHED
-      || tc->state == TCP_STATE_SYN_RCVD)
-    tc->state = TCP_STATE_FIN_WAIT_1;
-  else if (tc->state == TCP_STATE_SYN_SENT)
-    tc->state = TCP_STATE_CLOSED;
-  else if (tc->state == TCP_STATE_CLOSE_WAIT)
-    tc->state = TCP_STATE_LAST_ACK;
-
-  /* Half-close connections are not supported XXX */
-
-  if (tc->state == TCP_STATE_CLOSED)
-    tcp_connection_del (tc);
-}
-
-/**
- * Connection cleanup.
+ * Cleans up connection state.
  *
- * This should be called only once connection enters CLOSED state
+ * No notifications.
  */
 void
-tcp_connection_del (tcp_connection_t *tc)
+tcp_connection_cleanup (tcp_connection_t *tc)
 {
   tcp_main_t *tm = &tcp_main;
   u32 tepi;
@@ -142,19 +115,53 @@ tcp_connection_del (tcp_connection_t *tc)
       pool_put(tm->local_endpoints, tep);
     }
 
-  /* If half-open, deallocate temporary connection XXX*/
-
   /* Deallocate connection */
-  pool_put(tm->connections[tc->c_thread_index], tc);
+  tcp_connection_timers_reset (tc);
+
+  /* Check if half-open */
+  if (tc->state == TCP_STATE_SYN_SENT)
+    pool_put (tm->half_open_connections, tc);
+  else
+    pool_put(tm->connections[tc->c_thread_index], tc);
 }
 
 /**
- * Close a connection due to an error (e.g., too many retransmits)
+ * Connection removal.
+ *
+ * This should be called only once connection enters CLOSED state. Note
+ * that it notifies the session of the removal event, so if the goal is to
+ * just remove the connection, call tcp_connection_cleanup instead.
  */
 void
-tcp_connection_drop (tcp_main_t *tm, tcp_connection_t *tc)
+tcp_connection_del (tcp_connection_t *tc)
 {
-  clib_warning ("TODO");
+  stream_session_delete_notify (&tc->connection);
+  tcp_connection_cleanup (tc);
+}
+
+/**
+ * Close connection
+ */
+void
+tcp_connection_close (tcp_connection_t *tc)
+{
+  /* Send FIN if needed */
+  if (tc->state == TCP_STATE_ESTABLISHED || tc->state == TCP_STATE_SYN_RCVD
+      || TCP_STATE_CLOSE_WAIT)
+    tcp_send_fin (tc);
+
+  /* Switch state */
+  if (tc->state == TCP_STATE_ESTABLISHED || tc->state == TCP_STATE_SYN_RCVD)
+    tc->state = TCP_STATE_FIN_WAIT_1;
+  else if (tc->state == TCP_STATE_SYN_SENT)
+    tc->state = TCP_STATE_CLOSED;
+  else if (tc->state == TCP_STATE_CLOSE_WAIT)
+    tc->state = TCP_STATE_LAST_ACK;
+
+  /* Half-close connections are not supported XXX */
+
+  if (tc->state == TCP_STATE_CLOSED)
+    tcp_connection_del (tc);
 }
 
 void
@@ -163,6 +170,14 @@ tcp_session_close (u32 conn_index, u32 thread_index)
   tcp_connection_t *tc;
   tc = tcp_connection_get (conn_index, thread_index);
   tcp_connection_close (tc);
+}
+
+void
+tcp_session_cleanup (u32 conn_index, u32 thread_index)
+{
+  tcp_connection_t *tc;
+  tc = tcp_connection_get (conn_index, thread_index);
+  tcp_connection_cleanup (tc);
 }
 
 void *
@@ -264,7 +279,7 @@ tcp_connection_timers_init (tcp_connection_t *tc)
  * Stop all connection timers
  */
 void
-tcp_connection_timers_stop (tcp_connection_t *tc)
+tcp_connection_timers_reset (tcp_connection_t *tc)
 {
   int i;
   for (i = 0; i < TCP_N_TIMERS; i++)
@@ -393,15 +408,59 @@ format_tcp_session_ip6 (u8 *s, va_list *args)
 {
   u32 tci = va_arg (*args, u32);
   u32 thread_index = va_arg (*args, u32);
-  tcp_connection_t *tc;
-
-  tc = tcp_connection_get (tci, thread_index);
-
+  tcp_connection_t *tc = tcp_connection_get (tci, thread_index);
   s = format (s, "[%s] %U:%d->%U:%d", "tcp", format_ip6_address,
               &tc->c_lcl_ip6, clib_net_to_host_u16 (tc->c_lcl_port),
               format_ip6_address, &tc->c_rmt_ip6,
               clib_net_to_host_u16 (tc->c_rmt_port));
+  return s;
+}
 
+u8*
+format_tcp_listener_session_ip4 (u8 *s, va_list *args)
+{
+  u32 tci = va_arg (*args, u32);
+  tcp_connection_t *tc = tcp_listener_get (tci);
+  s = format (s, "[%s] %U:%d->%U:%d", "tcp", format_ip4_address,
+              &tc->c_lcl_ip4, clib_net_to_host_u16 (tc->c_lcl_port),
+              format_ip4_address, &tc->c_rmt_ip4,
+              clib_net_to_host_u16 (tc->c_rmt_port));
+  return s;
+}
+
+u8*
+format_tcp_listener_session_ip6 (u8 *s, va_list *args)
+{
+  u32 tci = va_arg (*args, u32);
+  tcp_connection_t *tc = tcp_listener_get (tci);
+  s = format (s, "[%s] %U:%d->%U:%d", "tcp", format_ip6_address,
+              &tc->c_lcl_ip6, clib_net_to_host_u16 (tc->c_lcl_port),
+              format_ip6_address, &tc->c_rmt_ip6,
+              clib_net_to_host_u16 (tc->c_rmt_port));
+  return s;
+}
+
+u8*
+format_tcp_half_open_session_ip4 (u8 *s, va_list *args)
+{
+  u32 tci = va_arg (*args, u32);
+  tcp_connection_t *tc = tcp_half_open_connection_get (tci);
+  s = format (s, "[%s] %U:%d->%U:%d", "tcp", format_ip4_address,
+              &tc->c_lcl_ip4, clib_net_to_host_u16 (tc->c_lcl_port),
+              format_ip4_address, &tc->c_rmt_ip4,
+              clib_net_to_host_u16 (tc->c_rmt_port));
+  return s;
+}
+
+u8*
+format_tcp_half_open_session_ip6 (u8 *s, va_list *args)
+{
+  u32 tci = va_arg (*args, u32);
+  tcp_connection_t *tc = tcp_half_open_connection_get (tci);
+  s = format (s, "[%s] %U:%d->%U:%d", "tcp", format_ip6_address,
+              &tc->c_lcl_ip6, clib_net_to_host_u16 (tc->c_lcl_port),
+              format_ip6_address, &tc->c_rmt_ip6,
+              clib_net_to_host_u16 (tc->c_rmt_port));
   return s;
 }
 
@@ -450,10 +509,13 @@ const static transport_proto_vft_t tcp4_proto = {
   .get_half_open = tcp_half_open_session_get_transport,
   .open = tcp_session_open_ip4,
   .close = tcp_session_close,
+  .cleanup = tcp_session_cleanup,
   .send_mss = tcp_session_send_mss,
   .send_space = tcp_session_send_space,
   .rx_fifo_offset = tcp_session_rx_fifo_offset,
-  .format_connection = format_tcp_session_ip4
+  .format_connection = format_tcp_session_ip4,
+  .format_listener = format_tcp_listener_session_ip4,
+  .format_half_open = format_tcp_half_open_session_ip4
 };
 
 const static transport_proto_vft_t tcp6_proto = {
@@ -465,10 +527,13 @@ const static transport_proto_vft_t tcp6_proto = {
   .get_half_open = tcp_half_open_session_get_transport,
   .open = tcp_session_open_ip6,
   .close = tcp_session_close,
+  .cleanup = tcp_session_cleanup,
   .send_mss = tcp_session_send_mss,
   .send_space = tcp_session_send_space,
   .rx_fifo_offset = tcp_session_rx_fifo_offset,
-  .format_connection = format_tcp_session_ip6
+  .format_connection = format_tcp_session_ip6,
+  .format_listener = format_tcp_listener_session_ip6,
+  .format_half_open = format_tcp_half_open_session_ip6
 };
 /* *INDENT-ON* */
 
@@ -476,9 +541,11 @@ void
 tcp_timer_keep_handler (u32 conn_index)
 {
   u32 cpu_index = os_get_cpu_number ();
-  tcp_connection_t * tc;
+  tcp_connection_t *tc;
 
   tc = tcp_connection_get (conn_index, cpu_index);
+  tc->timers[TCP_TIMER_KEEP] = TCP_TIMER_HANDLE_INVALID;
+
   tcp_connection_close (tc);
 }
 
@@ -489,22 +556,25 @@ tcp_timer_establish_handler (u32 conn_index)
   u8 sst;
 
   tc = tcp_half_open_connection_get (conn_index);
+  tc->timers[TCP_TIMER_ESTABLISH] = TCP_TIMER_HANDLE_INVALID;
 
   ASSERT(tc->state == TCP_STATE_SYN_SENT);
 
   sst = tc->c_is_ip4 ? SESSION_TYPE_IP4_TCP : SESSION_TYPE_IP6_TCP;
   stream_session_connect_notify (&tc->connection, sst, 1 /* fail */);
 
-  tcp_connection_close (tc);
+  tcp_connection_cleanup (tc);
 }
 
 void
 tcp_timer_2msl_handler (u32 conn_index)
 {
   u32 cpu_index = os_get_cpu_number ();
-  tcp_connection_t * tc;
+  tcp_connection_t *tc;
 
   tc = tcp_connection_get (conn_index, cpu_index);
+  tc->timers[TCP_TIMER_2MSL] = TCP_TIMER_HANDLE_INVALID;
+
   tcp_connection_del (tc);
 }
 

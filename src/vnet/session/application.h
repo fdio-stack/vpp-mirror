@@ -35,10 +35,14 @@ typedef struct _stream_session_cb_vft
   int (*session_accept_callback) (stream_session_t *new_session);
 
   /* Connection request callback */
-  int (*session_connected_callback)(stream_session_t *s, u8 code);
+  int  (*session_connected_callback) (u32 api_client_index, stream_session_t *s,
+				      u8 code);
 
   /** Notify app that session is closing */
   void (*session_disconnect_callback) (stream_session_t *s);
+
+  /** Notify app that session was reset */
+  void (*session_reset_callback) (stream_session_t *s);
 
   /* Direct RX callback, for built-in servers */
   int (*builtin_server_rx_callback)(stream_session_t *session);

@@ -275,7 +275,10 @@ tcp_segment_validate (vlib_main_t *vm, tcp_connection_t *tc0, vlib_buffer_t *b0,
   /* 2nd: check the RST bit */
   if (tcp_rst (th0))
     {
-      /* TODO reset connection */
+      /* Notify session that connection has been reset. Switch
+       * state to closed and await for session to do the cleanup. */
+      stream_session_reset_notify (&tc0->connection);
+      tc0->state = TCP_STATE_CLOSED;
       return -1;
     }
 
@@ -1273,16 +1276,18 @@ tcp46_syn_sent_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
            * 2. check the RST bit
            */
 
-          if (tcp_rst (tcp0))
-            {
-              /* If ACK is acceptable, signal client */
-              if (tcp_ack(tcp0))
-                stream_session_reset_notify (&tc0->connection);
-
-              /* and close connection */
-              tcp_connection_close (tc0);
-              goto drop;
-            }
+	  if (tcp_rst(tcp0))
+	    {
+	      /* If ACK is acceptable, signal client that peer is not
+	       * willing to accept connection and drop connection*/
+	      if (tcp_ack(tcp0))
+		{
+		  stream_session_connect_notify (&tc0->connection, sst,
+						 1/* fail */);
+		  tcp_connection_cleanup (tc0);
+		}
+	      goto drop;
+	    }
 
           /*
            * 3. check the security and precedence (skipped)
@@ -1588,23 +1593,19 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
               /* In addition to the processing for the ESTABLISHED state, if
                * our FIN is now acknowledged then enter FIN-WAIT-2 and
                * continue processing in that state. */
-              if (!tcp_rcv_ack (tc0, b0, tcp0, &next0, &error0))
-                tc0->state = TCP_STATE_FIN_WAIT_2;
-              else
+              if (tcp_rcv_ack (tc0, b0, tcp0, &next0, &error0))
                 goto drop;
+              tc0->state = TCP_STATE_FIN_WAIT_2;
+              /* Stop all timers, 2MSL will be set lower */
+              tcp_connection_timers_reset (tc0);
               break;
             case TCP_STATE_FIN_WAIT_2:
               /* In addition to the processing for the ESTABLISHED state, if
                * the retransmission queue is empty, the user's CLOSE can be
                * acknowledged ("ok") but do not delete the TCB. */
-              if (tcp_rcv_ack (tc0, b0, tcp0, &next0, &error0))
-                {
-                  /* check if rtx queue is empty and ack CLOSE TODO*/
-                }
-              else
-                {
-                  goto drop;
-                }
+	      if (tcp_rcv_ack (tc0, b0, tcp0, &next0, &error0))
+		goto drop;
+              /* check if rtx queue is empty and ack CLOSE TODO*/
               break;
             case TCP_STATE_CLOSE_WAIT:
               /* Do the same processing as for the ESTABLISHED state. */
@@ -1687,12 +1688,15 @@ tcp46_rcv_process_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
               break;
             case TCP_STATE_FIN_WAIT_1:
               tc0->state = TCP_STATE_TIME_WAIT;
-              tcp_connection_timers_stop (tc0);
+              tcp_connection_timers_reset (tc0);
               tcp_timer_set (tc0, TCP_TIMER_2MSL, TCP_2MSL_TIME);
               break;
             case TCP_STATE_FIN_WAIT_2:
+              /* Got FIN, send ACK! */
               tc0->state = TCP_STATE_TIME_WAIT;
               tcp_timer_set (tc0, TCP_TIMER_2MSL, TCP_2MSL_TIME);
+	      tcp_make_ack (tc0, b0);
+	      next0 = tcp_next_output(is_ip4);
               break;
             case TCP_STATE_TIME_WAIT:
               /* Remain in the TIME-WAIT state. Restart the 2 MSL time-wait
@@ -1843,7 +1847,7 @@ tcp46_listen_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
               th0 = ip6_next_header (ip60);
             }
 
-          /* Create child session. No syn-flood protection for now */
+          /* Create child session. For syn-flood protection use filter */
 
           /* 1. first check for an RST */
           if (tcp_rst (th0))
@@ -2122,14 +2126,19 @@ tcp46_input_inline (vlib_main_t * vm, vlib_node_runtime_t * node,
               flags0 = tcp0->flags & filter_flags;
               next0 = tm->dispatch_table[tc0->state][flags0].next;
               error0 = tm->dispatch_table[tc0->state][flags0].error;
+
+              if (PREDICT_FALSE(error0 == TCP_ERROR_DISPATCH))
+		{
+		  /* Overload tcp flags to store state */
+		  vnet_buffer (b0)->tcp.flags = tc0->state;
+		}
             }
 	  else
 	    {
-              vnet_buffer (b0)->tcp.connection_index = tc0->c_c_index;
-
 	      /* Send reset */
 	      next0 = TCP_INPUT_NEXT_RESET;
 	      error0 = TCP_ERROR_NO_LISTENER;
+	      vnet_buffer (b0)->tcp.flags = 0;
 	    }
 
           b0->error = error0 ? node->errors[error0] : 0;
@@ -2222,13 +2231,13 @@ tcp_dispatch_table_init (tcp_main_t *tm)
     for (j = 0; j < ARRAY_LEN(tm->dispatch_table[i]); j++)
       {
         tm->dispatch_table[i][j].next = TCP_INPUT_NEXT_DROP;
-        tm->dispatch_table[i][j].error = TCP_ERROR_LOOKUP_DROPS;
+        tm->dispatch_table[i][j].error = TCP_ERROR_DISPATCH;
       }
 
-#define _(t,f,n,e)                                                      \
-do {                                                                    \
-    tm->dispatch_table[TCP_STATE_##t][f].next = (n);         \
-    tm->dispatch_table[TCP_STATE_##t][f].error = (e);        \
+#define _(t,f,n,e)                                           	\
+do {                                                       	\
+    tm->dispatch_table[TCP_STATE_##t][f].next = (n);         	\
+    tm->dispatch_table[TCP_STATE_##t][f].error = (e);        	\
 } while (0)
 
   /* SYNs for new connections -> tcp-listen. */
@@ -2239,11 +2248,24 @@ do {                                                                    \
   _(SYN_SENT, TCP_FLAG_SYN | TCP_FLAG_ACK, TCP_INPUT_NEXT_SYN_SENT,
     TCP_ERROR_NONE);
   _(SYN_SENT, TCP_FLAG_ACK, TCP_INPUT_NEXT_SYN_SENT, TCP_ERROR_NONE);
+  _(SYN_SENT, TCP_FLAG_RST, TCP_INPUT_NEXT_SYN_SENT, TCP_ERROR_NONE);
+  _(SYN_SENT, TCP_FLAG_RST | TCP_FLAG_ACK, TCP_INPUT_NEXT_SYN_SENT,
+    TCP_ERROR_NONE);
   /* ACK for for established connection -> tcp-established. */
   _(ESTABLISHED, TCP_FLAG_ACK, TCP_INPUT_NEXT_ESTABLISHED, TCP_ERROR_NONE);
   /* FIN for for established connection -> tcp-established. */
   _(ESTABLISHED, TCP_FLAG_FIN, TCP_INPUT_NEXT_ESTABLISHED, TCP_ERROR_NONE);
   _(ESTABLISHED, TCP_FLAG_FIN | TCP_FLAG_ACK, TCP_INPUT_NEXT_ESTABLISHED,
+    TCP_ERROR_NONE);
+  /* ACK or FIN-ACK to our FIN */
+  _(FIN_WAIT_1, TCP_FLAG_ACK, TCP_INPUT_NEXT_RCV_PROCESS, TCP_ERROR_NONE);
+  _(FIN_WAIT_1, TCP_FLAG_ACK | TCP_FLAG_FIN, TCP_INPUT_NEXT_RCV_PROCESS,
+    TCP_ERROR_NONE);
+  /* FIN in reply to our FIN from the other side */
+  _(FIN_WAIT_1, TCP_FLAG_FIN, TCP_INPUT_NEXT_RCV_PROCESS, TCP_ERROR_NONE);
+  /* FIN confirming that the peer (app) has closed */
+  _(FIN_WAIT_2, TCP_FLAG_FIN, TCP_INPUT_NEXT_RCV_PROCESS, TCP_ERROR_NONE);
+  _(FIN_WAIT_2, TCP_FLAG_FIN | TCP_FLAG_ACK, TCP_INPUT_NEXT_RCV_PROCESS,
     TCP_ERROR_NONE);
 #undef _
 }

@@ -44,6 +44,8 @@ _(MAP_ANOTHER_SEGMENT_REPLY, map_another_segment_reply)                 \
 _(ACCEPT_SESSION_REPLY, accept_session_reply)                           \
 _(DISCONNECT_SESSION, disconnect_session)                               \
 _(DISCONNECT_SESSION_REPLY, disconnect_session_reply)                   \
+_(RESET_SESSION_REPLY, reset_session_reply)                   		\
+
 
 static int
 send_session_accept_callback (stream_session_t *s)
@@ -102,7 +104,7 @@ send_add_segment_callback (u32 api_client_index, const u8 *segment_name,
 static void
 send_session_disconnect_callback (stream_session_t *s)
 {
-  vl_api_accept_session_t * mp;
+  vl_api_disconnect_session_t * mp;
   unix_shared_memory_queue_t * q;
   application_t *app = application_get (s->app_index);
 
@@ -183,26 +185,25 @@ redirect_connect_uri_callback (u32 server_api_client_index, void * mp_arg)
 }
 
 static int
-send_session_connected_callback (stream_session_t *s, u8 is_fail)
+send_session_connected_callback (u32 api_client_index, stream_session_t *s, u8 is_fail)
 {
   vl_api_connect_uri_reply_t * mp;
   unix_shared_memory_queue_t * q;
-  application_t *app = application_get (s->app_index);
+  application_t *app = application_lookup (api_client_index);
   u8 *seg_name;
   unix_shared_memory_queue_t *vpp_queue;
 
   q = vl_api_client_index_to_input_queue (app->api_client_index);
-  vpp_queue = session_manager_get_vpp_event_queue (s->thread_index);
 
   if (!q)
     return -1;
 
   mp = vl_msg_api_alloc (sizeof (*mp));
   mp->_vl_msg_id = clib_host_to_net_u16 (VL_API_CONNECT_URI_REPLY);
-
   mp->retval = is_fail;
   if (!is_fail)
     {
+      vpp_queue = session_manager_get_vpp_event_queue (s->thread_index);
       mp->server_rx_fifo = (u64) s->server_rx_fifo;
       mp->server_tx_fifo = (u64) s->server_tx_fifo;
       mp->session_thread_index = s->thread_index;
@@ -330,7 +331,7 @@ vl_api_disconnect_session_t_handler (vl_api_disconnect_session_t * mp)
   int rv;
 
   if (!(rv = api_session_not_valid (mp->session_index,
-                                       mp->session_thread_index)))
+				    mp->session_thread_index)))
     rv = vnet_disconnect_uri (mp->client_index, mp->session_index,
                               mp->session_thread_index);
 
@@ -343,9 +344,11 @@ vl_api_disconnect_session_reply_t_handler (
 {
   int rv;
 
-  if (!(rv = api_session_not_valid (mp->session_index,
-                                       mp->session_thread_index)))
-    return;
+  if (api_session_not_valid (mp->session_index, mp->session_thread_index))
+    {
+      clib_warning("Invalid session!");
+      return;
+    }
 
   /* Client objected to clearing the session, log and continue */
   if (mp->retval)
@@ -359,6 +362,31 @@ vl_api_disconnect_session_reply_t_handler (
 
   if (rv)
     clib_warning ("vpp retval %d", rv);
+}
+
+static void
+vl_api_reset_session_reply_t_handler (vl_api_reset_session_reply_t * mp)
+{
+  stream_session_t *s;
+
+  if (api_session_not_valid (mp->session_index, mp->session_thread_index))
+    {
+      clib_warning("Invalid session!");
+      return;
+    }
+
+  /* Client objected to resetting the session, log and continue */
+  if (mp->retval)
+    {
+      clib_warning ("client retval %d", mp->retval);
+      return;
+    }
+
+  s = stream_session_get (mp->session_index, mp->session_thread_index);
+
+  /* This comes as a response to a reset, transport only waiting for
+   * confirmation to remove connection state, no need to disconnect */
+  stream_session_cleanup (s);
 }
 
 static void

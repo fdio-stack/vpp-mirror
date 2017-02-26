@@ -85,6 +85,7 @@ typedef enum
   SESSION_STATE_LISTENING,
   SESSION_STATE_CONNECTING,
   SESSION_STATE_READY,
+  SESSION_STATE_CLOSED,
   SESSION_STATE_N_STATES,
 } stream_session_state_t;
 
@@ -300,6 +301,18 @@ stream_session_get (u64 si, u32 thread_index)
 }
 
 always_inline stream_session_t *
+stream_session_get_if_valid (u64 si, u32 thread_index)
+{
+  if (thread_index >= vec_len (session_manager_main.sessions))
+    return 0;
+
+  if (pool_is_free_index (session_manager_main.sessions[thread_index], si))
+    return 0;
+
+  return pool_elt_at_index(session_manager_main.sessions[thread_index], si);
+}
+
+always_inline stream_session_t *
 stream_session_listener_get (u8 sst, u64 si)
 {
   return pool_elt_at_index(session_manager_main.listen_sessions[sst], si);
@@ -337,6 +350,8 @@ stream_session_accept_notify (transport_connection_t *tc);
 void
 stream_session_disconnect_notify (transport_connection_t *tc);
 void
+stream_session_delete_notify (transport_connection_t *tc);
+void
 stream_session_reset_notify (transport_connection_t *tc);
 int
 stream_session_accept (transport_connection_t *tc, u32 listener_index, u8 sst,
@@ -347,7 +362,7 @@ stream_session_open (u8 sst, ip46_address_t *addr, u16 port_host_byte_order,
 void
 stream_session_disconnect (stream_session_t *s);
 void
-stream_session_delete (stream_session_t * s);
+stream_session_cleanup (stream_session_t *s);
 int
 stream_session_start_listen (u32 server_index, ip46_address_t *ip, u16 port);
 void

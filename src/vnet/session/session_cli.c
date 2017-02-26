@@ -36,9 +36,32 @@ format_stream_session (u8 *s, va_list *args)
   if (verbose)
     str = format (0, "%-20llp%-20llp%-15lld", ss->server_rx_fifo,
                   ss->server_tx_fifo, stream_session_get_index (ss));
-  tp_vft = session_get_transport_vft (ss->session_type);
-  s = format (s, "%-40U%v", tp_vft->format_connection, ss->connection_index,
-              ss->thread_index, str);
+
+  if (ss->session_state == SESSION_STATE_READY)
+    {
+      s = format (s, "%-40U%v", tp_vft->format_connection,
+		  ss->connection_index, ss->thread_index, str);
+    }
+  else if (ss->session_state == SESSION_STATE_LISTENING)
+    {
+      s = format (s, "%-40U%v", tp_vft->format_listener, ss->connection_index,
+		  str);
+    }
+  else if (ss->session_state == SESSION_STATE_READY)
+    {
+      s = format (s, "%-40U%v", tp_vft->format_half_open, ss->connection_index,
+		  str);
+    }
+  else if (ss->session_state == SESSION_STATE_CLOSED)
+    {
+      s = format (s, "[CL] %-40U%v", tp_vft->format_connection,
+		  ss->connection_index, ss->thread_index, str);
+    }
+  else
+    {
+      clib_warning("Session in unknown state!");
+    }
+
   vec_free(str);
 
   return s;

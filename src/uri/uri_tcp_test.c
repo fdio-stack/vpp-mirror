@@ -47,6 +47,9 @@ typedef struct
 {
   svm_fifo_t * server_rx_fifo;
   svm_fifo_t * server_tx_fifo;
+
+  u32 vpp_session_index;
+  u32 vpp_session_thread;
 } session_t;
 
 typedef enum
@@ -54,6 +57,7 @@ typedef enum
   STATE_START,
   STATE_READY,
   STATE_DISCONNECTING,
+  STATE_FAILED
 } connection_state_t;
 
 typedef struct
@@ -138,7 +142,10 @@ wait_for_state_change (uri_tcp_test_main_t * utm, connection_state_t state)
     {
       if (utm->state == state)
         return 0;
+      if (utm->state == STATE_FAILED)
+	return -1;
     }
+  clib_warning ("timeout waiting for STATE_READY");
   return -1;
 }
 
@@ -244,6 +251,41 @@ vl_api_disconnect_session_t_handler (vl_api_disconnect_session_t * mp)
   else
     {
       clib_warning ("couldn't find session key %llx", key);
+      rv = -11;
+    }
+
+  rmp = vl_msg_api_alloc (sizeof (*rmp));
+  memset (rmp, 0, sizeof (*rmp));
+  rmp->_vl_msg_id = ntohs (VL_API_DISCONNECT_SESSION_REPLY);
+  rmp->retval = rv;
+  rmp->session_index = mp->session_index;
+  rmp->session_thread_index = mp->session_thread_index;
+  vl_msg_api_send_shmem (utm->vl_input_queue, (u8 *)&rmp);
+}
+
+static void
+vl_api_reset_session_t_handler (vl_api_reset_session_t * mp)
+{
+  uri_tcp_test_main_t *utm = &uri_tcp_test_main;
+  session_t * session;
+  vl_api_reset_session_reply_t * rmp;
+  uword * p;
+  int rv = 0;
+  u64 key;
+
+  key = (((u64)mp->session_thread_index) << 32) | (u64)mp->session_index;
+
+  p = hash_get(utm->session_index_by_vpp_handles, key);
+
+  if (p)
+    {
+      session = pool_elt_at_index(utm->sessions, p[0]);
+      hash_unset(utm->session_index_by_vpp_handles, key);
+      pool_put(utm->sessions, session);
+    }
+  else
+    {
+      clib_warning("couldn't find session key %llx", key);
       rv = -11;
     }
 
@@ -394,6 +436,8 @@ static void
 uri_tcp_client_test (uri_tcp_test_main_t * utm)
 {
   vl_api_connect_uri_t * cmp;
+  vl_api_disconnect_session_t *dmp;
+  session_t *connected_session;
   int i;
 
   cmp = vl_msg_api_alloc (sizeof (*cmp));
@@ -407,7 +451,6 @@ uri_tcp_client_test (uri_tcp_test_main_t * utm)
 
   if (wait_for_state_change (utm, STATE_READY))
     {
-      clib_warning ("timeout waiting for STATE_READY");
       return;
     }
 
@@ -421,6 +464,17 @@ uri_tcp_client_test (uri_tcp_test_main_t * utm)
 
   /* Start send */
   uri_tcp_connect_send (utm);
+
+  /* Disconnect */
+  connected_session = pool_elt_at_index(utm->sessions,
+					utm->connected_session_index);
+  dmp = vl_msg_api_alloc (sizeof (*dmp));
+  memset (dmp, 0, sizeof (*dmp));
+  dmp->_vl_msg_id = ntohs (VL_API_DISCONNECT_SESSION);
+  dmp->client_index = utm->my_client_index;
+  dmp->session_index = connected_session->vpp_session_index;
+  dmp->session_thread_index = connected_session->vpp_session_thread;
+  vl_msg_api_send_shmem (utm->vl_input_queue, (u8 *)&dmp);
 }
 
 void
@@ -548,6 +602,12 @@ vl_api_connect_uri_reply_t_handler (vl_api_connect_uri_reply_t * mp)
   svm_fifo_t *rx_fifo, *tx_fifo;
   int rv;
 
+  if (mp->retval)
+    {
+      clib_warning ("connection failed with code: %d", mp->retval);
+      utm->state = STATE_FAILED;
+      return;
+    }
   /*
    * Attatch to segment
    */
@@ -555,6 +615,7 @@ vl_api_connect_uri_reply_t_handler (vl_api_connect_uri_reply_t * mp)
   if (mp->segment_name_length == 0)
     {
       clib_warning ("segment_name_length zero");
+      utm->state = STATE_FAILED;
       return;
     }
 
@@ -596,6 +657,8 @@ vl_api_connect_uri_reply_t_handler (vl_api_connect_uri_reply_t * mp)
 
   session->server_rx_fifo = rx_fifo;
   session->server_tx_fifo = tx_fifo;
+  session->vpp_session_index = mp->session_index;
+  session->vpp_session_thread = mp->session_thread_index;
 
   /* Save handle */
   utm->connected_session_index = session_index;
@@ -737,6 +800,7 @@ _(UNBIND_URI_REPLY, unbind_uri_reply)           \
 _(ACCEPT_SESSION, accept_session)               \
 _(CONNECT_URI_REPLY, connect_uri_reply)         \
 _(DISCONNECT_SESSION, disconnect_session)       \
+_(RESET_SESSION, reset_session)       		\
 _(MAP_ANOTHER_SEGMENT, map_another_segment)
 
 void

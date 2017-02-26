@@ -347,13 +347,21 @@ tcp_connection_get (u32 conn_index, u32 thread_index)
 {
   return pool_elt_at_index(tcp_main.connections[thread_index], conn_index);
 }
-
+always_inline tcp_connection_t *
+tcp_connection_get_if_valid (u32 conn_index, u32 thread_index)
+{
+  if (tcp_main.connections[thread_index] == 0)
+    return 0;
+  if (pool_is_free_index (tcp_main.connections[thread_index], conn_index))
+    return 0;
+  return pool_elt_at_index(tcp_main.connections[thread_index], conn_index);
+}
 void
 tcp_connection_close (tcp_connection_t *tc);
 void
-tcp_connection_del (tcp_connection_t *tc);
+tcp_connection_cleanup (tcp_connection_t *tc);
 void
-tcp_connection_drop (tcp_main_t *tm, tcp_connection_t *tc);
+tcp_connection_del (tcp_connection_t *tc);
 
 always_inline tcp_connection_t *
 tcp_listener_get (u32 tli)
@@ -465,7 +473,7 @@ tcp_prepare_retransmit_segment (tcp_connection_t *tc, vlib_buffer_t *b,
 void
 tcp_connection_timers_init (tcp_connection_t *tc);
 void
-tcp_connection_timers_stop (tcp_connection_t *tc);
+tcp_connection_timers_reset (tcp_connection_t *tc);
 
 void
 tcp_connection_init_vars (tcp_connection_t *tc);

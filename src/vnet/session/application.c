@@ -195,10 +195,10 @@ format_application_server (u8 * s, va_list * args)
   if (srv == 0)
     {
       if (verbose)
-        s = format (s, "%-35s%-25s%-20s%-10s%-10s", "URI", "Server",
+        s = format (s, "%-40s%-20s%-15s%-15s%-10s", "Connection", "Server",
                     "Segment", "API Client", "Cookie");
       else
-        s = format (s, "%-35s%-15s", "URI", "Server");
+        s = format (s, "%-40s%-20s", "Connection", "Server");
 
       return s;
     }
@@ -217,11 +217,11 @@ format_application_server (u8 * s, va_list * args)
                                     &segment_size);
   if (verbose)
     {
-      s = format (s, "%-35s%-25s%-20s%-10d%-10d", str, server_name,
+      s = format (s, "%-40s%-20s%-20s%-10d%-10d", str, server_name,
                   seg_name, srv->api_client_index, srv->accept_cookie);
     }
   else
-    s = format (s, "%-35s%-15s", str, server_name);
+    s = format (s, "%-40s%-20s", str, server_name);
   return s;
 }
 
@@ -237,9 +237,9 @@ format_application_client (u8 * s, va_list * args)
   if (client == 0)
     {
       if (verbose)
-        s = format (s, "%-35s%-20s%-10s", "URI", "Segment", "API Client");
+        s = format (s, "%-40s%-20s%-10s", "Connection", "Segment", "API Client");
       else
-        s = format (s, "%-35s", "URI");
+        s = format (s, "%-40s", "Connection");
 
       return s;
     }
@@ -251,11 +251,11 @@ format_application_client (u8 * s, va_list * args)
                                     &segment_size);
   if (verbose)
     {
-      s = format (s, "%-35s%-25s%-20s%-10d%-10d", str, seg_name,
-                  client->api_client_index);
+      s = format (s, "%-40s%-20s%-10d%", str, seg_name,
+		  client->api_client_index);
     }
   else
-    s = format (s, "%-35s", str);
+    s = format (s, "%-40s", str);
   return s;
 }
 

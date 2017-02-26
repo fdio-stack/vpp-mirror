@@ -66,6 +66,7 @@ typedef struct _transport_proto_vft
   u32 (*unbind) (vlib_main_t *, u32);
   int (*open) (ip46_address_t *addr, u16 port_host_byte_order);
   void (*close) (u32 conn_index, u32 thread_index);
+  void (*cleanup) (u32 conn_index, u32 thread_index);
 
   /*
    * Transmission
@@ -86,6 +87,9 @@ typedef struct _transport_proto_vft
    * Format
    */
   u8 *(*format_connection) (u8 *s, va_list *args);
+  u8 *(*format_listener) (u8 *s, va_list *args);
+  u8 *(*format_half_open) (u8 *s, va_list *args);
+
 } transport_proto_vft_t;
 
 /* 16 octets */

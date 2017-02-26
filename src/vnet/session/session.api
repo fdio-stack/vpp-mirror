@@ -203,6 +203,35 @@ define disconnect_session_reply {
   u32 session_thread_index;
 };
 
+/** \brief vpp->client reset session API
+    @param client_index - opaque cookie to identify the sender
+                          client to vpp direction only
+    @param context - sender context, to match reply w/ request
+    @param session_index - session index from accept_session / connect_reply
+    @param session_thread_index - thread index from accept_session /
+                                  connect_reply
+*/
+define reset_session {
+  u32 client_index;
+  u32 context;
+  u32 session_index;
+  u32 session_thread_index;
+};
+
+/** \brief client->vpp reset session reply
+    @param client_index - opaque cookie to identify the sender
+                          client to vpp direction only
+    @param context - sender context, to match reply w/ request
+    @param vpp_context - vpp context, to match reply w/ request
+*/
+define reset_session_reply {
+  u32 client_index;
+  u32 context;
+  i32 retval;
+  u32 session_index;
+  u32 session_thread_index;
+};
+
 /*
  * Local Variables:
  * eval: (c-set-style "gnu")
