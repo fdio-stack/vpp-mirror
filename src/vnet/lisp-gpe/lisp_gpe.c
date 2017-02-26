@@ -218,6 +218,7 @@ lisp_gpe_enable_disable_command_fn (vlib_main_t * vm,
   unformat_input_t _line_input, *line_input = &_line_input;
   u8 is_en = 1;
   vnet_lisp_gpe_enable_disable_args_t _a, *a = &_a;
+  clib_error_t *error = NULL;
 
   /* Get a line of input. */
   if (!unformat_user (input, unformat_line_input, line_input))
@@ -231,12 +232,18 @@ lisp_gpe_enable_disable_command_fn (vlib_main_t * vm,
 	is_en = 0;
       else
 	{
-	  return clib_error_return (0, "parse error: '%U'",
-				    format_unformat_error, line_input);
+	  error = clib_error_return (0, "parse error: '%U'",
+				     format_unformat_error, line_input);
+	  goto done;
 	}
     }
   a->is_en = is_en;
-  return vnet_lisp_gpe_enable_disable (a);
+  error = vnet_lisp_gpe_enable_disable (a);
+
+done:
+  unformat_free (line_input);
+
+  return error;
 }
 
 /* *INDENT-OFF* */
@@ -319,6 +326,7 @@ lisp_gpe_init (vlib_main_t * vm)
 			 lisp_gpe_ip4_input_node.index, 1 /* is_ip4 */ );
   udp_register_dst_port (vm, UDP_DST_PORT_lisp_gpe6,
 			 lisp_gpe_ip6_input_node.index, 0 /* is_ip4 */ );
+
   return 0;
 }
 
