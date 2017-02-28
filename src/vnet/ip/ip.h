@@ -51,7 +51,7 @@
 #include <vnet/ip/lookup.h>
 
 #include <vnet/tcp/tcp_packet.h>
-#include <vnet/ip/udp_packet.h>
+#include <vnet/udp/udp_packet.h>
 #include <vnet/ip/icmp46_packet.h>
 
 #include <vnet/ip/ip4.h>

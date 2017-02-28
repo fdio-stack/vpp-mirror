@@ -25,7 +25,7 @@
 #include <vppinfra/elog.h>
 #include <vlibmemory/unix_shared_memory_queue.h>
 
-#include <vnet/ip/udp_packet.h>
+#include <vnet/udp/udp_packet.h>
 #include <vnet/lisp-cp/packets.h>
 #include <math.h>
 

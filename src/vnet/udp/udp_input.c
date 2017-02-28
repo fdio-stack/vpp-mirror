@@ -23,7 +23,7 @@
 #include <vppinfra/error.h>
 #include <vppinfra/elog.h>
 
-#include <vnet/ip/udp_packet.h>
+#include <vnet/udp/udp_packet.h>
 
 #include <vlibmemory/api.h>
 #include "../session/application_interface.h"
@@ -164,7 +164,7 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
           /* listener hit */
           else if (s0->session_state == SESSION_STATE_LISTENING)
             {
-              udp_session_t *us;
+              udp_connection_t *us;
               int rv;
 
               error0 = SESSION_ERROR_NOT_READY;

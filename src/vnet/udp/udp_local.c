@@ -17,8 +17,8 @@
 
 #include <vlib/vlib.h>
 #include <vnet/pg/pg.h>
-#include <vnet/ip/udp.h>
-#include <vnet/ip/udp_packet.h>
+#include <vnet/udp/udp.h>
+#include <vnet/udp/udp_packet.h>
 #include <vppinfra/sparse_vec.h>
 
 udp_main_t udp_main;

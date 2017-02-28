@@ -494,7 +494,7 @@ vl_api_connect_uri_t_handler (vl_api_connect_uri_t * mp)
   a->api_context = mp->context;
   a->options = mp->options;
   a->session_cb_vft = &uri_session_cb_vft;
-
+  a->mp = mp;
   vnet_connect_uri (a);
 }
 
@@ -663,6 +663,7 @@ vl_api_connect_t_handler (vl_api_connect_t * mp)
   a->options = mp->options;
   a->session_cb_vft = &session_cb_vft;
   a->api_context = mp->context;
+  a->mp = mp;
   vnet_connect (a);
 }
 

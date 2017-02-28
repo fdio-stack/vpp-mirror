@@ -327,6 +327,7 @@ tcp_connection_get (u32 conn_index, u32 thread_index)
 {
   return pool_elt_at_index(tcp_main.connections[thread_index], conn_index);
 }
+
 always_inline tcp_connection_t *
 tcp_connection_get_if_valid (u32 conn_index, u32 thread_index)
 {

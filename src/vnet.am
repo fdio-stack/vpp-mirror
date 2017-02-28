@@ -325,11 +325,7 @@ libvnet_la_SOURCES +=				\
  vnet/ip/lookup.c				\
  vnet/ip/ping.c					\
  vnet/ip/punt.c					\
- vnet/ip/tcp_pg.c				\
- vnet/ip/udp_format.c				\
- vnet/ip/udp_init.c				\
- vnet/ip/udp_local.c				\
- vnet/ip/udp_pg.c
+ vnet/ip/tcp_pg.c
 
 nobase_include_HEADERS +=			\
  vnet/ip/format.h				\
@@ -356,10 +352,7 @@ nobase_include_HEADERS +=			\
  vnet/ip/protocols.def				\
  vnet/ip/punt_error.def				\
  vnet/ip/punt.h					\
- vnet/ip/tcp_packet.h				\
- vnet/ip/udp_error.def				\
- vnet/ip/udp.h					\
- vnet/ip/udp_packet.h
+ vnet/ip/tcp_packet.h
 
 API_FILES += vnet/ip/ip.api
 
@@ -494,12 +487,17 @@ nobase_include_HEADERS +=			\
 # Layer 4 protocol: udp
 ########################################
 libvnet_la_SOURCES +=				\
-  vnet/udp/udp.c				\
-  vnet/udp/udp_input.c				\
-  vnet/udp/builtin_server.c
+ vnet/udp/udp.c					\
+ vnet/udp/udp_input.c				\
+ vnet/udp/builtin_server.c			\
+ vnet/udp/udp_format.c				\
+ vnet/udp/udp_local.c				\
+ vnet/udp/udp_pg.c
 
 nobase_include_HEADERS +=			\
-  vnet/udp/udp.h
+  vnet/udp/udp_error.def                       	\
+  vnet/udp/udp.h                               	\
+  vnet/udp/udp_packet.h
 
 ########################################
 # Tunnel protocol: gre

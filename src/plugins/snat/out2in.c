@@ -19,7 +19,7 @@
 #include <vnet/handoff.h>
 
 #include <vnet/ip/ip.h>
-#include <vnet/ip/udp.h>
+#include <vnet/udp/udp.h>
 #include <vnet/ethernet/ethernet.h>
 #include <vnet/fib/ip4_fib.h>
 #include <snat/snat.h>

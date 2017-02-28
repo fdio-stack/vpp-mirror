@@ -15,7 +15,7 @@
 
 #include <vnet/lisp-cp/packets.h>
 #include <vnet/lisp-cp/lisp_cp_messages.h>
-#include <vnet/ip/udp_packet.h>
+#include <vnet/udp/udp_packet.h>
 
 /* Returns IP ID for the packet */
 /* static u16 ip_id = 0;

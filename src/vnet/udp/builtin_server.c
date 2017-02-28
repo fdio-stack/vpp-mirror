@@ -18,7 +18,6 @@
 */
 
 #include <vnet/udp/udp.h>
-#include <vnet/ip/udp.h>
 #include <vnet/session/session.h>
 #include <vnet/session/application_interface.h>
 
