@@ -231,20 +231,6 @@ typedef struct _tcp_connection
   u32 rtt_seq;          /**< Sequence number for tracked ACK */
 
   u16 snd_mss;          /**< Send MSS */
-
-  /* XXX Everything lower may be removed */
-  /* Set if connected to another tcp46_session_t */
-  u32 connected_session_index;
-  /* tos, ttl to use on tx */
-  u8 tos;
-  u8 ttl;
-
-  /*
-   * At high scale, pre-built (src,dst,src-port,dst-port)
-   * headers would chew a ton of memory. Maybe worthwile for
-   * a few high-throughput flows
-   */
-  u32 rewrite_template_index;
 } tcp_connection_t;
 
 struct _tcp_cc_algorithm
@@ -294,6 +280,7 @@ typedef struct _tcp_main
   tcp_lookup_dispatch_t dispatch_table[TCP_N_STATES][64];
 
   u8 log2_tstamp_clocks_per_tick;
+  f64 tstamp_ticks_per_clock;
 
   /** per-worker tx buffer free lists */
   u32 **tx_buffers;
@@ -316,14 +303,7 @@ typedef struct _tcp_main
   /* Congestion control algorithms registered */
   tcp_cc_algorithm_t *cc_algos;
 
-  /* TODO decide if needed */
-
-  /* Hash tables mapping name/protocol to protocol info index. */
-  uword * dst_port_info_by_name[TCP_N_AF];
-  uword * dst_port_info_by_dst_port[TCP_N_AF];
-
   /* convenience */
-  session_manager_main_t *sm_main;
   vlib_main_t * vlib_main;
   vnet_main_t * vnet_main;
   ip4_main_t * ip4_main;
@@ -460,7 +440,7 @@ tcp_fast_retransmit (tcp_connection_t *tc);
 always_inline u32
 tcp_time_now (void)
 {
-  return clib_cpu_time_now () >> tcp_main.log2_tstamp_clocks_per_tick;
+  return clib_cpu_time_now () * tcp_main.tstamp_ticks_per_clock;
 }
 
 u32

@@ -636,12 +636,10 @@ tcp_init (vlib_main_t * vm)
   tcp_main_t *tm = vnet_get_tcp_main ();
   vlib_thread_main_t *vtm = vlib_get_thread_main ();
   clib_error_t * error = 0;
-  f64 log2 = .69314718055994530941;
   u32 num_threads;
 
   tm->vlib_main = vm;
   tm->vnet_main = vnet_get_main ();
-  tm->sm_main = vnet_get_session_manager_main ();
 
   if ((error = vlib_call_init_function(vm, ip_main_init)))
     return error;
@@ -685,8 +683,8 @@ tcp_init (vlib_main_t * vm)
 
   /* Initialize clocks per tick for TCP timestamp. Used to compute
    * monotonically increasing timestamps. */
-  tm->log2_tstamp_clocks_per_tick = flt_round_nearest (
-      log (TCP_TSTAMP_RESOLUTION / vm->clib_time.seconds_per_clock) / log2);
+  tm->tstamp_ticks_per_clock = vm->clib_time.seconds_per_clock
+      / TCP_TSTAMP_RESOLUTION;
 
   clib_bihash_init_24_8 (&tm->local_endpoints_table, "local endpoint table",
                          200000 /* $$$$ config parameter nbuckets */,
