@@ -110,26 +110,14 @@ static inline u8 svm_fifo_has_ooo_data (svm_fifo_t *f)
 svm_fifo_t * 
 svm_fifo_create (u32 data_size_in_bytes);
 
-int svm_fifo_enqueue (svm_fifo_t * f, int pid, u32 max_bytes, 
-                      u8 * copy_from_here);
-
 int svm_fifo_enqueue_nowait (svm_fifo_t * f, int pid, u32 max_bytes, 
                              u8 * copy_from_here);
 
-int svm_fifo_dequeue (svm_fifo_t * f, int pid, u32 max_bytes, 
-                      u8 * copy_here);
-
-int svm_fifo_dequeue_nowait (svm_fifo_t * f, int pid, u32 max_bytes, 
-                             u8 * copy_here);
-
-int svm_fifo_enqueue_nowait2 (svm_fifo_t * f, int pid, u32 max_bytes, 
-                             u8 * copy_from_here);
-
-int svm_fifo_enqueue_with_offset2 (svm_fifo_t * f, int pid, 
+int svm_fifo_enqueue_with_offset (svm_fifo_t * f, int pid, 
                                    u32 offset, u32 required_bytes, 
                                    u8 * copy_from_here);
 
-int svm_fifo_dequeue_nowait2 (svm_fifo_t * f, int pid, u32 max_bytes, 
+int svm_fifo_dequeue_nowait (svm_fifo_t * f, int pid, u32 max_bytes, 
                              u8 * copy_here);
 
 int svm_fifo_peek (svm_fifo_t *f, int pid, u32 offset, u32 max_bytes,

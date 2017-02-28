@@ -60,10 +60,10 @@ builtin_server_rx_callback (stream_session_t *s)
   vec_validate (my_copy_buffer, this_transfer - 1);
   _vec_len (my_copy_buffer) = this_transfer;
 
-  actual_transfer = svm_fifo_dequeue_nowait2 (rx_fifo, 0, this_transfer,
+  actual_transfer = svm_fifo_dequeue_nowait (rx_fifo, 0, this_transfer,
                                               my_copy_buffer);
   ASSERT (actual_transfer == this_transfer);
-  actual_transfer = svm_fifo_enqueue_nowait2 (tx_fifo, 0, this_transfer,
+  actual_transfer = svm_fifo_enqueue_nowait (tx_fifo, 0, this_transfer,
                                               my_copy_buffer);
                                               
   copy_buffers [s->thread_index] = my_copy_buffer;

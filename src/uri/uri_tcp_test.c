@@ -310,7 +310,7 @@ handle_fifo_event_connect_rx (uri_tcp_test_main_t *utm, session_fifo_event_t * e
   bytes = e->enqueue_length;
   do
     {
-      n_read = svm_fifo_dequeue_nowait2 (rx_fifo, 0, vec_len(utm->rx_buf),
+      n_read = svm_fifo_dequeue_nowait (rx_fifo, 0, vec_len(utm->rx_buf),
                                          utm->rx_buf);
       if (n_read > 0)
         bytes -= n_read;
@@ -410,7 +410,7 @@ uri_tcp_connect_send (uri_tcp_test_main_t *utm)
       while (bytes_to_send > 0)
         {
           write = bytes_to_send > max_chunk ? max_chunk : bytes_to_send;
-          rv = svm_fifo_enqueue_nowait2 (tx_fifo, mypid, write,
+          rv = svm_fifo_enqueue_nowait (tx_fifo, mypid, write,
                                          test_data + buffer_offset);
 
           if (rv > 0)
@@ -494,7 +494,7 @@ handle_fifo_event_server_rx (uri_tcp_test_main_t *utm, session_fifo_event_t * e)
   bytes = e->enqueue_length;
   do
     {
-      n_read = svm_fifo_dequeue_nowait2 (rx_fifo, 0, vec_len(utm->rx_buf),
+      n_read = svm_fifo_dequeue_nowait (rx_fifo, 0, vec_len(utm->rx_buf),
                                          utm->rx_buf);
 
       /* Reflect if a non-drop session */
@@ -502,7 +502,7 @@ handle_fifo_event_server_rx (uri_tcp_test_main_t *utm, session_fifo_event_t * e)
         {
           do
             {
-              rv = svm_fifo_enqueue_nowait2 (tx_fifo, 0, n_read, utm->rx_buf);
+              rv = svm_fifo_enqueue_nowait (tx_fifo, 0, n_read, utm->rx_buf);
             }
           while (rv == -2);
 

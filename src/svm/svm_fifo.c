@@ -55,174 +55,6 @@ svm_fifo_create (u32 data_size_in_bytes)
   return (f);
 }
 
-static int svm_fifo_dequeue_internal (svm_fifo_t * f, 
-                                      int pid,
-                                      u32 max_bytes, 
-                                      u8 * copy_here, 
-                                      int nowait)
-{
-  u32 total_copy_bytes, first_copy_bytes, second_copy_bytes;
-  
-  if (svm_fifo_lock (f, pid, SVM_FIFO_TAG_DEQUEUE, nowait))
-    return -1;                  /* lock held elsewhere */
-
-  if (PREDICT_FALSE (f->cursize == 0))
-    {
-      if (nowait)
-        {
-          pthread_mutex_unlock (&f->mutex);
-          return -2;            /* nothing in the fifo */
-        }
-      while (f->cursize == 0)
-        pthread_cond_wait (&f->condvar, &f->mutex);
-    }
-
-  /* Number of bytes we're going to copy */
-  total_copy_bytes = (f->cursize < max_bytes) ? f->cursize : max_bytes;
-  
-  if (PREDICT_TRUE(copy_here != 0))
-    {
-      /* Number of bytes in first copy segment */
-      first_copy_bytes = ((f->nitems - f->head) < total_copy_bytes) 
-        ? (f->nitems - f->head) : total_copy_bytes;
-      clib_memcpy (copy_here, &f->data[f->head], first_copy_bytes);
-      f->head += first_copy_bytes;
-      f->head = (f->head == f->nitems) ? 0 : f->head;
-      f->cursize -= first_copy_bytes;
-
-      /* Number of bytes in second copy segment, if any */
-      second_copy_bytes = total_copy_bytes - first_copy_bytes;
-      if (second_copy_bytes)
-        {
-          clib_memcpy (copy_here + first_copy_bytes, 
-                       &f->data[f->head], second_copy_bytes);
-          f->head += second_copy_bytes;
-          f->head = (f->head == f->nitems) ? 0 : f->head;
-          f->cursize -= second_copy_bytes;
-        }
-    }
-  else
-    {
-      /* Account for a zero-copy dequeue done elsewhere */
-      ASSERT (max_bytes <= f->cursize);
-      f->head += max_bytes;
-      f->head = f->head % f->nitems;
-      f->cursize -= max_bytes;
-      total_copy_bytes = max_bytes;
-    }
-  svm_fifo_unlock (f);
-
-  /* Wake up transmitter when fifo at or below 1/4 full */
-  if (f->cursize <= f->nitems/4)
-    pthread_cond_broadcast (&f->condvar);
-  return (total_copy_bytes);
-}
-
-int svm_fifo_dequeue (svm_fifo_t * f, 
-                      int pid,
-                      u32 max_bytes, 
-                      u8 * copy_here)
-{
-  return svm_fifo_dequeue_internal (f, pid, max_bytes, 
-                                    copy_here, 0 /* nowait */);
-}
-
-int svm_fifo_dequeue_nowait (svm_fifo_t * f, 
-                             int pid, 
-                             u32 max_bytes, 
-                             u8 * copy_here)
-{
-  return svm_fifo_dequeue_internal (f, pid, max_bytes, 
-                                    copy_here, 1 /* nowait */);
-}
-
-
-static int svm_fifo_enqueue_internal (svm_fifo_t * f, 
-                                      int pid,
-                                      u32 max_bytes, 
-                                      u8 * copy_from_here, 
-                                      int nowait)
-{
-  u32 total_copy_bytes, first_copy_bytes, second_copy_bytes;
-  int need_broadcast = 0;
-  
-  if (svm_fifo_lock (f, pid, SVM_FIFO_TAG_ENQUEUE, nowait))
-    return -1;
-
-  if (PREDICT_FALSE (f->cursize == f->nitems))
-    {
-      if (nowait)
-        {
-          pthread_mutex_unlock (&f->mutex);
-          return -2;
-        }
-      while (f->cursize == f->nitems)
-        pthread_cond_wait (&f->condvar, &f->mutex);
-    }
-
-  if (f->cursize == 0)
-    need_broadcast = 1;
-
-  /* Number of bytes we're going to copy */
-  total_copy_bytes = (f->nitems - f->cursize) < max_bytes ? 
-    (f->nitems - f->cursize) : max_bytes;
-  
-  if (PREDICT_TRUE(copy_from_here != 0))
-    {
-      /* Number of bytes in first copy segment */
-      first_copy_bytes = ((f->nitems - f->tail) < total_copy_bytes) 
-        ? (f->nitems - f->tail) : total_copy_bytes;
-
-      clib_memcpy (&f->data[f->tail], copy_from_here, first_copy_bytes);
-      f->tail += first_copy_bytes;
-      f->tail = (f->tail == f->nitems) ? 0 : f->tail;
-      f->cursize += first_copy_bytes;
-
-      /* Number of bytes in second copy segment, if any */
-      second_copy_bytes = total_copy_bytes - first_copy_bytes;
-      if (second_copy_bytes)
-        {
-          clib_memcpy (&f->data[f->tail], copy_from_here + first_copy_bytes, 
-                       second_copy_bytes);
-          f->tail += second_copy_bytes;
-          f->tail = (f->tail == f->nitems) ? 0 : f->tail;
-          f->cursize += second_copy_bytes;
-        }
-    }
-  else
-    {
-      /* Account for a zero-copy enqueue done elsewhere */
-      ASSERT (max_bytes <= (f->nitems - f->cursize));
-      f->tail += max_bytes;
-      f->tail = f->tail % f->nitems;
-      f->cursize += max_bytes;
-      total_copy_bytes = max_bytes;
-    }
-  /* Wake up receiver when fifo non-empty */
-  if (need_broadcast)
-    pthread_cond_broadcast (&f->condvar);
-  svm_fifo_unlock (f);
-  return (total_copy_bytes);
-}
-
-int svm_fifo_enqueue (svm_fifo_t * f, 
-                      int pid,
-                      u32 max_bytes, 
-                      u8 * copy_from_here)
-{
-  return svm_fifo_enqueue_internal (f, pid, max_bytes, copy_from_here,
-                                    0 /* nowait */);
-}
-
-int svm_fifo_enqueue_nowait (svm_fifo_t * f, 
-                             int pid,
-                             u32 max_bytes, 
-                             u8 * copy_from_here)
-{
-  return svm_fifo_enqueue_internal (f, pid, max_bytes, copy_from_here,
-                                    1 /* nowait */);
-}
-
 always_inline ooo_segment_t *
 ooo_segment_new (svm_fifo_t *f, u32 start, u32 length)
 {
@@ -465,7 +297,7 @@ ooo_segment_try_collect (svm_fifo_t *f, u32 n_bytes_enqueued)
   return bytes;
 }
 
-static int svm_fifo_enqueue_internal2 (svm_fifo_t * f, 
+static int svm_fifo_enqueue_internal (svm_fifo_t * f, 
                                        int pid,
                                        u32 max_bytes, 
                                        u8 * copy_from_here)
@@ -523,12 +355,12 @@ static int svm_fifo_enqueue_internal2 (svm_fifo_t * f,
   return (total_copy_bytes);
 }
 
-int svm_fifo_enqueue_nowait2 (svm_fifo_t * f, 
+int svm_fifo_enqueue_nowait (svm_fifo_t * f, 
                              int pid, 
                              u32 max_bytes, 
                              u8 * copy_from_here)
 {
-  return svm_fifo_enqueue_internal2 (f, pid, max_bytes, copy_from_here);
+  return svm_fifo_enqueue_internal (f, pid, max_bytes, copy_from_here);
 }
 
 /** Enqueue a future segment.
@@ -586,7 +418,7 @@ static int svm_fifo_enqueue_with_offset_internal2 (svm_fifo_t * f,
 }
 
 
-int svm_fifo_enqueue_with_offset2 (svm_fifo_t * f, 
+int svm_fifo_enqueue_with_offset (svm_fifo_t * f, 
                                    int pid, 
                                    u32 offset,
                                    u32 required_bytes, 
@@ -649,7 +481,7 @@ static int svm_fifo_dequeue_internal2 (svm_fifo_t * f,
   return (total_copy_bytes);
 }
 
-int svm_fifo_dequeue_nowait2 (svm_fifo_t * f, 
+int svm_fifo_dequeue_nowait (svm_fifo_t * f, 
                              int pid, 
                              u32 max_bytes, 
                              u8 * copy_here)

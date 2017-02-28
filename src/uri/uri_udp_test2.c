@@ -225,7 +225,7 @@ cut_through_thread_fn (void *arg)
     {
       /* We read from the tx fifo and write to the rx fifo */
       do {
-        actual_transfer = svm_fifo_dequeue_nowait2 (tx_fifo, 0,
+        actual_transfer = svm_fifo_dequeue_nowait (tx_fifo, 0,
                                                     vec_len(my_copy_buffer),
                                                     my_copy_buffer);
       } while (actual_transfer <= 0);
@@ -235,7 +235,7 @@ cut_through_thread_fn (void *arg)
       buffer_offset = 0;
       while (actual_transfer > 0)
         {
-          rv = svm_fifo_enqueue_nowait2 (rx_fifo, 0, actual_transfer,
+          rv = svm_fifo_enqueue_nowait (rx_fifo, 0, actual_transfer,
                                   my_copy_buffer + buffer_offset);
           if (rv > 0)
             {
@@ -299,7 +299,7 @@ static void uri_udp_slave_test (uri_udp_test_main_t * utm)
       buffer_offset = 0;
       while (bytes_to_send > 0)
         {
-          rv = svm_fifo_enqueue_nowait2 (tx_fifo, mypid,
+          rv = svm_fifo_enqueue_nowait (tx_fifo, mypid,
                                          bytes_to_send, 
                                          test_data + buffer_offset);
 
@@ -319,7 +319,7 @@ static void uri_udp_slave_test (uri_udp_test_main_t * utm)
       buffer_offset = 0;
       while (bytes_to_read > 0)
         {
-          rv = svm_fifo_dequeue_nowait2 (rx_fifo, mypid,
+          rv = svm_fifo_dequeue_nowait (rx_fifo, mypid,
                                          bytes_to_read,
                                          utm->rx_buf + buffer_offset);
           if (rv > 0)
@@ -332,7 +332,7 @@ static void uri_udp_slave_test (uri_udp_test_main_t * utm)
     }
   while (bytes_received < bytes_sent)
     {
-      rv = svm_fifo_dequeue_nowait2 (rx_fifo, mypid,
+      rv = svm_fifo_dequeue_nowait (rx_fifo, mypid,
                                      vec_len (utm->rx_buf),
                                      utm->rx_buf);
       if (rv > 0)
@@ -724,11 +724,11 @@ void handle_fifo_event_server_rx (uri_udp_test_main_t *utm,
   tx_fifo = utm->sessions[rx_fifo->client_session_index].server_tx_fifo;
 
   do {
-    nbytes = svm_fifo_dequeue_nowait2 (rx_fifo, 0,
+    nbytes = svm_fifo_dequeue_nowait (rx_fifo, 0,
                                        vec_len(utm->rx_buf), utm->rx_buf);
   } while (nbytes <= 0);
   do {
-    rv = svm_fifo_enqueue_nowait2 (tx_fifo, 0, nbytes, utm->rx_buf);
+    rv = svm_fifo_enqueue_nowait (tx_fifo, 0, nbytes, utm->rx_buf);
   } while (rv == -2);
 
   /* Fabricate TX event, send to vpp */

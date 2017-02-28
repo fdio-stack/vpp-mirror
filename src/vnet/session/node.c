@@ -220,7 +220,7 @@ session_fifo_rx_i (vlib_main_t *vm, vlib_node_runtime_t *node,
             }
           else
             {
-              if (svm_fifo_dequeue_nowait2 (s0->server_tx_fifo, s0->pid,
+              if (svm_fifo_dequeue_nowait (s0->server_tx_fifo, s0->pid,
                                             len_to_deq0, data0) < 0)
                 goto dequeue_fail;
             }

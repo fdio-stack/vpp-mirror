@@ -710,7 +710,7 @@ stream_session_enqueue_data (transport_connection_t *tc, u8 *data, u16 len,
   if (PREDICT_FALSE(len > svm_fifo_max_enqueue (s->server_rx_fifo)))
     return -1;
 
-  enqueued = svm_fifo_enqueue_nowait2 (s->server_rx_fifo, s->pid, len, data);
+  enqueued = svm_fifo_enqueue_nowait (s->server_rx_fifo, s->pid, len, data);
 
   if (queue_event)
     {

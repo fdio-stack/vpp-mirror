@@ -362,11 +362,11 @@ void handle_fifo_event_server_rx (uri_udp_test_main_t *utm,
   tx_fifo = utm->sessions[rx_fifo->client_session_index].server_tx_fifo;
 
   do {
-    nbytes = svm_fifo_dequeue_nowait2 (rx_fifo, 0, 
+    nbytes = svm_fifo_dequeue_nowait (rx_fifo, 0, 
                                        vec_len(utm->rx_buf), utm->rx_buf);
   } while (nbytes <= 0);
   do {
-    rv = svm_fifo_enqueue_nowait2 (tx_fifo, 0, nbytes, utm->rx_buf);
+    rv = svm_fifo_enqueue_nowait (tx_fifo, 0, nbytes, utm->rx_buf);
   } while (rv == -2);
 
   /* Fabricate TX event, send to vpp */

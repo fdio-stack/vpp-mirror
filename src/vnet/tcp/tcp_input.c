@@ -857,7 +857,7 @@ tcp_session_enqueue_ooo (tcp_connection_t *tc, vlib_buffer_t *b, u16 data_len)
   seq = vnet_buffer (b)->tcp.seq_number;
   offset = seq - tc->rcv_nxt;
 
-  if (svm_fifo_enqueue_with_offset2 (s0->server_rx_fifo, s0->pid, offset,
+  if (svm_fifo_enqueue_with_offset (s0->server_rx_fifo, s0->pid, offset,
                                      data_len, vlib_buffer_get_current (b)))
     return TCP_ERROR_FIFO_FULL;
 

@@ -145,7 +145,7 @@ udp4_uri_input_node_fn (vlib_main_t * vm,
                   goto trace0;
                 }
 
-              svm_fifo_enqueue_nowait2 (f0, 0 /* pid */, 
+              svm_fifo_enqueue_nowait (f0, 0 /* pid */, 
                                         udp_len0 - sizeof(*udp0), 
                                         (u8 *)(udp0+1));
 
