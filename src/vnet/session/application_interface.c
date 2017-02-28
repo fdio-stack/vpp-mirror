@@ -156,12 +156,6 @@ vnet_connect_i (u32 api_client_index, u32 api_context, session_type_t sst,
   stream_session_t *listener;
   application_t *server, *app;
 
-  /* Create client app */
-  app = application_new (APP_CLIENT, sst, api_client_index,
-			 options[SESSION_OPTIONS_FLAGS], cb_fns);
-
-  app->api_context = api_context;
-
   /*
    * Figure out if connecting to a local server
    */
@@ -179,6 +173,12 @@ vnet_connect_i (u32 api_client_index, u32 api_context, session_type_t sst,
 	return server->cb_fns.redirect_connect_callback (
 	    server->api_client_index, mp);
     }
+
+  /* Create client app */
+  app = application_new (APP_CLIENT, sst, api_client_index,
+			 options[SESSION_OPTIONS_FLAGS], cb_fns);
+
+  app->api_context = api_context;
 
   /*
    * Not connecting to a local server. Create regular session

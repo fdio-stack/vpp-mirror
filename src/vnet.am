@@ -324,8 +324,7 @@ libvnet_la_SOURCES +=				\
  vnet/ip/ip_input_acl.c				\
  vnet/ip/lookup.c				\
  vnet/ip/ping.c					\
- vnet/ip/punt.c					\
- vnet/ip/tcp_pg.c
+ vnet/ip/punt.c
 
 nobase_include_HEADERS +=			\
  vnet/ip/format.h				\
@@ -351,8 +350,7 @@ nobase_include_HEADERS +=			\
  vnet/ip/ports.def				\
  vnet/ip/protocols.def				\
  vnet/ip/punt_error.def				\
- vnet/ip/punt.h					\
- vnet/ip/tcp_packet.h
+ vnet/ip/punt.h
 
 API_FILES += vnet/ip/ip.api
 
@@ -472,6 +470,7 @@ endif
 ########################################
 libvnet_la_SOURCES +=				\
  vnet/tcp/tcp_format.c				\
+ vnet/tcp/tcp_pg.c				\
  vnet/tcp/tcp_syn_filter4.c			\
  vnet/tcp/tcp_output.c				\
  vnet/tcp/tcp_input.c				\
